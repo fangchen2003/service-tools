@@ -35,6 +35,8 @@ class Settings:
     port: int = 8000
     data_dir: Path = Path(os.environ.get("DATA_DIR", "data"))
     admin_password: str = os.environ.get("ADMIN_PASSWORD", "")
+    admin_cookie_secure: bool = field(default_factory=lambda:
+        os.environ.get("ADMIN_COOKIE_SECURE", "1").strip().lower() not in {"0", "false", "no", "off"})
     secret_key: str = os.environ.get("SECRET_KEY", "")  # 留空则自动生成并持久化
     tz: str = os.environ.get("TZ", "Asia/Shanghai")  # 配额按天的时区
 
@@ -89,6 +91,10 @@ class Settings:
 
     # ---- 其他 ----
     seed_demo_key: bool = _bool("SEED_DEMO_KEY", False)
+    cors_origins: list[str] = field(default_factory=lambda: [
+        origin.strip() for origin in os.environ.get("CORS_ORIGINS", "*").split(",")
+        if origin.strip()
+    ])
 
     @property
     def db_path(self) -> Path:

@@ -86,6 +86,9 @@ tr:hover td{background:#182230}
 .gallery-item{background:var(--panel2);border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .gallery-item img{display:block;width:100%;height:180px;object-fit:contain;background:#0b1017}
 .gallery-meta{padding:9px;font-size:12px;line-height:1.65;word-break:break-all}
+#allowanceStatus{margin:0 0 14px;padding:7px 10px;border-left:2px solid var(--warn);
+  color:var(--warn);font-size:12px;line-height:1.6;white-space:pre-line}
+#allowanceDetails{margin-top:10px;font-size:12px;line-height:1.8;white-space:pre-line}
 </style>
 </head>
 <body>
@@ -113,12 +116,13 @@ tr:hover td{background:#182230}
   <button class="btn" onclick="logout()">退出</button>
 </header>
 <main>
+  <div id="allowanceStatus" role="status" aria-live="polite" hidden></div>
 
   <!-- 总览 -->
   <section id="tab-ov">
     <div class="cards" id="ovCards"></div>
     <div class="panel"><h2>近 7 天生成量（图片）</h2><div class="chart" id="chart"></div></div>
-    <div class="panel"><h2>上游 NovelAI 令牌池</h2><div id="pool"></div></div>
+    <div class="panel"><h2>上游 NovelAI 令牌池</h2><div id="pool"></div><div id="allowanceDetails" class="muted">V5 余量：正在读取本地状态…</div></div>
   </section>
 
   <!-- 密钥 -->
@@ -174,6 +178,9 @@ tr:hover td{background:#182230}
         <button class="btn primary" style="white-space:nowrap" onclick="saveBudget()">保存</button>
       </div>
       <div class="muted" style="font-size:12px;margin-top:8px">V5 符合条件的单张（≤Normal/≤28步）走官方周额度不扣 Anlas；额度外的 V5 及大图按估算 Anlas 扣。每把 Key 还受自己的「每日 Anlas / 每月 Anlas / 每日 V5」限制。</div>
+      <label>V5 官方余量告警阈值（%，低于此值持续提醒）</label>
+      <input id="s_v5_alert" type="number" min="1" max="100" step="1" value="20">
+      <div class="muted" style="font-size:12px;margin-top:8px">低于此比例时持续告警；余量随 V5 生成按需查询。点击上方“保存”生效。</div>
     </div>
     <div class="panel">
       <h2>站点公告（用户访问首页看到的内容，支持 HTML）</h2>
@@ -222,6 +229,33 @@ tr:hover td{background:#182230}
 <script>
 const $ = s => document.querySelector(s);
 let editingId = null, keysCache = [], logPage = 1;
+let allowanceTimer = null, allowanceLoading = false;
+
+function renderAllowance(d){
+  const rows = d.accounts || [], box = $('#allowanceStatus');
+  const warnings = rows.filter(p=>p.low || p.error);
+  box.hidden = warnings.length === 0;
+  box.textContent = warnings.map(p=>{
+    const value = p.is_negative ? '已耗尽' : `低于 ${d.threshold}%（上次 ${p.percent}%）`;
+    return `账号 ${p.account} · ${p.low ? 'V5 余量' + value : ''}${p.low && p.error ? '；' : ''}${p.error ? '额度查询失败，V5 生图需确认后继续' : p.uncertain ? '，待下次生成确认' : ''}`;
+  }).join('\n');
+  $('#allowanceDetails').textContent = rows.length ? rows.map(p=>{
+    const value = p.percent == null ? '未查询 · 首次 V5 生图时确认'
+      : `${p.is_negative ? '已耗尽' : p.percent + '%'}${p.uncertain ? '（上次记录）' : ''}`;
+    const checked = p.checked_at ? ` · ${new Date(p.checked_at*1000).toLocaleTimeString()} 更新` : '';
+    return `账号 ${p.account} · V5 ${value}${checked}`;
+  }).join('\n') : 'V5 余量：未配置上游账号';
+}
+async function loadAllowance(){
+  if(allowanceLoading || $('#app').style.display==='none') return;
+  allowanceLoading = true;
+  try{ renderAllowance(await api('/admin/api/allowance')); }
+  catch(e){
+    const box = $('#allowanceStatus');
+    $('#allowanceDetails').textContent = 'V5 状态暂时无法读取，稍后自动重试。';
+    if(!box.hidden && !box.textContent.startsWith('状态刷新失败')) box.textContent = '状态刷新失败，以下告警为上次记录。\n' + box.textContent;
+  }finally{ allowanceLoading = false; }
+}
 
 function toast(msg){
   const t = $('#toast'); t.textContent = msg; t.style.display = 'block';
@@ -240,20 +274,32 @@ async function api(path, opts={}){
 
 /* ---------- auth ---------- */
 async function doLogin(){
+  $('#loginErr').textContent = '';
   try{
     await api('/admin/api/login', {method:'POST', body: JSON.stringify({password: $('#pwd').value})});
-    boot();
+    if(!await boot()){
+      $('#loginErr').textContent = location.protocol === 'http:'
+        ? '登录状态未能保存。请使用 HTTPS，或由管理员开启 HTTP 登录兼容；同时检查浏览器 Cookie 设置。'
+        : '登录状态未能保存，请检查浏览器是否允许本站 Cookie。';
+    }
   }catch(e){ $('#loginErr').textContent = e.message; }
 }
 async function logout(){
   await api('/admin/api/logout', {method:'POST'}).catch(()=>{});
   showLogin();
 }
-function showLogin(){ $('#login').style.display='flex'; $('#app').style.display='none'; }
+function showLogin(){
+  clearInterval(allowanceTimer); allowanceTimer = null;
+  $('#login').style.display='flex'; $('#app').style.display='none';
+}
 async function boot(){
-  try{ await api('/admin/api/me'); }catch(e){ return; }
+  try{ await api('/admin/api/me'); }catch(e){ return false; }
   $('#login').style.display='none'; $('#app').style.display='block';
+  clearInterval(allowanceTimer);
+  loadAllowance();
+  allowanceTimer = setInterval(()=>{ if(!document.hidden) loadAllowance(); }, 30000);
   tab('ov');
+  return true;
 }
 
 /* ---------- tabs ---------- */
@@ -331,8 +377,9 @@ async function loadKeys(){
         <td><div class="row-actions">
           <button class="btn mini" onclick="openEdit(${k.id})">编辑</button>
           <button class="btn mini" onclick="toggleKey(${k.id},${k.enabled?0:1})">${k.enabled?'禁用':'启用'}</button>
-          <button class="btn mini" onclick="resetDailyImageQuota(${k.id},'${esc(k.name)}')">重置今日额度</button>
-          <button class="btn mini danger" onclick="delKey(${k.id},'${esc(k.name)}')">删除</button>
+          <button class="btn mini" onclick="regenerateKey(${k.id},this)">重新生成 Key</button>
+          <button class="btn mini" onclick="resetDailyImageQuota(${k.id})">重置今日额度</button>
+          <button class="btn mini danger" onclick="delKey(${k.id})">删除</button>
         </div></td>
       </tr>`;
     }).join('') || '<tr><td colspan="8" class="muted">还没有 Key，点右上角「新建 Key」</td></tr>';
@@ -343,6 +390,9 @@ async function loadKeys(){
 function mask(t){ return t.slice(0,8) + '····' + t.slice(-4); }
 function copyKey(btn){
   const t = btn.closest('td').querySelector('[data-tok]').dataset.tok;
+  if(!navigator.clipboard?.writeText){
+    prompt('请手动复制：', t); return;
+  }
   navigator.clipboard.writeText(t).then(()=>toast('已复制'), ()=>{
     prompt('请手动复制：', t);
   });
@@ -355,6 +405,7 @@ function openCreate(){
   $('#f_image_model_scope').value='legacy';
   $('#f_daily_v5').value=50; $('#f_monthly_anlas').value=2500;
   $('#f_daily_text').value=150000; $('#f_rpm').value=10; $('#f_expires').value=30;
+  $('#f_expires').placeholder='';
   $('#f_allow_anlas').checked=false; $('#f_allow_img2img').checked=false;
   $('#f_exclude_global_v5').checked=false;
   $('#modalErr').textContent=''; $('#modal').style.display='flex';
@@ -371,7 +422,8 @@ function openEdit(id){
   $('#f_monthly_anlas').value = k.monthly_anlas;
   $('#f_daily_text').value = k.daily_text_tokens;
   $('#f_rpm').value = k.rpm;
-  $('#f_expires').value = 0;
+  $('#f_expires').value = '';
+  $('#f_expires').placeholder = '留空保持原有效期';
   $('#f_allow_anlas').checked = k.allow_anlas;
   $('#f_allow_img2img').checked = k.allow_img2img;
   $('#f_exclude_global_v5').checked = k.exclude_global_v5;
@@ -393,7 +445,7 @@ async function saveKey(){
   };
   try{
     if(editingId){
-      body.expires_days = +$('#f_expires').value;
+      if($('#f_expires').value.trim() !== '') body.expires_days = +$('#f_expires').value;
       await api('/admin/api/keys/'+editingId, {method:'PATCH', body: JSON.stringify(body)});
       toast('已保存');
     }else{
@@ -410,7 +462,26 @@ async function toggleKey(id, enabled){
   await api('/admin/api/keys/'+id, {method:'PATCH', body: JSON.stringify({enabled})}).catch(e=>toast(e.message));
   loadKeys();
 }
-async function resetDailyImageQuota(id, name){
+const regeneratingKeys = new Set();
+async function regenerateKey(id, button){
+  const key = keysCache.find(k=>k.id===id);
+  if(!key || regeneratingKeys.has(id)) return;
+  if(!confirm(`确定重新生成「${key.name}」的 Key？\n旧 Key 将立即失效，需在客户端替换。\n配额、权限、有效期和历史用量保留，已受理任务继续完成。`)) return;
+  regeneratingKeys.add(id); button.disabled = true;
+  try{
+    const data = await api('/admin/api/keys/'+id+'/regenerate', {method:'POST'});
+    key.token = data.token;
+    prompt('旧 Key 已失效，请复制新 Key 并更新客户端：', data.token);
+    toast('Key 已重新生成，配额和历史用量已保留');
+  }catch(e){ toast(e.message); }
+  finally{
+    await loadKeys();
+    regeneratingKeys.delete(id); button.disabled = false;
+  }
+}
+async function resetDailyImageQuota(id){
+  const key = keysCache.find(k=>k.id===id); if(!key) return;
+  const name = key.name;
   if(!confirm(`确定重置「${name}」今日的 V5 和 Anlas 用量吗？\n图片、文本、请求数及用量日志不会删除。`)) return;
   try{
     await api('/admin/api/keys/'+id+'/reset-daily-image-quota', {method:'POST'});
@@ -418,7 +489,9 @@ async function resetDailyImageQuota(id, name){
     loadKeys();
   }catch(e){ toast(e.message); }
 }
-async function delKey(id, name){
+async function delKey(id){
+  const key = keysCache.find(k=>k.id===id); if(!key) return;
+  const name = key.name;
   if(!confirm(`确定删除 Key「${name}」？该操作不可恢复。`)) return;
   await api('/admin/api/keys/'+id, {method:'DELETE'}).catch(e=>toast(e.message));
   loadKeys();
@@ -456,6 +529,7 @@ async function loadSettings(){
     $('#announce').value = a.html || '';
     $('#s_budget').value = s.global_monthly_anlas;
     $('#s_v5').value = s.global_daily_v5;
+    $('#s_v5_alert').value = s.v5_alert_threshold;
     $('#cfgInfo').innerHTML =
       `上游令牌池：${o.pool_configured ? o.pool.map(p=>esc(p.token)).join(', ') : '未配置（设置 NAI_TOKENS）'}<br>` +
       `本月 Anlas：${o.month.anlas} / 预算 ${o.anlas_budget>0?o.anlas_budget:'∞'}<br>` +
@@ -467,14 +541,17 @@ async function saveBudget(){
   const d = await api('/admin/api/settings', {method:'PUT', body: JSON.stringify({
     global_monthly_anlas: +$('#s_budget').value,
     global_daily_v5: +$('#s_v5').value,
+    v5_alert_threshold: +$('#s_v5_alert').value,
   })});
   toast('已保存：月预算 ' + d.global_monthly_anlas + 'A / V5 日限 ' + d.global_daily_v5);
+  loadAllowance();
 }
 async function saveAnnounce(){
   await api('/admin/api/announcement', {method:'PUT', body: JSON.stringify({html: $('#announce').value})});
   toast('公告已保存');
 }
 
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden && allowanceTimer) loadAllowance(); });
 boot();
 </script>
 </body>

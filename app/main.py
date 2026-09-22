@@ -8,24 +8,36 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
+from urllib.parse import urlencode
 
+import anyio
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import UploadFile
 
 from . import admin
+from .body import read_bounded_body, read_json_body
 from .config import load_settings
-from .nai import NaiClient, UpstreamError
+from .client_views import subscription_payload
+from .image_events import ImageEventTracker, ImageStreamProtocolError
+from .image_streaming import ImageStreamResponse
+from .image_tools import prepare_tool, validate_result, MAX_RESPONSE_BYTES
+from .nai import NaiClient, UpstreamError, _wait_cleanup
 from .policy import (
     clamp_image_params,
     clamp_text_params,
     estimate_image_cost,
     image_model_tier,
+    validate_image_references,
+    validate_vibe_encoding,
+    VIBE_ENCODING_ANLAS,
     estimate_tokens,
     gen_key,
     text_model_host,
@@ -67,9 +79,29 @@ def err(status: int, message: str) -> GateError:
     return GateError(status, message)
 
 
+class QuerylessAccessFilter(logging.Filter):
+    """Keep Uvicorn diagnostics without recording private URL query values."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if (record.msg != '%s - "%s %s HTTP/%s" %d'
+                or not isinstance(args, tuple) or len(args) != 5
+                or not isinstance(args[2], str)):
+            return False  # Unknown access format: fail closed, never echo raw text.
+        record.args = (*args[:2], args[2].partition("?")[0], *args[3:])
+        return True
+
+
+def install_access_log_filter() -> None:
+    logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(item, QuerylessAccessFilter) for item in logger.filters):
+        logger.addFilter(QuerylessAccessFilter())
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global STATE
+    install_access_log_filter()
     STATE = GateState(SETTINGS)
     await STATE.db.connect()
     await STATE.load_image_cooldown()
@@ -106,6 +138,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="NAI Gate", docs_url=None, redoc_url=None, lifespan=lifespan)
+if SETTINGS.cors_origins:
+    app.add_middleware(CORSMiddleware, allow_origins=SETTINGS.cors_origins,
+                       allow_methods=["*"], allow_headers=["*"], allow_credentials=False)
 app.include_router(admin.router)
 
 
@@ -168,16 +203,10 @@ def check_image_cooldown() -> None:
 
 
 async def read_json(request: Request, limit_mb: float = 25) -> dict:
-    cl = request.headers.get("content-length")
-    if cl and float(cl) > limit_mb * 1024 * 1024:
-        raise err(413, "请求体过大")
     try:
-        data = await request.json()
-    except Exception:
-        raise err(400, "请求体不是合法 JSON")
-    if not isinstance(data, dict):
-        raise err(400, "请求体必须是 JSON 对象")
-    return data
+        return await read_json_body(request, int(limit_mb * 1024 * 1024))
+    except HTTPException as exc:
+        raise err(exc.status_code, exc.detail) from None
 
 
 async def read_image_payload(request: Request, limit_mb: float = 25) -> dict:
@@ -186,31 +215,37 @@ async def read_image_payload(request: Request, limit_mb: float = 25) -> dict:
     if not content_type.startswith("multipart/form-data"):
         return await read_json(request, limit_mb)
 
-    cl = request.headers.get("content-length")
-    if cl and float(cl) > limit_mb * 1024 * 1024:
-        raise err(413, "请求体过大")
     try:
-        form = await request.form(max_files=2, max_fields=10)
+        body = await read_bounded_body(request, int(limit_mb * 1024 * 1024))
+    except HTTPException as exc:
+        raise err(exc.status_code, exc.detail) from None
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    # The parser only sees a body whose total size has already been checked.
+    bounded_request = Request(request.scope, receive)
+    try:
+        async with bounded_request.form(max_files=2, max_fields=10) as form:
+            part = form.get("request")
+            if isinstance(part, UploadFile):
+                raw = await part.read()
+            elif isinstance(part, str):
+                raw = part.encode("utf-8")
+            else:
+                raise err(400, "multipart 请求缺少 request JSON 字段")
+            # Close every file, including rejected attachments and duplicates.
+            if any(name != "request" for name, _ in form.multi_items()):
+                raise err(400, "本站未开放携带图片附件的 img2img / 参考图请求")
+    except GateError:
+        raise
     except Exception:
-        raise err(400, "multipart 请求格式无效或过大")
-    part = form.get("request")
-    if isinstance(part, UploadFile):
-        try:
-            raw = await part.read()
-        finally:
-            await part.close()
-    elif isinstance(part, str):
-        raw = part.encode("utf-8")
-    else:
-        raise err(400, "multipart 请求缺少 request JSON 字段")
-    # 其余文件字段是 img2img/参考图载体；本站未开放时不能静默忽略。
-    if any(name != "request" for name, _ in form.multi_items()):
-        raise err(400, "本站未开放携带图片附件的 img2img / 参考图请求")
+        raise err(400, "multipart 请求格式无效或过大") from None
     if len(raw) > limit_mb * 1024 * 1024:
         raise err(413, "请求体过大")
     try:
         data = json.loads(raw)
-    except (TypeError, ValueError, UnicodeDecodeError):
+    except (TypeError, ValueError, RecursionError):
         raise err(400, "multipart request 字段不是合法 JSON")
     if not isinstance(data, dict):
         raise err(400, "multipart request 字段必须是 JSON 对象")
@@ -218,36 +253,28 @@ async def read_image_payload(request: Request, limit_mb: float = 25) -> dict:
 
 
 @asynccontextmanager
-async def acquire_concurrency(key):
-    """全站 + 单 Key 两级并发闸门。仅获取锁有排队超时，持有后不超时。"""
+async def acquire_concurrency(key, *, image: bool = False):
+    """预算锁及两级并发共用排队期限；开始执行后不受该期限限制。"""
     t = STATE.settings.queue_timeout
-    if key["is_admin"]:
+    ksem = None if key["is_admin"] else STATE.key_sem(key["id"], STATE.settings.key_concurrency)
+    async with AsyncExitStack() as resources:
+        STATE.global_waiting += 1
         try:
             async with asyncio.timeout(t):
-                await STATE.global_sem.acquire()
-        except (TimeoutError, asyncio.TimeoutError):
+                if image:
+                    await resources.enter_async_context(STATE.image_budget_lock)
+                if ksem is not None:
+                    await resources.enter_async_context(ksem)
+                await resources.enter_async_context(STATE.global_sem)
+        except TimeoutError:
             raise err(429, "当前排队人数过多，请稍后再试")
+        finally:
+            STATE.global_waiting -= 1
+        STATE.global_active += 1
         try:
             yield
         finally:
-            STATE.global_sem.release()
-        return
-    ksem = STATE.key_sem(key["id"], STATE.settings.key_concurrency)
-    try:
-        async with asyncio.timeout(t):
-            await ksem.acquire()
-            try:
-                await STATE.global_sem.acquire()
-            except BaseException:
-                ksem.release()
-                raise
-    except (TimeoutError, asyncio.TimeoutError):
-        raise err(429, "当前排队人数过多，请稍后再试")
-    try:
-        yield
-    finally:
-        STATE.global_sem.release()
-        ksem.release()
+            STATE.global_active -= 1
 
 
 async def quota_image_check(key, est: dict) -> None:
@@ -282,7 +309,7 @@ async def quota_image_check(key, est: dict) -> None:
 
 
 def record(key, kind: str, model: str, status: str, *, images: int = 0,
-           anlas: float = 0.0, tokens: int = 0, v5: int = 0, detail: str = "") -> None:
+           anlas: float = 0.0, tokens: int = 0, v5: int = 0, detail: str = "") -> asyncio.Task:
     """写日志；成功请求额外计入每日配额。"""
     async def _go():
         await STATE.db.add_log(key["id"], key["name"], kind, model, status,
@@ -293,18 +320,64 @@ def record(key, kind: str, model: str, status: str, *, images: int = 0,
                 images=images, anlas=anlas, text_tokens=tokens, requests=1, v5=v5,
             )
             await STATE.db.touch_key(key["id"])
-    asyncio.create_task(_go())
+    task = asyncio.create_task(_go())
+    task.add_done_callback(_log_task_failure)
+    return task
+
+
+def _log_task_failure(task: asyncio.Task) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        print("[error] request accounting failed")
+
+
+async def settle_record(*args, **kwargs) -> None:
+    """Finish the successful ledger write before its budget/concurrency locks release."""
+    with anyio.CancelScope(shield=True):
+        task = record(*args, **kwargs)
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await task
+            raise
+
+
+async def complete_image_operation(operation, *, can_cancel=None):
+    """Once sent, finish upstream response handling and its ledger even on disconnect.
+
+    The caller retains both the budget and concurrency locks. A caller cancelled
+    while upstream-token accounting is in progress must not lose the user charge.
+    Queue waits and quota prechecks remain cancellable outside this boundary.
+    """
+    cancelled = False
+    with anyio.CancelScope(shield=True):
+        task = asyncio.create_task(operation)
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+                # Streaming reserves a Token before its pacing wait. That wait
+                # can still be cancelled safely until HTTP dispatch begins.
+                if can_cancel is not None and can_cancel():
+                    task.cancel()
+        result = task.result()
+    if cancelled:
+        raise asyncio.CancelledError()
+    return result
 
 
 async def upstream_call(url: str, payload: dict, accept: str = "*/*", *,
                         on_rate_limited=None, requires_anlas: bool = False,
                         v5_free: bool = False, image_count: int = 0,
-                        image_lane: bool = False) -> httpx.Response:
+                        image_lane: bool = False, resolve_v5_cost=None,
+                        max_response_bytes: int | None = None) -> httpx.Response:
     try:
         return await STATE.nai.request(
             "POST", url, payload, accept=accept, on_rate_limited=on_rate_limited,
             requires_anlas=requires_anlas, v5_free=v5_free, image_count=image_count,
             image_lane=image_lane,
+            **({"max_response_bytes": max_response_bytes} if max_response_bytes else {}),
+            **({"resolve_v5_cost": resolve_v5_cost} if resolve_v5_cost is not None else {}),
         )
     except UpstreamError as e:
         raise err(e.status if e.status in (429, 503) else 502, e.message)
@@ -325,7 +398,121 @@ async def _text_quota_check(key, payload: dict) -> None:
 
 # ============================================================== 图片生成 =====
 
+async def image_tool(request: Request, operation: str):
+    key = await authenticate(request)
+    check_image_cooldown()
+    await check_rpm(key)
+    if not key["is_admin"] and not (key["allow_img2img"] and STATE.settings.allow_img2img):
+        raise err(403, "此 Key 或本站未开放图片处理权限（img2img）")
+    body = await read_json(request)
+    if not key["is_admin"]:
+        await STATE.wait_for_key_image_slot(key["id"])
+    async with acquire_concurrency(key, image=True):
+        check_image_cooldown()
+        try:
+            payload, cost = await anyio.to_thread.run_sync(prepare_tool, body, operation)
+        except ValueError as exc:
+            raise err(400, str(exc)) from None
+        model = payload.get("model", payload.get("req_type"))
+        await quota_image_check(key, {"anlas": cost, "v5": 0})
+
+        async def limited(retry_after):
+            await STATE.block_image_generation(max(
+                STATE.settings.image_429_cooldown_seconds, retry_after))
+
+        async def perform():
+            try:
+                resp = await upstream_call(
+                    f"{STATE.nai.image_host}/ai/{operation}", payload,
+                    on_rate_limited=limited, requires_anlas=cost > 0,
+                    image_lane=True, max_response_bytes=MAX_RESPONSE_BYTES,
+                )
+                if resp.status_code not in (200, 201):
+                    raise err(resp.status_code if 400 <= resp.status_code < 500 else 502,
+                              f"图片工具请求失败（上游状态 {resp.status_code}），未记费")
+                media, count = await anyio.to_thread.run_sync(
+                    validate_result, resp.content, operation, payload.get("req_type", ""))
+            except (GateError, httpx.HTTPError, ValueError, TimeoutError) as exc:
+                record(key, operation, model, "error", detail="图片工具失败，未记费")
+                if isinstance(exc, GateError):
+                    raise
+                raise err(502, "图片工具连接失败或返回无效结果，未记费；请勿自动重试") from None
+            await settle_record(key, operation, model, "ok", images=count, anlas=cost,
+                                detail=f"图片工具 {cost} Anlas；返回 {count} 张")
+            return Response(resp.content, media_type=media, headers={"Cache-Control": "no-store"})
+
+        return await complete_image_operation(perform())
+
+
+async def upscale_image(request: Request):
+    return await image_tool(request, "upscale")
+
+
+async def augment_image(request: Request):
+    return await image_tool(request, "augment-image")
+
+async def encode_vibe(request: Request):
+    """Encode a V4/V4.5 reference; only a successful binary result costs 2 Anlas."""
+    key = await authenticate(request)
+    check_image_cooldown()
+    await check_rpm(key)
+    body = await read_json(request)
+    problem = validate_vibe_encoding(body)
+    if problem:
+        raise err(400, problem)
+    model = body["model"]
+    payload = {name: body[name] for name in ("image", "model", "informationExtracted")}
+    estimate = {"anlas": VIBE_ENCODING_ANLAS, "v5": 0}
+    await quota_image_check(key, estimate)
+
+    async def record_encoding_429(retry_after: float) -> None:
+        cooldown = await STATE.block_image_generation(max(
+            STATE.settings.image_429_cooldown_seconds, retry_after
+        ))
+        record(key, "vibe_encode", model, "error", detail=f"上游限流(429)，冷却 {cooldown} 秒")
+
+    async def perform_encoding():
+        try:
+            resp = await upstream_call(
+                f"{STATE.nai.image_host}/ai/encode-vibe", payload,
+                accept="application/octet-stream", on_rate_limited=record_encoding_429,
+                requires_anlas=True, image_lane=True,
+            )
+        except (GateError, httpx.HTTPError) as exc:
+            record(key, "vibe_encode", model, "error", detail="上游编码请求失败，未记费")
+            if isinstance(exc, GateError):
+                raise
+            raise err(502, "Vibe 编码连接失败，请稍后重试") from None
+        if resp.status_code not in (200, 201):
+            record(key, "vibe_encode", model, "error", detail=f"upstream {resp.status_code}")
+            raise err(resp.status_code if 400 <= resp.status_code < 500 else 502,
+                      f"Vibe 编码失败（上游状态 {resp.status_code}），未记费")
+        content_type = resp.headers.get("content-type", "application/octet-stream").lower()
+        if not resp.content or "json" in content_type or content_type.startswith("text/"):
+            record(key, "vibe_encode", model, "error", detail="上游未返回有效二进制编码，未记费")
+            raise err(502, "Vibe 编码未返回有效数据，未记费")
+        await settle_record(key, "vibe_encode", model, "ok", anlas=VIBE_ENCODING_ANLAS,
+                            detail=f"Vibe 编码 {VIBE_ENCODING_ANLAS} Anlas")
+        return Response(resp.content, media_type="application/octet-stream",
+                        headers={"Cache-Control": "no-store"})
+
+    if not key["is_admin"]:
+        await STATE.wait_for_key_image_slot(key["id"])
+    async with acquire_concurrency(key, image=True):
+        check_image_cooldown()
+        await quota_image_check(key, estimate)
+        return await complete_image_operation(perform_encoding())
+
+
 async def generate_image(request: Request):
+    return await _generate_image(request, streaming=False)
+
+
+async def generate_image_stream(request: Request):
+    return await _generate_image(request, streaming=True)
+
+
+async def _generate_image(request: Request, *, streaming: bool):
     key = await authenticate(request)
     check_image_cooldown()
     await check_rpm(key)
@@ -340,6 +527,9 @@ async def generate_image(request: Request):
         raise err(403, "该 Key 仅允许 V4.5 及更低图片模型")
 
     # img2img 权限：Key 标记 + 全局开关 双重控制（无论是否钳制都先查）
+    problem = validate_image_references(body)
+    if problem:
+        raise err(400, problem)
     p0 = body.get("parameters", {}) or {}
     if (p0.get("image") or p0.get("mask")) and not (
             bool(key["is_admin"]) or
@@ -348,13 +538,16 @@ async def generate_image(request: Request):
         raise err(400, "本站未开放 img2img / 局部重绘（该功能会消耗 Anlas）")
 
     # 免费档钳制：只对未开通 Anlas 的 Key 生效；开通 Anlas 的 Key 靠配额约束
-    if STATE.settings.safe_clamp and not key["allow_anlas"]:
-        body, notes, problem = clamp_image_params(
-            body,
-            max_pixels=STATE.settings.max_pixels,
-            max_steps=STATE.settings.max_steps,
-            allow_img2img=True,  # 权限已在上面预检
-        )
+    if STATE.settings.safe_clamp and not key["is_admin"] and not key["allow_anlas"]:
+        try:
+            body, notes, problem = clamp_image_params(
+                body,
+                max_pixels=STATE.settings.max_pixels,
+                max_steps=STATE.settings.max_steps,
+                allow_img2img=True,  # 权限已在上面预检
+            )
+        except (TypeError, ValueError, OverflowError):
+            raise err(400, "图片参数无效") from None
         if problem:
             record(key, "image", model, "rejected", detail=problem)
             raise err(400, problem)
@@ -369,13 +562,26 @@ async def generate_image(request: Request):
     if image_count < 1:
         raise err(400, "n_samples 必须是正整数")
 
-    est = estimate_image_cost(body, is_opus=True)
-    await quota_image_check(key, est)
+    try:
+        est = estimate_image_cost(body, is_opus=True)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise err(400, "图片参数无效，无法估算费用") from exc
+    if not est["v5"]:
+        await quota_image_check(key, est)
 
     cost = (f"est={est['anlas']}A" if est["anlas"]
             else (f"V5额度+{est['v5']}" if est["v5"] else "免费"))
     detail = "; ".join(notes) if notes else (
         f"{p.get('width')}x{p.get('height')}/{p.get('steps')}step {cost}")
+
+    async def resolve_v5_cost(exhausted: bool):
+        nonlocal est, detail
+        est = estimate_image_cost(body, is_opus=True, v5_allowance_available=not exhausted)
+        await quota_image_check(key, est)
+        if exhausted:
+            detail = "; ".join(notes + [
+                f"{p.get('width')}x{p.get('height')}/{p.get('steps')}step est={est['anlas']}A",
+                "官方确认 V5 额度不可用，按 Anlas 估算记账"])
 
     async def record_image_429(retry_after: float) -> None:
         cooldown = await STATE.block_image_generation(max(
@@ -387,11 +593,7 @@ async def generate_image(request: Request):
                     "保护上游 Token"),
         )
 
-    if not key["is_admin"]:
-        await STATE.wait_for_key_image_slot(key["id"])
-    async with acquire_concurrency(key):
-        # 请求在队列中等待时可能刚触发全站冷却，放行前再检查一次。
-        check_image_cooldown()
+    async def perform_generation():
         resp = await upstream_call(
             f"{STATE.nai.image_host}/ai/generate-image", body,
             on_rate_limited=record_image_429,
@@ -399,22 +601,121 @@ async def generate_image(request: Request):
             v5_free=est["v5"] > 0,
             image_count=image_count,
             image_lane=True,
+            resolve_v5_cost=resolve_v5_cost if est["v5"] else None,
         )
-        if resp.status_code != 200:
+        if resp.status_code not in (200, 201):
             record(key, "image", model, "error",
-                   detail=f"upstream {resp.status_code}: {resp.text[:200]}")
+                   detail=f"upstream {resp.status_code}")
             return Response(resp.content, status_code=resp.status_code,
                             media_type=resp.headers.get("content-type", "application/json"))
-        record(key, "image", model, "ok", images=image_count, anlas=est["anlas"],
-               v5=est["v5"], detail=detail)
+        await settle_record(key, "image", model, "ok", images=image_count, anlas=est["anlas"],
+                            v5=est["v5"], detail=detail)
         return Response(resp.content, status_code=200,
                         media_type=resp.headers.get("content-type", "application/octet-stream"))
+
+    if streaming:
+        # The official endpoint also accepts MessagePack; the existing Panel
+        # consumes SSE JSON, so make the wire protocol explicit.
+        body.setdefault("parameters", {})["stream"] = "sse"
+        dispatched = False
+
+        def on_dispatch():
+            nonlocal dispatched
+            dispatched = True
+
+        async def perform_stream(response):
+            tracker = ImageEventTracker(image_count)
+            failure = None
+            try:
+                # Bound total drain time even when an upstream sends endless
+                # progress frames that would keep resetting its read timeout.
+                async with asyncio.timeout(300):
+                    async with STATE.nai.image_stream(
+                        f"{STATE.nai.image_host}/ai/generate-image-stream", body,
+                        requires_anlas=est["anlas"] > 0, v5_free=est["v5"] > 0,
+                        on_rate_limited=record_image_429,
+                        on_dispatch=on_dispatch,
+                        resolve_v5_cost=resolve_v5_cost if est["v5"] else None,
+                    ) as handle:
+                        try:
+                            content_type = handle.response.headers.get("content-type", "")
+                            if content_type.split(";", 1)[0].strip().lower() != "text/event-stream":
+                                raise UpstreamError(502, "上游未返回有效的图片事件流")
+                            await response.start()
+                            async for chunk in handle.response.aiter_bytes():
+                                tracker.feed(chunk)
+                                handle.completed_images = tracker.completed_images
+                                await response.chunk(chunk)
+                                if tracker.failed:
+                                    raise UpstreamError(502, "上游流式生成失败")
+                                if tracker.completed_images == image_count:
+                                    break
+                            tracker.finish()
+                            if tracker.completed_images < image_count:
+                                raise UpstreamError(502, "图片流提前结束，未收到全部最终图片")
+                        finally:
+                            handle.completed_images = tracker.completed_images
+            except (UpstreamError, ImageStreamProtocolError, httpx.HTTPError, TimeoutError) as exc:
+                status = exc.status if isinstance(exc, UpstreamError) else 502
+                message = exc.message if isinstance(exc, UpstreamError) else (
+                    str(exc) if isinstance(exc, ImageStreamProtocolError) else "图片流连接中断或超时")
+                failure = message
+                await response.error(status, message)
+            finally:
+                completed = tracker.completed_images
+                if completed:
+                    # Do not re-estimate partial batches as free single images.
+                    # Charge only their share of the prechecked batch estimate.
+                    await settle_record(
+                        key, "image_stream", model, "ok", images=completed,
+                        anlas=est["anlas"] * completed / image_count,
+                        v5=est["v5"] if completed else 0,
+                        detail=detail + (f"; 完成 {completed}/{image_count}" if completed < image_count else ""),
+                    )
+                if failure or not completed:
+                    await record(key, "image_stream", model, "error",
+                                 detail=failure or "未收到最终图片，未记费")
+
+        async def run_stream(response):
+            try:
+                if not key["is_admin"]:
+                    await STATE.wait_for_key_image_slot(key["id"])
+                async with acquire_concurrency(key, image=True):
+                    check_image_cooldown()
+                    if not est["v5"]:
+                        await quota_image_check(key, est)
+                    await complete_image_operation(perform_stream(response), can_cancel=lambda: not dispatched)
+            except GateError as exc:
+                await response.error(exc.status, exc.message)
+
+        return ImageStreamResponse(run_stream)
+
+    if not key["is_admin"]:
+        await STATE.wait_for_key_image_slot(key["id"])
+    async with acquire_concurrency(key, image=True):
+        # Recheck both cooldown and quota after any queue/budget wait.
+        check_image_cooldown()
+        if not est["v5"]:
+            await quota_image_check(key, est)
+        return await complete_image_operation(perform_generation())
 
 
 async def suggest_tags(request: Request):
     key = await authenticate(request)
     check_image_cooldown()
-    await check_rpm(key)
+    if not STATE.try_tag_request(key["id"]):
+        raise err(429, "补全查询过于频繁或服务繁忙，请稍后再试")
+    try:
+        # Bound body reads, semaphore waiting and the optional upstream lookup.
+        async with asyncio.timeout(min(15.0, STATE.settings.queue_timeout)):
+            return await _suggest_tags(request, key)
+    except TimeoutError:
+        raise err(429, "补全查询等待超时，请稍后再试") from None
+    finally:
+        STATE.finish_tag_request(key["id"])
+
+
+async def _suggest_tags(request: Request, key):
     if request.method == "GET":
         body = {
             "prompt": request.query_params.get("prompt", ""),
@@ -433,27 +734,52 @@ async def suggest_tags(request: Request):
                     "保护上游 Token"),
         )
 
-    if not key["is_admin"]:
-        await STATE.wait_for_key_image_slot(key["id"])
     async with acquire_concurrency(key):
+        if await request.is_disconnected():
+            raise err(499, "补全查询已取消")
         check_image_cooldown()
-        resp = await upstream_call(
-            f"{STATE.nai.image_host}/ai/generate-image/suggest-tags", body,
-            accept="application/json", on_rate_limited=record_tag_429, image_lane=True)
+        query = urlencode({
+            "prompt": str(body.get("prompt", "") or ""),
+            "model": str(body.get("model", "") or ""),
+        })
+        try:
+            resp = await STATE.nai.request(
+                "GET", f"{STATE.nai.image_host}/ai/generate-image/suggest-tags?{query}",
+                accept="application/json", on_rate_limited=record_tag_429,
+                image_lane=True, wait_for_image_slot=False)
+        except UpstreamError as exc:
+            record(key, "tags", "", "error", detail=f"upstream {exc.status}")
+            raise err(exc.status if exc.status in (429, 503) else 502, exc.message)
     if resp.status_code != 200:
         return Response(resp.content, status_code=resp.status_code, media_type="application/json")
     record(key, "tags", "", "ok")
     return Response(resp.content, media_type="application/json")
 
 
-async def generate_image_stream_unavailable(request: Request):
-    """明确告知 Launcher：本站只实现 ZIP 生图，不伪造 MessagePack 流。"""
-    key = await authenticate(request)
-    record(key, "image_stream", "", "rejected", detail="本站未开放 generate-image-stream")
-    raise err(501, "本站暂未开放流式生图；请在启动器中关闭流式预览后重试")
-
-
 # ============================================================== 文本生成 =====
+
+class TextStreamResponse(StreamingResponse):
+    """Transfer the route's upstream/slot ownership to the ASGI response."""
+
+    def __init__(self, content, resources: AsyncExitStack, **kwargs):
+        super().__init__(content, **kwargs)
+        self.resources = resources.pop_all()
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            async def cleanup():
+                try:
+                    # Also covers send failure while the generator is suspended.
+                    await self.body_iterator.aclose()
+                finally:
+                    # Close upstream before releasing either concurrency slot,
+                    # even if response headers failed before iteration started.
+                    await self.resources.aclose()
+
+            await _wait_cleanup(asyncio.create_task(cleanup()))
+
 
 async def generate_stream(request: Request):
     key = await authenticate(request)
@@ -474,12 +800,14 @@ async def generate_stream(request: Request):
     daily_limit = -1 if key["is_admin"] else key["daily_text_tokens"]
     already = (await STATE.db.get_counter(key["id"], STATE.day()))["text_tokens"]
 
-    async with acquire_concurrency(key):
+    async with AsyncExitStack() as resources:
+        await resources.enter_async_context(acquire_concurrency(key))
         try:
             resp = await STATE.nai.stream(_text_url(model, True), body)
         except UpstreamError as e:
             record(key, "text", model, "error", detail=e.message)
-            raise err(e.status if e.status in (429, 503) else 502, e.message)
+            raise err(e.status if e.status in (400, 422, 429, 503) else 502, e.message)
+        resources.push_async_callback(resp.aclose)
 
         async def passthrough() -> AsyncIterator[bytes]:
             counted = 0
@@ -503,11 +831,10 @@ async def generate_stream(request: Request):
                     if buf.endswith(b"\r"):
                         pass
             finally:
-                await resp.aclose()
                 d = ("达到每日上限被截断; " if hard_cut else "") + "; ".join(notes)
                 record(key, "text", model, "ok", tokens=counted, detail=d.strip("; "))
 
-        return StreamingResponse(passthrough(), media_type="text/event-stream",
+        return TextStreamResponse(passthrough(), resources, media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache",
                                           "X-Accel-Buffering": "no"})
 
@@ -624,12 +951,14 @@ async def v1_chat(request: Request):
     daily_limit = -1 if key["is_admin"] else key["daily_text_tokens"]
     already = (await STATE.db.get_counter(key["id"], STATE.day()))["text_tokens"]
 
-    async with acquire_concurrency(key):
+    async with AsyncExitStack() as resources:
+        await resources.enter_async_context(acquire_concurrency(key))
         try:
             resp = await STATE.nai.stream(_text_url(model, True), nai_body)
         except UpstreamError as e:
             record(key, "chat", model, "error", detail=e.message)
-            raise err(e.status if e.status in (429, 503) else 502, e.message)
+            raise err(e.status if e.status in (400, 422, 429, 503) else 502, e.message)
+        resources.push_async_callback(resp.aclose)
 
         def openai_chunk(content: str, finish: Optional[str] = None) -> str:
             return json.dumps({
@@ -647,7 +976,7 @@ async def v1_chat(request: Request):
             buf = b""
             try:
                 if want_stream:
-                    yield (openai_chunk("", None) + "\n\n").encode()
+                    yield ("data: " + openai_chunk("", None) + "\n\n").encode()
                 done = False
                 async for chunk in resp.aiter_bytes():
                     if done:
@@ -676,18 +1005,17 @@ async def v1_chat(request: Request):
                             done = True
                             break
                         if want_stream:
-                            yield (openai_chunk(text, None) + "\n\n").encode()
+                            yield ("data: " + openai_chunk(text, None) + "\n\n").encode()
                         else:
                             result["collected"].append(text)
                 if want_stream:
-                    yield (openai_chunk("", "stop") + "\n\n").encode()
+                    yield ("data: " + openai_chunk("", "stop") + "\n\n").encode()
                     yield b"data: [DONE]\n\n"
             finally:
-                await resp.aclose()
                 record(key, "chat", model, "ok", tokens=result["counted"])
 
         if want_stream:
-            return StreamingResponse(run_stream(), media_type="text/event-stream",
+            return TextStreamResponse(run_stream(), resources, media_type="text/event-stream",
                                      headers={"Cache-Control": "no-cache",
                                               "X-Accel-Buffering": "no"})
 
@@ -731,42 +1059,50 @@ async def admin_page():
 async def user_subscription(request: Request):
     """给原生 NAI 客户端的虚拟订阅视图，不暴露真实上游账户余额。"""
     key = await authenticate(request)
-    expires_at = float(key["expires_at"] or (time.time() + 3650 * 86400))
-    return {
-        "tier": 3,
-        "active": True,
-        "expiresAt": int(expires_at),
-        "trainingStepsLeft": {
-            "fixedTrainingStepsLeft": 0,
-            "purchasedTrainingSteps": 0,
-        },
-        "perks": {
-            "imageGeneration": True,
-            "unlimitedImageGeneration": False,
-            "voiceGeneration": False,
-            "contextTokens": 0,
-        },
-        "usage": {
-            "percent": 100,
-            "isNegative": False,
-            "timeUntilNextPercent": 0,
-        },
-        "naiGate": {
-            "imageModelScope": key["image_model_scope"],
-            "anlasEnabled": bool(key["allow_anlas"]),
-        },
-    }
+    return await subscription_payload(STATE, key)
+
+
+@app.get("/user/data")
+async def user_data(request: Request):
+    key = await authenticate(request)
+    sub = await subscription_payload(STATE, key)
+    public_sub = {name: value for name, value in sub.items() if name != "naiGate"}
+    return {"subscription": public_sub, "trainingStepsLeft": sub["trainingStepsLeft"],
+            "anlas": sub["trainingStepsLeft"]["fixedTrainingStepsLeft"]}
+
+
+@app.get("/user/information")
+async def user_information(request: Request):
+    key = await authenticate(request)
+    return {"tier": 3, "active": True, "username": key["name"],
+            "expiresAt": int(key["expires_at"] or time.time() + 3650 * 86400)}
+
+
+@app.get("/queue-status")
+async def queue_status():
+    return STATE.queue_snapshot()
+
+
+app.get("/ai/user/subscription")(user_subscription)
+app.get("/ai/user/data")(user_data)
+app.get("/ai/user/information")(user_information)
 
 
 # ================================================================ 路由注册 ====
 
 for path in ("/ai/generate-image", "/nai/ai/generate-image"):
     app.post(path)(generate_image)
+for path in ("/ai/encode-vibe", "/nai/ai/encode-vibe"):
+    app.post(path)(encode_vibe)
+for path in ("/ai/upscale", "/nai/ai/upscale"):
+    app.post(path)(upscale_image)
+for path in ("/ai/augment-image", "/nai/ai/augment-image"):
+    app.post(path)(augment_image)
 for path in ("/ai/generate-image/suggest-tags", "/nai/ai/generate-image/suggest-tags"):
     app.post(path)(suggest_tags)
     app.get(path)(suggest_tags)
 for path in ("/ai/generate-image-stream", "/nai/ai/generate-image-stream"):
-    app.post(path)(generate_image_stream_unavailable)
+    app.post(path)(generate_image_stream)
 for path in ("/ai/generate-stream", "/nai/ai/generate-stream"):
     app.post(path)(generate_stream)
 for path in ("/ai/generate", "/nai/ai/generate"):

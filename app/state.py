@@ -34,9 +34,16 @@ class GateState:
         self._key_sems: dict[int, asyncio.Semaphore] = {}
         self._key_image_next_at: dict[int, float] = {}
         self._rpm: dict[int, deque[float]] = {}
+        self._tag_active: set[int] = set()
+        self._tag_next_at: dict[int, float] = {}
         self._login_attempts: dict[str, deque[float]] = {}
         self._lock = asyncio.Lock()
         self._image_blocked_until = 0.0
+        # Keep quota check, dispatch and successful accounting in one boundary.
+        self.image_budget_lock = asyncio.Lock()
+        self.global_waiting = 0
+        self.global_active = 0
+        self._image_pacing_waiting = 0
 
     # ---------- time ----------
     def day(self, ts: Optional[float] = None) -> str:
@@ -62,7 +69,7 @@ class GateState:
         return self._global_sem
 
     async def wait_for_key_image_slot(self, key_id: int) -> None:
-        """普通用户 Key 的图片/标签任务独立冷却，不占用全站并发槽。"""
+        """普通用户 Key 的图片任务独立冷却，不占用全站并发槽。"""
         interval = max(0.0, self.settings.key_image_min_interval)
         if not interval:
             return
@@ -72,7 +79,42 @@ class GateState:
             wait = max(0.0, next_at - now)
             self._key_image_next_at[key_id] = max(now, next_at) + interval
         if wait:
-            await asyncio.sleep(wait)
+            self._image_pacing_waiting += 1
+            try:
+                await asyncio.sleep(wait)
+            finally:
+                self._image_pacing_waiting -= 1
+
+    def queue_snapshot(self) -> dict:
+        """Aggregate visibility only; no identities, requests or token values."""
+        now = time.monotonic()
+        slots = [max(0.0, token.image_next_at - now)
+                 for token in self.nai.pool if token.usable]
+        return {
+            "global": {
+                "active": self.global_active,
+                "waiting": self.global_waiting + self._image_pacing_waiting,
+                "concurrency": self.settings.global_concurrency,
+            },
+            "image_next_slot_in": round(min(slots, default=0.0), 1),
+            "image_cooldown_remaining": self.image_cooldown_remaining(),
+            "queue_timeout": self.settings.queue_timeout,
+            "image_min_interval": self.settings.image_min_interval,
+        }
+
+    def try_tag_request(self, key_id: int) -> bool:
+        """Fail-fast autocomplete admission; no awaits, no future image slots."""
+        now = time.monotonic()
+        if (key_id in self._tag_active
+                or len(self._tag_active) >= min(8, max(1, self.settings.global_concurrency))
+                or self._tag_next_at.get(key_id, 0) > now):
+            return False
+        self._tag_active.add(key_id)
+        self._tag_next_at[key_id] = now + max(1.0, self.settings.key_image_min_interval)
+        return True
+
+    def finish_tag_request(self, key_id: int) -> None:
+        self._tag_active.discard(key_id)
 
     # ---------- rpm ----------
     async def hit_rpm(self, key_id: int, rpm: int) -> bool:

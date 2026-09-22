@@ -5,11 +5,16 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import time
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
+import anyio
 import httpx
 
 from .policy import mask_token
+from .allowance import AllowanceCache, AllowanceUnavailable
+from .image_tools import validate_result
 
 
 class UpstreamError(Exception):
@@ -17,6 +22,12 @@ class UpstreamError(Exception):
         super().__init__(message)
         self.status = status
         self.message = message
+
+
+@dataclass
+class ImageStreamHandle:
+    response: httpx.Response
+    completed_images: int = 0
 
 
 class TokenState:
@@ -44,6 +55,21 @@ class TokenState:
         return not self.disabled and time.time() >= self.blocked_until
 
 
+async def _wait_cleanup(task: asyncio.Task) -> Any:
+    """Finish accounting under ASGI cancel scopes and direct task cancellation."""
+    cancelled = False
+    with anyio.CancelScope(shield=True):
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+        result = task.result()
+    if cancelled:
+        raise asyncio.CancelledError()
+    return result
+
+
 class NaiClient:
     """持有共享 httpx.AsyncClient 与上游令牌池。"""
 
@@ -69,6 +95,7 @@ class NaiClient:
         self._rr = 0
         self._client: Optional[httpx.AsyncClient] = None
         self._lock = asyncio.Lock()
+        self.allowance = AllowanceCache(db)
 
     async def start(self) -> None:
         self._client = httpx.AsyncClient(
@@ -119,9 +146,11 @@ class NaiClient:
         if not v5_free or not ts.v5_daily_limit:
             return
         async with self._lock:
-            ts.pending_v5 = max(0, ts.pending_v5 - 1)
-            if succeeded:
-                await self._db.bump_upstream_v5_counter(ts.token_id, self._day_fn())
+            try:
+                if succeeded:
+                    await self._db.bump_upstream_v5_counter(ts.token_id, self._day_fn())
+            finally:
+                ts.pending_v5 = max(0, ts.pending_v5 - 1)
 
     async def record_successful_images(self, ts: TokenState, image_count: int) -> None:
         """按上游实际成功响应记录生成张数；失败、拒绝和限流不计入。"""
@@ -183,67 +212,183 @@ class NaiClient:
             "Content-Type": "application/json",
         }
 
+    def _unavailable(self, requires_anlas: bool, v5_free: bool) -> UpstreamError:
+        if requires_anlas:
+            return UpstreamError(503, "没有允许使用 Anlas 的上游令牌，无法生成此图片")
+        if v5_free:
+            return UpstreamError(429, "可用上游令牌的今日 V5 免费图片额度已用完")
+        return UpstreamError(503, "上游令牌全部被限流或不可用，请稍后再试")
+
+    async def _settle(self, ts: TokenState, *, succeeded: bool,
+                      v5_free: bool, image_count: int) -> None:
+        await self.finish_v5_reservation(ts, succeeded=succeeded, v5_free=v5_free)
+        if succeeded:
+            await self.record_successful_images(ts, image_count)
+
+    async def _rate_limit(self, ts: TokenState, resp: httpx.Response,
+                          callback: Optional[Callable[[float], Awaitable[None]]]) -> None:
+        try:
+            retry_after = float(resp.headers.get("retry-after", "20"))
+        except (ValueError, TypeError):
+            retry_after = 20.0
+        self.mark_rate_limited(ts, retry_after)
+        if callback:
+            await callback(max(5.0, retry_after))
+
     async def request(
         self, method: str, url: str, json_body: Any = None,
         accept: str = "*/*",
         on_rate_limited: Optional[Callable[[float], Awaitable[None]]] = None,
         *, requires_anlas: bool = False, v5_free: bool = False,
-        image_count: int = 0, image_lane: bool = False,
+        image_count: int = 0, image_lane: bool = False, wait_for_image_slot: bool = True,
+        resolve_v5_cost: Optional[Callable[[bool], Awaitable[None]]] = None,
+        max_response_bytes: int | None = None,
     ) -> httpx.Response:
-        """普通请求；对上游 429 做一次换 token 重试。"""
+        """图片请求不自动重试；普通请求只对明确的 429 换 token 一次。"""
         if self._client is None:
             raise RuntimeError("client not started")
         attempts = 0
-        last_resp: Optional[httpx.Response] = None
         while attempts < 2:
             attempts += 1
             ts = await self.pick_token(requires_anlas=requires_anlas, v5_free=v5_free)
             if ts is None:
-                if requires_anlas:
-                    raise UpstreamError(503, "没有允许使用 Anlas 的上游令牌，无法生成此图片")
-                if v5_free:
-                    raise UpstreamError(429, "可用上游令牌的今日 V5 免费图片额度已用完")
-                raise UpstreamError(503, "上游令牌全部被限流或不可用，请稍后再试")
+                raise self._unavailable(requires_anlas, v5_free)
+            succeeded = False
             try:
                 if image_lane:
-                    await self.wait_for_token_image_slot(ts)
-                resp = await self._client.request(
-                    method, url, json=json_body, headers=self._headers(ts, accept)
-                )
-            except Exception:
-                await self.finish_v5_reservation(ts, succeeded=False, v5_free=v5_free)
-                raise
-            if resp.status_code == 429:
-                await self.finish_v5_reservation(ts, succeeded=False, v5_free=v5_free)
-                ra = 20.0
-                try:
-                    ra = float(resp.headers.get("retry-after", "20"))
-                except ValueError:
-                    pass
-                self.mark_rate_limited(ts, ra)
-                if on_rate_limited:
-                    await on_rate_limited(max(5.0, ra))
+                    if wait_for_image_slot:
+                        await self.wait_for_token_image_slot(ts)
+                    else:
+                        async with self._lock:
+                            now = time.monotonic()
+                            if ts.image_next_at > now:
+                                raise UpstreamError(503, "上游正在处理图片请求，补全建议暂不可用")
+                            ts.image_next_at = now + self._image_min_interval
+                if v5_free and resolve_v5_cost is not None:
+                    exhausted = await self._resolve_v5_cost(ts, resolve_v5_cost)
+                    if exhausted:
+                        await self.finish_v5_reservation(ts, succeeded=False, v5_free=True)
+                        v5_free = False
+                if max_response_bytes is None:
+                    resp = await self._client.request(
+                        method, url, json=json_body, headers=self._headers(ts, accept))
+                else:
+                    async with asyncio.timeout(300):
+                        async with self._client.stream(
+                            method, url, json=json_body, headers=self._headers(ts, accept)
+                        ) as stream:
+                            data = bytearray()
+                            async for chunk in stream.aiter_bytes():
+                                if len(data) + len(chunk) > max_response_bytes:
+                                    raise UpstreamError(502, "上游图片工具结果过大")
+                                data.extend(chunk)
+                            headers = {k: v for k, v in stream.headers.items()
+                                       if k.lower() not in {"content-encoding", "content-length"}}
+                            resp = httpx.Response(stream.status_code, headers=headers,
+                                                  content=bytes(data))
+                if resp.status_code in (200, 201) and image_count > 0:
+                    try:
+                        await anyio.to_thread.run_sync(lambda: validate_result(
+                            resp.content, "generate-image", "", expected_images=image_count))
+                    except ValueError:
+                        raise UpstreamError(502, "上游未返回完整有效的图片结果") from None
+                succeeded = resp.status_code in (200, 201)
+                if resp.status_code == 429:
+                    await self._rate_limit(ts, resp, on_rate_limited)
                     if image_lane:
                         raise UpstreamError(429, "上游限流(429)，全站图片生成已进入冷却")
-                last_resp = resp
-                continue
+                    continue
+                if resp.status_code == 401:
+                    self.mark_unauthorized(ts)
+                    raise UpstreamError(502, "上游令牌已失效（401），请站长更换 NovelAI Token")
+                if succeeded:
+                    self.mark_ok(ts)
+                return resp
+            finally:
+                await _wait_cleanup(asyncio.create_task(self._settle(
+                    ts, succeeded=succeeded, v5_free=v5_free, image_count=image_count
+                )))
+        raise UpstreamError(429, "上游限流(429)，请降低频率后重试")
+
+    async def _resolve_v5_cost(self, ts, callback):
+        try:
+            exhausted = await self.allowance.resolve(
+                self._client, self.image_host, ts.token_id, ts.token)
+        except AllowanceUnavailable as exc:
+            raise UpstreamError(503, str(exc)) from None
+        if exhausted and not ts.allow_anlas:
+            raise UpstreamError(503, "该上游账号 V5 额度已耗尽，且未允许使用 Anlas；未发送生图")
+        await callback(exhausted)
+        return exhausted
+
+    @asynccontextmanager
+    async def image_stream(
+        self, url: str, json_body: Any, *, requires_anlas: bool = False,
+        v5_free: bool = False,
+        on_rate_limited: Optional[Callable[[float], Awaitable[None]]] = None,
+        on_dispatch: Optional[Callable[[], None]] = None,
+        resolve_v5_cost: Optional[Callable[[bool], Awaitable[None]]] = None,
+    ) -> AsyncIterator[ImageStreamHandle]:
+        """图片 SSE 不重试；调用方只在确认完整最终图片后增加 completed_images。"""
+        if self._client is None:
+            raise RuntimeError("client not started")
+        ts = await self.pick_token(requires_anlas=requires_anlas, v5_free=v5_free)
+        if ts is None:
+            raise self._unavailable(requires_anlas, v5_free)
+        resp: Optional[httpx.Response] = None
+        handle: Optional[ImageStreamHandle] = None
+
+        async def cleanup() -> None:
+            close_failed = False
+            try:
+                if resp is not None:
+                    try:
+                        await resp.aclose()
+                    except Exception:
+                        close_failed = True
+            finally:
+                count = max(0, handle.completed_images) if handle is not None else 0
+                await self._settle(ts, succeeded=count > 0, v5_free=v5_free,
+                                   image_count=count)
+                if count > 0:
+                    self.mark_ok(ts)
+            if close_failed:
+                raise UpstreamError(502, "上游图片流连接关闭失败")
+
+        try:
+            await self.wait_for_token_image_slot(ts)
+            if v5_free and resolve_v5_cost is not None:
+                exhausted = await self._resolve_v5_cost(ts, resolve_v5_cost)
+                if exhausted:
+                    await self.finish_v5_reservation(ts, succeeded=False, v5_free=True)
+                    v5_free = False
+            req = self._client.build_request(
+                "POST", url, json=json_body,
+                headers=self._headers(ts, "text/event-stream"),
+            )
+            if on_dispatch is not None:
+                on_dispatch()
+            resp = await self._client.send(req, stream=True)
+            if resp.status_code == 429:
+                await self._rate_limit(ts, resp, on_rate_limited)
+                raise UpstreamError(429, "上游限流(429)，全站图片生成已进入冷却")
             if resp.status_code == 401:
-                await self.finish_v5_reservation(ts, succeeded=False, v5_free=v5_free)
                 self.mark_unauthorized(ts)
                 raise UpstreamError(502, "上游令牌已失效（401），请站长更换 NovelAI Token")
-            await self.finish_v5_reservation(
-                ts, succeeded=resp.status_code == 200, v5_free=v5_free
-            )
-            if resp.status_code == 200:
-                await self.record_successful_images(ts, image_count)
-            self.mark_ok(ts)
-            return resp
-        raise UpstreamError(429, "上游限流(429)，请降低频率后重试")
+            if resp.status_code not in (200, 201):
+                status = resp.status_code if 400 <= resp.status_code <= 599 else 502
+                raise UpstreamError(status, f"上游图片流请求失败（HTTP {status}）")
+            handle = ImageStreamHandle(resp)
+            yield handle
+        except httpx.HTTPError:
+            raise UpstreamError(502, "上游图片流连接中断，请检查任务结果后再决定是否重试") from None
+        finally:
+            await _wait_cleanup(asyncio.create_task(cleanup()))
 
     async def stream(
         self, url: str, json_body: Any,
     ) -> AsyncIterator[httpx.Response]:
-        """流式请求；只 Yield 一个 response，由调用方迭代字节。带一次换 token 重试。"""
+        """打开文本流，由调用方持有并关闭响应；错误请求不重试。"""
         if self._client is None:
             raise RuntimeError("client not started")
         ts = await self.pick_token()
@@ -253,15 +398,22 @@ class NaiClient:
             "POST", url, json=json_body, headers=self._headers(ts, "text/event-stream")
         )
         resp = await self._client.send(req, stream=True)
-        if resp.status_code in (401, 429, 502, 503):
-            body = (await resp.aread()).decode("utf-8", "replace")[:300]
-            await resp.aclose()
+        if resp.status_code not in (200, 201):
             if resp.status_code == 401:
                 self.mark_unauthorized(ts)
+            elif resp.status_code == 429:
+                self.mark_rate_limited(ts)
+            # Error bodies may stall or contain private upstream details.
+            # Close before handing the failure back to the route, even on cancel.
+            try:
+                await _wait_cleanup(asyncio.create_task(resp.aclose()))
+            except Exception:
+                raise UpstreamError(502, "上游文本错误响应连接关闭失败") from None
+            if resp.status_code == 401:
                 raise UpstreamError(502, "上游令牌已失效（401），请站长更换 NovelAI Token")
             if resp.status_code == 429:
-                self.mark_rate_limited(ts)
                 raise UpstreamError(429, "上游限流(429)，请降低频率后重试")
-            raise UpstreamError(502, f"上游错误 {resp.status_code}: {body}")
+            status = resp.status_code if resp.status_code in (400, 422, 503) else 502
+            raise UpstreamError(status, f"上游文本请求失败（HTTP {resp.status_code}）")
         self.mark_ok(ts)
         return resp

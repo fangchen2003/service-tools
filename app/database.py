@@ -65,6 +65,31 @@ CREATE TABLE IF NOT EXISTS upstream_token_counters (
     v5 INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (token_id, day)
 );
+CREATE TABLE IF NOT EXISTS daily_quota_offsets (
+    key_id INTEGER NOT NULL,
+    day TEXT NOT NULL,
+    anlas REAL NOT NULL DEFAULT 0,
+    v5 INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (key_id, day)
+);
+CREATE TABLE IF NOT EXISTS deleted_key_usage_flags (
+    key_id INTEGER PRIMARY KEY,
+    exclude_global_v5 INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS preserve_deleted_key_usage
+BEFORE DELETE ON api_keys
+BEGIN
+    INSERT INTO deleted_key_usage_flags(key_id, exclude_global_v5)
+        VALUES (OLD.id, OLD.exclude_global_v5)
+        ON CONFLICT(key_id) DO NOTHING;
+    DELETE FROM daily_quota_offsets WHERE key_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS prevent_deleted_key_quota_reset
+BEFORE INSERT ON daily_quota_offsets
+WHEN EXISTS (SELECT 1 FROM deleted_key_usage_flags WHERE key_id=NEW.key_id)
+BEGIN
+    SELECT RAISE(IGNORE);
+END;
 """
 
 
@@ -169,6 +194,14 @@ class Database:
         cur = await self._db.execute("SELECT * FROM api_keys WHERE token=?", (token,))
         return await cur.fetchone()
 
+    async def rotate_key_token(self, key_id: int, token: str) -> bool:
+        # Keep the ID so admitted work, usage and rate limits retain ownership.
+        cur = await self._db.execute(
+            "UPDATE api_keys SET token=? WHERE id=?", (token, key_id)
+        )
+        await self._db.commit()
+        return cur.rowcount == 1
+
     async def update_key(self, key_id: int, fields: dict[str, Any]) -> None:
         allowed = {
             "name", "enabled", "daily_images", "daily_anlas", "daily_v5", "monthly_anlas",
@@ -189,8 +222,9 @@ class Database:
         await self._db.commit()
 
     async def delete_key(self, key_id: int) -> None:
+        # The trigger archives the V5 flag and removes offsets atomically.
+        # Counters/logs also accept late settlement from already admitted work.
         await self._db.execute("DELETE FROM api_keys WHERE id=?", (key_id,))
-        await self._db.execute("DELETE FROM counters WHERE key_id=?", (key_id,))
         await self._db.commit()
 
     async def inactive_key_ids(self, cutoff: float) -> list[int]:
@@ -232,22 +266,31 @@ class Database:
         )
         await self._db.commit()
 
-    async def get_counter(self, key_id: int, day: str) -> aiosqlite.Row:
+    async def get_counter(self, key_id: int, day: str) -> dict[str, Any]:
         cur = await self._db.execute(
-            "SELECT * FROM counters WHERE key_id=? AND day=?", (key_id, day)
+            """SELECT c.*, COALESCE(o.anlas, 0) AS _quota_offset_anlas,
+                      COALESCE(o.v5, 0) AS _quota_offset_v5
+               FROM counters AS c
+               LEFT JOIN daily_quota_offsets AS o ON o.key_id=c.key_id AND o.day=c.day
+               WHERE c.key_id=? AND c.day=?""", (key_id, day)
         )
         row = await cur.fetchone()
         if row:
-            return row
+            result = dict(row)
+            result["anlas"] = max(0, result["anlas"] - result.pop("_quota_offset_anlas"))
+            result["v5"] = max(0, result["v5"] - result.pop("_quota_offset_v5"))
+            return result
         return {"images": 0, "anlas": 0.0, "text_tokens": 0, "requests": 0, "v5": 0}
 
     async def reset_daily_image_quota(self, key_id: int, day: str) -> None:
-        """重置单个 Key 当日会影响图片额度的 V5 与 Anlas 计数。
+        """重置单个 Key 当日的 V5 与 Anlas 可用额度基线。
 
-        保留图片数量、文本、请求数以及用量日志，避免把审计记录一并删除。
+        保留原始记账用量，以重置时的累计量更新基线。
         """
         await self._db.execute(
-            "UPDATE counters SET anlas=0, v5=0 WHERE key_id=? AND day=?",
+            """INSERT INTO daily_quota_offsets (key_id, day, anlas, v5)
+               SELECT key_id, day, anlas, v5 FROM counters WHERE key_id=? AND day=?
+               ON CONFLICT(key_id, day) DO UPDATE SET anlas=excluded.anlas, v5=excluded.v5""",
             (key_id, day),
         )
         await self._db.commit()
@@ -265,8 +308,9 @@ class Database:
         cur = await self._db.execute(
             """SELECT COALESCE(SUM(c.v5),0) AS c
                FROM counters AS c
-               JOIN api_keys AS k ON k.id = c.key_id
-               WHERE c.day=? AND k.exclude_global_v5=0""",
+               LEFT JOIN api_keys AS k ON k.id = c.key_id
+               LEFT JOIN deleted_key_usage_flags AS d ON d.key_id = c.key_id
+               WHERE c.day=? AND COALESCE(k.exclude_global_v5, d.exclude_global_v5, 1)=0""",
             (day,),
         )
         row = await cur.fetchone()
@@ -358,8 +402,9 @@ class Database:
         today_v5 = await one(
             """SELECT COALESCE(SUM(c.v5),0)
                FROM counters AS c
-               JOIN api_keys AS k ON k.id = c.key_id
-               WHERE c.day=? AND k.exclude_global_v5=0""",
+               LEFT JOIN api_keys AS k ON k.id = c.key_id
+               LEFT JOIN deleted_key_usage_flags AS d ON d.key_id = c.key_id
+               WHERE c.day=? AND COALESCE(k.exclude_global_v5, d.exclude_global_v5, 1)=0""",
             (today,),
         )
         keys_total = await one("SELECT COUNT(*) FROM api_keys")

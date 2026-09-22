@@ -12,6 +12,8 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from .policy import gen_key
+from .body import read_json_body
+from .allowance import SETTING, read_alert_threshold
 
 router = APIRouter(prefix="/admin/api")
 
@@ -19,7 +21,9 @@ COOKIE = "nai_gate_admin"
 
 
 def _client_id(request: Request) -> str:
-    return request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
+    # Let the ASGI server apply its trusted-proxy policy. Raw forwarding headers
+    # are attacker-controlled on direct connections and must not select a bucket.
+    return request.client.host if request.client else "unknown"
 
 
 # ----------------------------------------------------------------- auth ----
@@ -73,7 +77,7 @@ def require_admin(request: Request) -> None:
 async def login(request: Request, response: Response):
     if not await request.app.state.gate.hit_login(_client_id(request)):
         raise HTTPException(429, "登录尝试过于频繁，请稍后再试")
-    body = await request.json()
+    body = await read_json_body(request)
     password = str(body.get("password", ""))
     if not request.app.state.gate.settings.admin_password:
         raise HTTPException(503, "尚未设置 ADMIN_PASSWORD 环境变量，管理端已锁定")
@@ -81,14 +85,18 @@ async def login(request: Request, response: Response):
         raise HTTPException(401, "密码错误")
     response.set_cookie(
         COOKIE, make_session_cookie(request),
-        httponly=True, secure=True, samesite="strict", max_age=7 * 86400,
+        httponly=True, secure=request.app.state.gate.settings.admin_cookie_secure,
+        samesite="strict", max_age=7 * 86400,
     )
     return {"ok": True}
 
 
 @router.post("/logout")
-async def logout(response: Response):
-    response.delete_cookie(COOKIE)
+async def logout(request: Request, response: Response):
+    response.delete_cookie(
+        COOKIE, httponly=True, secure=request.app.state.gate.settings.admin_cookie_secure,
+        samesite="strict",
+    )
     return {"ok": True}
 
 
@@ -145,7 +153,7 @@ async def list_keys(request: Request):
 async def create_key(request: Request):
     require_admin(request)
     st = request.app.state.gate
-    body = await request.json()
+    body = await read_json_body(request)
 
     def _int_field(name: str, default: int, lo: int, hi: int) -> int:
         try:
@@ -185,13 +193,23 @@ async def create_key(request: Request):
     return {"key": _key_json(row, c)}
 
 
+@router.post("/keys/{key_id}/regenerate")
+async def regenerate_key(request: Request, response: Response, key_id: int):
+    require_admin(request)
+    token = gen_key("nai")
+    if not await request.app.state.gate.db.rotate_key_token(key_id, token):
+        raise HTTPException(404, "key 不存在")
+    response.headers["Cache-Control"] = "no-store"
+    return {"token": token}
+
+
 @router.patch("/keys/{key_id}")
 async def patch_key(request: Request, key_id: int):
     require_admin(request)
     st = request.app.state.gate
     if not await st.db.get_key(key_id):
         raise HTTPException(404, "key 不存在")
-    body = await request.json()
+    body = await read_json_body(request)
     fields: dict[str, Any] = {}
     if "name" in body:
         fields["name"] = str(body["name"] or "").strip()[:60] or "未命名"
@@ -286,21 +304,32 @@ async def get_settings(request: Request):
     st = request.app.state.gate
     v = await st.db.get_setting("global_monthly_anlas", st.settings.global_monthly_anlas)
     v5 = await st.db.get_setting("global_daily_v5", st.settings.global_daily_v5)
-    return {"global_monthly_anlas": float(v or 0), "global_daily_v5": int(float(v5 or 0))}
+    return {"global_monthly_anlas": float(v or 0), "global_daily_v5": int(float(v5 or 0)),
+            SETTING: await read_alert_threshold(st.db)}
+
+
+@router.get("/allowance")
+async def allowance(request: Request):
+    require_admin(request)
+    return await request.app.state.gate.nai.allowance.snapshot(request.app.state.gate.nai.pool)
 
 
 @router.put("/settings")
 async def put_settings(request: Request):
     require_admin(request)
     st = request.app.state.gate
-    body = await request.json()
+    body = await read_json_body(request)
+    threshold = body.get(SETTING, await read_alert_threshold(st.db))
+    if type(threshold) is not int or not 1 <= threshold <= 100:
+        raise HTTPException(422, "V5 告警阈值必须为 1～100 的整数百分比")
     v = float(body.get("global_monthly_anlas", 0) or 0)
     v = max(0.0, min(v, 1000000.0))
     await st.db.set_setting("global_monthly_anlas", v)
     g5 = int(body.get("global_daily_v5", 0) or 0)
     g5 = max(0, min(g5, 100000))
     await st.db.set_setting("global_daily_v5", g5)
-    return {"ok": True, "global_monthly_anlas": v, "global_daily_v5": g5}
+    await st.db.set_setting(SETTING, threshold)
+    return {"ok": True, "global_monthly_anlas": v, "global_daily_v5": g5, SETTING: threshold}
 
 
 @router.get("/announcement")
@@ -315,7 +344,7 @@ async def get_announcement(request: Request):
 @router.put("/announcement")
 async def put_announcement(request: Request):
     require_admin(request)
-    body = await request.json()
+    body = await read_json_body(request)
     html = str(body.get("html", ""))[:20000]
     request.app.state.gate.settings.announcement_path.write_text(html, encoding="utf-8")
     return {"ok": True}

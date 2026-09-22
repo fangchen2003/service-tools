@@ -111,15 +111,23 @@ def test_v5_clamp_snaps_to_preset():
     assert (out["parameters"]["width"], out["parameters"]["height"]) == (1216, 832)
 
 
-def test_old_model_only_normal_presets_are_free():
-    """老模型仅三种固定 Normal 规格免 Anlas。"""
-    for w, h in ((832, 1216), (1216, 832), (1024, 1024)):
+def test_old_model_custom_sizes_within_pixel_limit_are_free():
+    """官方 V4.5 896x1152 / 28 步单张实测 0 Anlas，非预设也免费。"""
+    for w, h in ((832, 1216), (1216, 832), (1024, 1024),
+                 (896, 1152), (1152, 896), (960, 1024), (512, 768), (2048, 512)):
         payload = img_payload(model="nai-diffusion-4-5-full", w=w, h=h)
         assert legacy_normal_free_eligible(payload)
         assert estimate_image_cost(payload) == {"anlas": 0, "v5": 0}
+        out, notes, error = clamp_image_params(
+            payload, max_pixels=1048576, max_steps=28, allow_img2img=False)
+        assert error is None and not notes
+        assert out == payload
 
-    payload = img_payload(model="nai-diffusion-4-5-full", w=896, h=1152)
-    assert estimate_image_cost(payload)["anlas"] > 0
+    for overrides in (dict(w=1088, h=1024), dict(steps=29), dict(n=2),
+                      dict(image="AAAA"), dict(sm=True)):
+        payload = img_payload(model="nai-diffusion-4-5-full", **overrides)
+        assert not legacy_normal_free_eligible(payload)
+        assert estimate_image_cost(payload)["anlas"] > 0
 
 
 def test_v5_unshaped_burns_anlas_with_multiplier():
