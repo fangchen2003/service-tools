@@ -327,6 +327,18 @@ async def set_upstream_v5_limit(request: Request, token_id: str):
     return {"ok": True, "v5_daily_limit": limit}
 
 
+@router.put("/upstream-tokens/{token_id}/enabled")
+async def set_upstream_enabled(request: Request, token_id: str):
+    require_admin(request)
+    body = await read_json_body(request)
+    enabled = body.get("enabled")
+    if type(enabled) is not bool:
+        raise HTTPException(422, "enabled 必须是布尔值")
+    if not await request.app.state.gate.nai.set_admin_enabled(token_id, enabled):
+        raise HTTPException(404, "上游 Token 不存在")
+    return {"ok": True, "enabled": enabled}
+
+
 @router.put("/settings")
 async def put_settings(request: Request):
     require_admin(request)

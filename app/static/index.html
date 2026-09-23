@@ -341,9 +341,12 @@ async function loadOverview(){
       : pool.map(p=>`
         <div style="padding:6px 0;border-bottom:1px solid var(--line)">
           <span class="mono">#${p.position} ${esc(p.token)}</span>
-          ${p.disabled ? '<span class="tag off">已失效(401)</span>'
+          ${!p.admin_enabled ? '<span class="tag off">已停用</span>'
+            : p.disabled ? '<span class="tag off">已失效(401)</span>'
             : p.blocked_for>0 ? `<span class="tag warn">限流中 ${p.blocked_for}s</span>`
             : '<span class="tag on">正常</span>'}
+          ${!p.admin_enabled && p.disabled ? '<span class="tag warn">401 失效</span>' : ''}
+          <button class="btn mini ${p.admin_enabled?'danger':''}" onclick="setUpstreamEnabled('${p.token_id}',${!p.admin_enabled})">${p.admin_enabled?'停用':'启用'}</button>
           <span class="muted" style="margin-left:12px;font-size:12px">今日生成 ${p.images_today||0} 张 · 失败 ${p.fails} · Anlas ${p.allow_anlas?'允许':'禁止'} · 免费 V5 ${p.v5_used}/${p.v5_daily_limit||'∞'}</span>
           <div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px">
             <span class="muted">V5 日限</span>
@@ -362,6 +365,15 @@ async function saveUpstreamV5Limit(tokenId){
     await api('/admin/api/upstream-tokens/' + tokenId + '/v5-limit', {
       method:'PUT', body:JSON.stringify({v5_daily_limit:limit})});
     toast('上游 V5 日限已保存');
+    loadOverview();
+  }catch(e){ toast(e.message); }
+}
+async function setUpstreamEnabled(tokenId, enabled){
+  if(!enabled && !confirm('确定停用这把上游 Key？它将不再接收新请求；已发出的请求继续完成。')) return;
+  try{
+    await api('/admin/api/upstream-tokens/' + tokenId + '/enabled', {
+      method:'PUT', body:JSON.stringify({enabled})});
+    toast(enabled?'上游 Key 已启用（401 失效仍需更换 Token）':'上游 Key 已停用');
     loadOverview();
   }catch(e){ toast(e.message); }
 }

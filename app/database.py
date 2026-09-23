@@ -70,6 +70,10 @@ CREATE TABLE IF NOT EXISTS upstream_token_settings (
     token_id TEXT PRIMARY KEY,
     v5_daily_limit INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS upstream_token_enabled (
+    token_id TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 1
+);
 CREATE TABLE IF NOT EXISTS daily_quota_offsets (
     key_id INTEGER NOT NULL,
     day TEXT NOT NULL,
@@ -204,6 +208,20 @@ class Database:
             """INSERT INTO upstream_token_settings(token_id, v5_daily_limit) VALUES(?,?)
                ON CONFLICT(token_id) DO UPDATE SET v5_daily_limit=excluded.v5_daily_limit""",
             (token_id, limit),
+        )
+        await self._db.commit()
+
+    async def get_upstream_token_enabled(self) -> dict[str, bool]:
+        rows = await (await self._db.execute(
+            "SELECT token_id, enabled FROM upstream_token_enabled"
+        )).fetchall()
+        return {row["token_id"]: bool(row["enabled"]) for row in rows}
+
+    async def set_upstream_token_enabled(self, token_id: str, enabled: bool) -> None:
+        await self._db.execute(
+            """INSERT INTO upstream_token_enabled(token_id, enabled) VALUES(?,?)
+               ON CONFLICT(token_id) DO UPDATE SET enabled=excluded.enabled""",
+            (token_id, int(enabled)),
         )
         await self._db.commit()
 

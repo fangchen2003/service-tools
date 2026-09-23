@@ -33,6 +33,8 @@ class ImageStreamHandle:
 class TokenState:
     __slots__ = (
         "token", "token_id", "position", "v5_daily_limit", "allow_anlas", "pending_v5",
+        "admin_enabled",
+        "dispatch_lock",
         "fails", "blocked_until", "disabled", "last_ok", "image_next_at",
     )
 
@@ -44,6 +46,8 @@ class TokenState:
         self.position = index + 1
         self.v5_daily_limit = max(0, v5_daily_limit)
         self.allow_anlas = allow_anlas
+        self.admin_enabled = True
+        self.dispatch_lock = asyncio.Lock()
         self.pending_v5 = 0
         self.fails = 0
         self.blocked_until = 0.0
@@ -53,7 +57,7 @@ class TokenState:
 
     @property
     def usable(self) -> bool:
-        return not self.disabled and time.time() >= self.blocked_until
+        return self.admin_enabled and not self.disabled and time.time() >= self.blocked_until
 
 
 async def _wait_cleanup(task: asyncio.Task) -> Any:
@@ -113,9 +117,12 @@ class NaiClient:
     # ---------------- token pool ----------------
     async def load_saved_limits(self) -> None:
         saved = await self._db.get_upstream_token_limits()
+        enabled = await self._db.get_upstream_token_enabled()
         for token in self.pool:
             if token.token_id in saved:
                 token.v5_daily_limit = saved[token.token_id]
+            if token.token_id in enabled:
+                token.admin_enabled = enabled[token.token_id]
 
     async def set_v5_daily_limit(self, token_id: str, limit: int) -> bool:
         async with self._lock:
@@ -125,6 +132,18 @@ class NaiClient:
             await self._db.set_upstream_token_limit(token_id, limit)
             token.v5_daily_limit = limit
             return True
+
+    async def set_admin_enabled(self, token_id: str, enabled: bool) -> bool:
+        token = next((item for item in self.pool if item.token_id == token_id), None)
+        if token is None:
+            return False
+        # The toggle commits after any already-dispatched request. Once the
+        # admin API returns, later sends must observe the new state.
+        async with token.dispatch_lock:
+            async with self._lock:
+                await self._db.set_upstream_token_enabled(token_id, enabled)
+                token.admin_enabled = enabled
+        return True
 
     async def pick_token(self, *, requires_anlas: bool = False,
                          v5_free: bool = False) -> Optional[TokenState]:
@@ -211,6 +230,7 @@ class NaiClient:
                 "position": t.position,
                 "token": mask_token(t.token),
                 "usable": t.usable,
+                "admin_enabled": t.admin_enabled,
                 "disabled": t.disabled,
                 "fails": t.fails,
                 "blocked_for": max(0, int(t.blocked_until - now)),
@@ -287,23 +307,27 @@ class NaiClient:
                     if exhausted:
                         await self.finish_v5_reservation(ts, succeeded=False, v5_free=True)
                         v5_free = False
-                if max_response_bytes is None:
-                    resp = await self._client.request(
-                        method, url, json=json_body, headers=self._headers(ts, accept))
-                else:
-                    async with asyncio.timeout(300):
-                        async with self._client.stream(
-                            method, url, json=json_body, headers=self._headers(ts, accept)
-                        ) as stream:
-                            data = bytearray()
-                            async for chunk in stream.aiter_bytes():
-                                if len(data) + len(chunk) > max_response_bytes:
-                                    raise UpstreamError(502, "上游图片工具结果过大")
-                                data.extend(chunk)
-                            headers = {k: v for k, v in stream.headers.items()
-                                       if k.lower() not in {"content-encoding", "content-length"}}
-                            resp = httpx.Response(stream.status_code, headers=headers,
-                                                  content=bytes(data))
+                        requires_anlas = True
+                async with ts.dispatch_lock:
+                    if not ts.admin_enabled:
+                        continue  # 停用发生在排队期间；改选其他上游，且不发出此请求。
+                    if max_response_bytes is None:
+                        resp = await self._client.request(
+                            method, url, json=json_body, headers=self._headers(ts, accept))
+                    else:
+                        async with asyncio.timeout(300):
+                            async with self._client.stream(
+                                method, url, json=json_body, headers=self._headers(ts, accept)
+                            ) as stream:
+                                data = bytearray()
+                                async for chunk in stream.aiter_bytes():
+                                    if len(data) + len(chunk) > max_response_bytes:
+                                        raise UpstreamError(502, "上游图片工具结果过大")
+                                    data.extend(chunk)
+                                headers = {k: v for k, v in stream.headers.items()
+                                           if k.lower() not in {"content-encoding", "content-length"}}
+                                resp = httpx.Response(stream.status_code, headers=headers,
+                                                      content=bytes(data))
                 if resp.status_code in (200, 201) and image_count > 0:
                     try:
                         await anyio.to_thread.run_sync(lambda: validate_result(
@@ -330,8 +354,11 @@ class NaiClient:
 
     async def _resolve_v5_cost(self, ts, callback):
         try:
-            exhausted = await self.allowance.resolve(
-                self._client, self.image_host, ts.token_id, ts.token)
+            async with ts.dispatch_lock:
+                if not ts.admin_enabled:
+                    raise UpstreamError(503, "上游令牌已停用，未查询额度或发送生图")
+                exhausted = await self.allowance.resolve(
+                    self._client, self.image_host, ts.token_id, ts.token)
         except AllowanceUnavailable as exc:
             raise UpstreamError(503, str(exc)) from None
         if exhausted and not ts.allow_anlas:
@@ -384,9 +411,12 @@ class NaiClient:
                 "POST", url, json=json_body,
                 headers=self._headers(ts, "text/event-stream"),
             )
-            if on_dispatch is not None:
-                on_dispatch()
-            resp = await self._client.send(req, stream=True)
+            async with ts.dispatch_lock:
+                if not ts.admin_enabled:
+                    raise UpstreamError(503, "上游令牌已停用，未发送生图")
+                if on_dispatch is not None:
+                    on_dispatch()
+                resp = await self._client.send(req, stream=True)
             if resp.status_code == 429:
                 await self._rate_limit(ts, resp, on_rate_limited)
                 raise UpstreamError(429, "上游限流(429)，全站图片生成已进入冷却")
@@ -415,7 +445,10 @@ class NaiClient:
         req = self._client.build_request(
             "POST", url, json=json_body, headers=self._headers(ts, "text/event-stream")
         )
-        resp = await self._client.send(req, stream=True)
+        async with ts.dispatch_lock:
+            if not ts.admin_enabled:
+                raise UpstreamError(503, "上游令牌已停用，未发送请求")
+            resp = await self._client.send(req, stream=True)
         if resp.status_code not in (200, 201):
             if resp.status_code == 401:
                 self.mark_unauthorized(ts)
