@@ -32,7 +32,7 @@ class ImageStreamHandle:
 
 class TokenState:
     __slots__ = (
-        "token", "token_id", "v5_daily_limit", "allow_anlas", "pending_v5",
+        "token", "token_id", "position", "v5_daily_limit", "allow_anlas", "pending_v5",
         "fails", "blocked_until", "disabled", "last_ok", "image_next_at",
     )
 
@@ -40,7 +40,8 @@ class TokenState:
                  allow_anlas: bool):
         self.token = token
         # 永不把原始上游 Token 写入数据库；只存不可逆的短哈希标识。
-        self.token_id = f"token-{index + 1}-" + hashlib.sha256(token.encode()).hexdigest()[:16]
+        self.token_id = "token-" + hashlib.sha256(token.encode()).hexdigest()[:16]
+        self.position = index + 1
         self.v5_daily_limit = max(0, v5_daily_limit)
         self.allow_anlas = allow_anlas
         self.pending_v5 = 0
@@ -110,6 +111,21 @@ class NaiClient:
             await self._client.aclose()
 
     # ---------------- token pool ----------------
+    async def load_saved_limits(self) -> None:
+        saved = await self._db.get_upstream_token_limits()
+        for token in self.pool:
+            if token.token_id in saved:
+                token.v5_daily_limit = saved[token.token_id]
+
+    async def set_v5_daily_limit(self, token_id: str, limit: int) -> bool:
+        async with self._lock:
+            token = next((item for item in self.pool if item.token_id == token_id), None)
+            if token is None:
+                return False
+            await self._db.set_upstream_token_limit(token_id, limit)
+            token.v5_daily_limit = limit
+            return True
+
     async def pick_token(self, *, requires_anlas: bool = False,
                          v5_free: bool = False) -> Optional[TokenState]:
         """选取符合该图片费用策略的令牌；V5 限额在这里原子预留。"""
@@ -136,14 +152,14 @@ class NaiClient:
                 return None
 
             self._rr = usable.index(chosen)
-            if v5_free and chosen.v5_daily_limit:
+            if v5_free:
                 chosen.pending_v5 += 1
             return chosen
 
     async def finish_v5_reservation(self, ts: TokenState, *, succeeded: bool,
                                     v5_free: bool) -> None:
         """只把成功完成的免费 V5 图计入特定上游令牌的日额度。"""
-        if not v5_free or not ts.v5_daily_limit:
+        if not v5_free:
             return
         async with self._lock:
             try:
@@ -191,6 +207,8 @@ class NaiClient:
         for t in self.pool:
             counter = await self._db.get_upstream_counter(t.token_id, self._day_fn())
             result.append({
+                "token_id": t.token_id,
+                "position": t.position,
                 "token": mask_token(t.token),
                 "usable": t.usable,
                 "disabled": t.disabled,

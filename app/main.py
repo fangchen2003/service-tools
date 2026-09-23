@@ -104,6 +104,8 @@ async def lifespan(app: FastAPI):
     install_access_log_filter()
     STATE = GateState(SETTINGS)
     await STATE.db.connect()
+    await STATE.db.migrate_upstream_token_ids([token.token_id for token in STATE.nai.pool])
+    await STATE.nai.load_saved_limits()
     await STATE.load_image_cooldown()
     removed_keys = await STATE.delete_inactive_keys()
     if removed_keys:
@@ -277,10 +279,13 @@ async def acquire_concurrency(key, *, image: bool = False):
             STATE.global_active -= 1
 
 
-async def quota_image_check(key, est: dict) -> None:
+async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0) -> None:
     if key["is_admin"]:
         return
     c = await STATE.db.get_counter(key["id"], STATE.day())
+    if legacy_free_images and key["daily_images"] > 0:
+        if c["legacy_free_images"] + legacy_free_images > key["daily_images"]:
+            raise err(429, f"今日 V4.5 及以下免费图额度已用完（{key['daily_images']} 张/天），明日恢复")
     if est["v5"] > 0:
         # V5 周额度是账户级共享资源，用全站日计数镜像（恢复量 ~190 张/天）
         if key["daily_v5"] > 0 and c["v5"] + est["v5"] > key["daily_v5"]:
@@ -309,7 +314,8 @@ async def quota_image_check(key, est: dict) -> None:
 
 
 def record(key, kind: str, model: str, status: str, *, images: int = 0,
-           anlas: float = 0.0, tokens: int = 0, v5: int = 0, detail: str = "") -> asyncio.Task:
+           anlas: float = 0.0, tokens: int = 0, v5: int = 0,
+           legacy_free_images: int = 0, detail: str = "") -> asyncio.Task:
     """写日志；成功请求额外计入每日配额。"""
     async def _go():
         await STATE.db.add_log(key["id"], key["name"], kind, model, status,
@@ -318,6 +324,7 @@ def record(key, kind: str, model: str, status: str, *, images: int = 0,
             await STATE.db.bump_counters(
                 key["id"], STATE.day(),
                 images=images, anlas=anlas, text_tokens=tokens, requests=1, v5=v5,
+                legacy_free_images=legacy_free_images,
             )
             await STATE.db.touch_key(key["id"])
     task = asyncio.create_task(_go())
@@ -566,8 +573,11 @@ async def _generate_image(request: Request, *, streaming: bool):
         est = estimate_image_cost(body, is_opus=True)
     except (TypeError, ValueError, OverflowError) as exc:
         raise err(400, "图片参数无效，无法估算费用") from exc
+    legacy_free_images = (
+        image_count if model_tier == "legacy" and not est["anlas"] else 0
+    )
     if not est["v5"]:
-        await quota_image_check(key, est)
+        await quota_image_check(key, est, legacy_free_images=legacy_free_images)
 
     cost = (f"est={est['anlas']}A" if est["anlas"]
             else (f"V5额度+{est['v5']}" if est["v5"] else "免费"))
@@ -609,7 +619,8 @@ async def _generate_image(request: Request, *, streaming: bool):
             return Response(resp.content, status_code=resp.status_code,
                             media_type=resp.headers.get("content-type", "application/json"))
         await settle_record(key, "image", model, "ok", images=image_count, anlas=est["anlas"],
-                            v5=est["v5"], detail=detail)
+                            v5=est["v5"], legacy_free_images=legacy_free_images,
+                            detail=detail)
         return Response(resp.content, status_code=200,
                         media_type=resp.headers.get("content-type", "application/octet-stream"))
 
@@ -670,6 +681,7 @@ async def _generate_image(request: Request, *, streaming: bool):
                         key, "image_stream", model, "ok", images=completed,
                         anlas=est["anlas"] * completed / image_count,
                         v5=est["v5"] if completed else 0,
+                        legacy_free_images=completed if legacy_free_images else 0,
                         detail=detail + (f"; 完成 {completed}/{image_count}" if completed < image_count else ""),
                     )
                 if failure or not completed:
@@ -683,7 +695,7 @@ async def _generate_image(request: Request, *, streaming: bool):
                 async with acquire_concurrency(key, image=True):
                     check_image_cooldown()
                     if not est["v5"]:
-                        await quota_image_check(key, est)
+                        await quota_image_check(key, est, legacy_free_images=legacy_free_images)
                     await complete_image_operation(perform_stream(response), can_cancel=lambda: not dispatched)
             except GateError as exc:
                 await response.error(exc.status, exc.message)
@@ -696,7 +708,7 @@ async def _generate_image(request: Request, *, streaming: bool):
         # Recheck both cooldown and quota after any queue/budget wait.
         check_image_cooldown()
         if not est["v5"]:
-            await quota_image_check(key, est)
+            await quota_image_check(key, est, legacy_free_images=legacy_free_images)
         return await complete_image_operation(perform_generation())
 
 
@@ -901,7 +913,8 @@ async def v1_me(request: Request):
         "name": key["name"],
         "is_admin": bool(key["is_admin"]),
         "today": {
-            "images": c["images"], "daily_images": 0,
+            "images": c["images"], "daily_images": key["daily_images"],
+            "legacy_free_images_today": c["legacy_free_images"],
             "anlas_today": round(float(c["anlas"]), 2),
             "daily_anlas": key["daily_anlas"],
             "v5_today": c["v5"], "daily_v5": key["daily_v5"],

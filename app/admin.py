@@ -128,6 +128,7 @@ def _key_json(row, counter) -> dict[str, Any]:
         "last_used_at": row["last_used_at"],
         "used": {
             "images": counter["images"],
+            "legacy_free_images": counter["legacy_free_images"],
             "anlas": round(float(counter["anlas"]), 2),
             "v5": counter["v5"],
             "text_tokens": counter["text_tokens"],
@@ -162,7 +163,7 @@ async def create_key(request: Request):
             v = default
         return max(lo, min(hi, v))
 
-    daily_images = 0  # 非 V5 图片不设日图数上限，保留字段仅兼容旧数据库。
+    daily_images = _int_field("daily_images", st.settings.default_daily_images, 0, 1000000)
     monthly_anlas = float(body.get("monthly_anlas", st.settings.default_monthly_anlas) or 0)
     monthly_anlas = max(0.0, min(monthly_anlas, 100000.0))
     daily_anlas = float(body.get("daily_anlas", st.settings.default_daily_anlas) or 0)
@@ -312,6 +313,18 @@ async def get_settings(request: Request):
 async def allowance(request: Request):
     require_admin(request)
     return await request.app.state.gate.nai.allowance.snapshot(request.app.state.gate.nai.pool)
+
+
+@router.put("/upstream-tokens/{token_id}/v5-limit")
+async def set_upstream_v5_limit(request: Request, token_id: str):
+    require_admin(request)
+    body = await read_json_body(request)
+    limit = body.get("v5_daily_limit")
+    if type(limit) is not int or not 0 <= limit <= 100000:
+        raise HTTPException(422, "上游 V5 日限额必须是 0～100000 的整数（0 为不限）")
+    if not await request.app.state.gate.nai.set_v5_daily_limit(token_id, limit):
+        raise HTTPException(404, "上游 Token 不存在")
+    return {"ok": True, "v5_daily_limit": limit}
 
 
 @router.put("/settings")

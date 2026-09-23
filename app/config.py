@@ -77,7 +77,7 @@ class Settings:
     global_daily_v5: int = _int("GLOBAL_DAILY_V5", 150)
 
     # ---- 新 key 的默认配额（管理员可在后台逐 key 修改）----
-    default_daily_images: int = _int("DEFAULT_DAILY_IMAGES", 0)  # 历史字段，不作限额
+    default_daily_images: int = _int("DEFAULT_DAILY_IMAGES", 100)  # 每 Key 免费旧模型日限；0=不限
     default_daily_anlas: float = _float("DEFAULT_DAILY_ANLAS", 100)
     default_daily_v5: int = _int("DEFAULT_DAILY_V5", 50)
     default_monthly_anlas: float = _float("DEFAULT_MONTHLY_ANLAS", 2500)

@@ -17,7 +17,7 @@ from .nai import NaiClient
 class GateState:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.db = Database(str(settings.db_path))
+        self.db = Database(str(settings.db_path), settings.tz)
         self.tz = ZoneInfo(settings.tz)
         self.nai = NaiClient(
             tokens=settings.nai_tokens,

@@ -60,6 +60,8 @@ tr:hover td{background:#182230}
 .btn.mini{padding:3px 8px;font-size:12px}
 .row-actions{display:flex;gap:6px;flex-wrap:wrap}
 .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+.key-summary{font-size:12px;line-height:1.6;white-space:nowrap}
+.key-summary .muted{font-size:11px}
 
 /* chart */
 .chart{display:flex;align-items:flex-end;gap:10px;height:120px;padding-top:8px}
@@ -137,7 +139,7 @@ tr:hover td{background:#182230}
       <table id="keysTable">
         <thead><tr>
           <th>名称</th><th>Key</th><th>状态</th>
-          <th>今日用量</th><th>模型与配额</th><th>RPM</th><th>到期</th><th>操作</th>
+          <th>今日用量</th><th>配额</th><th>RPM</th><th>到期</th><th>操作</th>
         </tr></thead>
         <tbody></tbody>
       </table>
@@ -206,6 +208,7 @@ tr:hover td{background:#182230}
       <option value="all">所有当前支持模型（含 V5）</option>
     </select>
     <div class="grid2">
+      <div><label>每日 V4.5 及以下免费图张数（0=不限）</label><input id="f_daily_images" type="number" value="100"></div>
       <div><label>每日 Anlas 上限（0=不限）</label><input id="f_daily_anlas" type="number" value="100"></div>
       <div><label>每月 Anlas 上限</label><input id="f_monthly_anlas" type="number" value="2500"></div>
       <div><label>每日 V5 张数（走官方周额度，0=不限）</label><input id="f_daily_v5" type="number" value="50"></div>
@@ -337,12 +340,29 @@ async function loadOverview(){
       ? `<span class="tag warn">未配置上游 Token —— 请设置环境变量 NAI_TOKENS 后重启</span>`
       : pool.map(p=>`
         <div style="padding:6px 0;border-bottom:1px solid var(--line)">
-          <span class="mono">${esc(p.token)}</span>
+          <span class="mono">#${p.position} ${esc(p.token)}</span>
           ${p.disabled ? '<span class="tag off">已失效(401)</span>'
             : p.blocked_for>0 ? `<span class="tag warn">限流中 ${p.blocked_for}s</span>`
             : '<span class="tag on">正常</span>'}
-          <span class="muted" style="margin-left:12px;font-size:12px">今日成功生成 ${p.images_today||0} 张；连续失败 ${p.fails}；Anlas ${p.allow_anlas?'允许':'禁止'}；V5 ${p.v5_daily_limit>0 ? `${p.v5_used}/${p.v5_daily_limit}/天` : '不限'}</span>
+          <span class="muted" style="margin-left:12px;font-size:12px">今日生成 ${p.images_today||0} 张 · 失败 ${p.fails} · Anlas ${p.allow_anlas?'允许':'禁止'} · 免费 V5 ${p.v5_used}/${p.v5_daily_limit||'∞'}</span>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px">
+            <span class="muted">V5 日限</span>
+            <input id="token-limit-${p.token_id}" type="number" min="0" max="100000" step="1" value="${p.v5_daily_limit}" style="width:100px" aria-label="第 ${p.position} 把上游 Token 的免费 V5 每日上限">
+            <button class="btn mini" onclick="saveUpstreamV5Limit('${p.token_id}')">保存</button>
+            <span class="muted">0 = 不限；只限制这把上游 Token</span>
+          </div>
         </div>`).join('');
+  }catch(e){ toast(e.message); }
+}
+async function saveUpstreamV5Limit(tokenId){
+  const input = $('#token-limit-' + tokenId);
+  const limit = Number(input.value);
+  if(!Number.isInteger(limit) || limit<0 || limit>100000){ toast('请输入 0～100000 的整数'); return; }
+  try{
+    await api('/admin/api/upstream-tokens/' + tokenId + '/v5-limit', {
+      method:'PUT', body:JSON.stringify({v5_daily_limit:limit})});
+    toast('上游 V5 日限已保存');
+    loadOverview();
   }catch(e){ toast(e.message); }
 }
 function fmt(n){ n=+n||0; return n>=1e6? (n/1e6).toFixed(1)+'M' : n>=1e3? (n/1e3).toFixed(1)+'k' : n; }
@@ -364,13 +384,11 @@ async function loadKeys(){
             ${k.is_admin?'<span class="tag on">站长</span>':''}
             <span class="tag ${k.image_model_scope==='all'?'on':'off'}">${k.image_model_scope==='all'?'含 V5':'仅 V4.5↓'}</span>
             ${k.allow_img2img?'<span class="tag warn">img2img</span>':''}</td>
-        <td>${k.used.images}图 / ${k.used.anlas}A / V5:${k.used.v5||0}<br><span class="muted">${fmt(k.used.text_tokens)}tk</span></td>
-        <td>${k.is_admin ? '站长 Key：单 Key 配额不限<br>模型：所有当前支持模型（含 V5）<br>Anlas：不限<br>文本：不限<br><span class="muted">仍受全站并发、图片间隔和上游 429 保护</span>' : `
-          模型：${k.image_model_scope==='all'?'所有当前支持模型（含 V5）':'仅 V4.5 及更低'}<br>
-          非 V5：不限张数<br>
-          V5：${k.image_model_scope==='all'?(k.daily_v5>0?k.daily_v5:'∞')+' 张/日':'不适用'}<br>
-          Anlas：${k.allow_anlas ? `日 ${k.daily_anlas>0?k.daily_anlas:'∞'} / 月 ${k.monthly_anlas>0?k.monthly_anlas:'∞'}` : '未开放'}<br>
-          文本：${fmt(k.daily_text_tokens)} tokens/日`}
+        <td class="key-summary">总图 ${k.used.images} · 免费 ${k.used.legacy_free_images||0} · V5 ${k.used.v5||0}<br>
+          <span class="muted">Anlas ${k.used.anlas} · 文本 ${fmt(k.used.text_tokens)}</span></td>
+        <td class="key-summary">${k.is_admin ? '单 Key 不限<br><span class="muted">仍受全站保护</span>' : `
+          免费图 ${k.daily_images>0?k.daily_images:'∞'}/日${k.image_model_scope==='all' ? ` · V5 ${k.daily_v5>0?k.daily_v5:'∞'}/日` : ''}<br>
+          <span class="muted">Anlas ${k.allow_anlas ? `${k.daily_anlas>0?k.daily_anlas:'∞'}/日 · ${k.monthly_anlas>0?k.monthly_anlas:'∞'}/月` : '未开'} · 文本 ${fmt(k.daily_text_tokens)}/日</span>`}
         </td>
         <td>${k.rpm}</td>
         <td>${exp}</td>
@@ -403,7 +421,7 @@ function openCreate(){
   $('#modalSave').textContent = '创建';
   $('#f_name').value=''; $('#f_daily_anlas').value=100;
   $('#f_image_model_scope').value='legacy';
-  $('#f_daily_v5').value=50; $('#f_monthly_anlas').value=2500;
+  $('#f_daily_images').value=100; $('#f_daily_v5').value=50; $('#f_monthly_anlas').value=2500;
   $('#f_daily_text').value=150000; $('#f_rpm').value=10; $('#f_expires').value=30;
   $('#f_expires').placeholder='';
   $('#f_allow_anlas').checked=false; $('#f_allow_img2img').checked=false;
@@ -418,6 +436,7 @@ function openEdit(id){
   $('#f_name').value = k.name;
   $('#f_image_model_scope').value = k.image_model_scope || 'legacy';
   $('#f_daily_anlas').value = k.daily_anlas;
+  $('#f_daily_images').value = k.daily_images;
   $('#f_daily_v5').value = k.daily_v5;
   $('#f_monthly_anlas').value = k.monthly_anlas;
   $('#f_daily_text').value = k.daily_text_tokens;
@@ -435,6 +454,7 @@ async function saveKey(){
     name: $('#f_name').value,
     image_model_scope: $('#f_image_model_scope').value,
     daily_anlas: +$('#f_daily_anlas').value,
+    daily_images: +$('#f_daily_images').value,
     daily_v5: +$('#f_daily_v5').value,
     monthly_anlas: +$('#f_monthly_anlas').value,
     daily_text_tokens: +$('#f_daily_text').value,

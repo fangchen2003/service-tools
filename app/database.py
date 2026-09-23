@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     name TEXT NOT NULL DEFAULT '',
     token TEXT NOT NULL UNIQUE,
     enabled INTEGER NOT NULL DEFAULT 1,
-    daily_images INTEGER NOT NULL DEFAULT 60,
+    daily_images INTEGER NOT NULL DEFAULT 100,
     daily_anlas REAL NOT NULL DEFAULT 0,
     daily_v5 INTEGER NOT NULL DEFAULT 0,
     monthly_anlas REAL NOT NULL DEFAULT 500,
@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS counters (
     key_id INTEGER NOT NULL,
     day TEXT NOT NULL,            -- YYYY-MM-DD (按配置时区)
     images INTEGER NOT NULL DEFAULT 0,
+    legacy_free_images INTEGER NOT NULL DEFAULT 0,
     anlas REAL NOT NULL DEFAULT 0,
     text_tokens INTEGER NOT NULL DEFAULT 0,
     requests INTEGER NOT NULL DEFAULT 0,
@@ -64,6 +65,10 @@ CREATE TABLE IF NOT EXISTS upstream_token_counters (
     images INTEGER NOT NULL DEFAULT 0,
     v5 INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (token_id, day)
+);
+CREATE TABLE IF NOT EXISTS upstream_token_settings (
+    token_id TEXT PRIMARY KEY,
+    v5_daily_limit INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS daily_quota_offsets (
     key_id INTEGER NOT NULL,
@@ -94,8 +99,9 @@ END;
 
 
 class Database:
-    def __init__(self, path: str):
+    def __init__(self, path: str, tz: str = "Asia/Shanghai"):
         self.path = path
+        self.tz = tz
         self._db: Optional[aiosqlite.Connection] = None
 
     async def connect(self) -> None:
@@ -118,6 +124,38 @@ class Database:
                 await self._db.commit()
             except aiosqlite.OperationalError:
                 pass  # 列已存在
+        columns = await (await self._db.execute("PRAGMA table_info(counters)")).fetchall()
+        if "legacy_free_images" not in {row["name"] for row in columns}:
+            # One-time migration: preserve today's usage rather than granting a fresh
+            # 100 images when the service is upgraded in the middle of a day.
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+
+            await self._db.execute(
+                "ALTER TABLE counters ADD COLUMN legacy_free_images INTEGER NOT NULL DEFAULT 0"
+            )
+            await self._db.execute(
+                "UPDATE api_keys SET daily_images=100 WHERE daily_images=0 AND is_admin=0"
+            )
+            cur = await self._db.execute(
+                """SELECT key_id, ts, images FROM usage_log
+                   WHERE kind IN ('image', 'image_stream') AND status='ok'
+                     AND anlas=0 AND images>0
+                     AND model NOT LIKE 'nai-diffusion-5%'
+                     AND model NOT LIKE 'nai-v5%'"""
+            )
+            counts: dict[tuple[int, str], int] = {}
+            timezone = ZoneInfo(self.tz)
+            for row in await cur.fetchall():
+                day = datetime.fromtimestamp(row["ts"], timezone).strftime("%Y-%m-%d")
+                identity = (row["key_id"], day)
+                counts[identity] = counts.get(identity, 0) + int(row["images"])
+            for (key_id, day), images in counts.items():
+                await self._db.execute(
+                    "UPDATE counters SET legacy_free_images=? WHERE key_id=? AND day=?",
+                    (images, key_id, day),
+                )
+            await self._db.commit()
 
     async def close(self) -> None:
         if self._db:
@@ -133,6 +171,41 @@ class Database:
         if not row:
             return {"images": 0, "v5": 0}
         return {"images": int(row["images"]), "v5": int(row["v5"])}
+
+    async def migrate_upstream_token_ids(self, token_ids: list[str]) -> None:
+        """Merge old position-based counters into stable hashed token identities."""
+        for token_id in set(token_ids):
+            suffix = token_id.removeprefix("token-")
+            rows = await (await self._db.execute(
+                "SELECT token_id, day, images, v5 FROM upstream_token_counters WHERE token_id LIKE ?",
+                (f"token-%-{suffix}",),
+            )).fetchall()
+            for row in rows:
+                await self._db.execute(
+                    """INSERT INTO upstream_token_counters(token_id, day, images, v5)
+                       VALUES(?,?,?,?) ON CONFLICT(token_id,day) DO UPDATE SET
+                       images=images+excluded.images, v5=v5+excluded.v5""",
+                    (token_id, row["day"], row["images"], row["v5"]),
+                )
+                await self._db.execute(
+                    "DELETE FROM upstream_token_counters WHERE token_id=? AND day=?",
+                    (row["token_id"], row["day"]),
+                )
+        await self._db.commit()
+
+    async def get_upstream_token_limits(self) -> dict[str, int]:
+        rows = await (await self._db.execute(
+            "SELECT token_id, v5_daily_limit FROM upstream_token_settings"
+        )).fetchall()
+        return {row["token_id"]: int(row["v5_daily_limit"]) for row in rows}
+
+    async def set_upstream_token_limit(self, token_id: str, limit: int) -> None:
+        await self._db.execute(
+            """INSERT INTO upstream_token_settings(token_id, v5_daily_limit) VALUES(?,?)
+               ON CONFLICT(token_id) DO UPDATE SET v5_daily_limit=excluded.v5_daily_limit""",
+            (token_id, limit),
+        )
+        await self._db.commit()
 
     async def get_upstream_v5_counter(self, token_id: str, day: str) -> int:
         return (await self.get_upstream_counter(token_id, day))["v5"]
@@ -251,18 +324,19 @@ class Database:
     async def bump_counters(
         self, key_id: int, day: str,
         images: int = 0, anlas: float = 0.0, text_tokens: int = 0, requests: int = 1,
-        v5: int = 0,
+        v5: int = 0, legacy_free_images: int = 0,
     ) -> None:
         await self._db.execute(
-            """INSERT INTO counters (key_id, day, images, anlas, text_tokens, requests, v5)
-               VALUES (?,?,?,?,?,?,?)
+            """INSERT INTO counters (key_id, day, images, anlas, text_tokens, requests, v5, legacy_free_images)
+               VALUES (?,?,?,?,?,?,?,?)
                ON CONFLICT(key_id, day) DO UPDATE SET
                  images = images + excluded.images,
                  anlas = anlas + excluded.anlas,
                  text_tokens = text_tokens + excluded.text_tokens,
                  requests = requests + excluded.requests,
-                 v5 = v5 + excluded.v5""",
-            (key_id, day, images, anlas, text_tokens, requests, v5),
+                 v5 = v5 + excluded.v5,
+                 legacy_free_images = legacy_free_images + excluded.legacy_free_images""",
+            (key_id, day, images, anlas, text_tokens, requests, v5, legacy_free_images),
         )
         await self._db.commit()
 
@@ -280,7 +354,7 @@ class Database:
             result["anlas"] = max(0, result["anlas"] - result.pop("_quota_offset_anlas"))
             result["v5"] = max(0, result["v5"] - result.pop("_quota_offset_v5"))
             return result
-        return {"images": 0, "anlas": 0.0, "text_tokens": 0, "requests": 0, "v5": 0}
+        return {"images": 0, "legacy_free_images": 0, "anlas": 0.0, "text_tokens": 0, "requests": 0, "v5": 0}
 
     async def reset_daily_image_quota(self, key_id: int, day: str) -> None:
         """重置单个 Key 当日的 V5 与 Anlas 可用额度基线。

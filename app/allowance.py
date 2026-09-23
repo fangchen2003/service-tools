@@ -77,7 +77,7 @@ class AllowanceCache:
                     checked_at=time.time(), at=time.monotonic(), error=None, retry_at=0)
                 if negative or percent < threshold:
                     log.warning("V5 low allowance: account %s; remaining=%s%%; exhausted=%s",
-                                token_id.split('-')[1], percent, negative)
+                                token_id, percent, negative)
                 return negative
             except (httpx.HTTPError, ValueError, TypeError, TimeoutError):
                 self._rows[token_id] = {**row, "error": "额度查询失败，当前状态未确认",

@@ -43,7 +43,8 @@ def encoding_body():
 class FakeDB:
     def __init__(self):
         base = dict(name="fixture", enabled=True, expires_at=0, is_admin=False,
-                    exclude_global_v5=False, allow_anlas=True, daily_anlas=100,
+                    exclude_global_v5=False, allow_anlas=True, daily_images=100,
+                    daily_anlas=100,
                     monthly_anlas=1000, daily_v5=50, image_model_scope="all",
                     allow_img2img=True, rpm=3)
         self.keys = {f"fixture-{i}": dict(base, id=i) for i in (1, 2)}
@@ -60,7 +61,8 @@ class FakeDB:
 
     async def get_counter(self, key_id, *_):
         values = [charge for owner, charge in self.charges if owner == key_id]
-        return {name: sum(row.get(name, 0) for row in values) for name in ("anlas", "v5", "images")}
+        return {name: sum(row.get(name, 0) for row in values)
+                for name in ("anlas", "v5", "images", "legacy_free_images")}
 
     async def get_setting(self, _name, default):
         return default
@@ -176,6 +178,47 @@ def request(body, token="fixture-1", *, method="POST", query=b""):
 async def post(path, body, token="fixture-1"):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://fixture.invalid") as client:
         return await client.post(path, json=body, headers={"Authorization": f"Bearer {token}"})
+
+
+@pytest.mark.asyncio
+async def test_free_legacy_daily_quota_is_per_key_and_counts_success_only(state):
+    key = state.db.keys["fixture-1"]
+    key["daily_images"] = 1
+    first = await post("/ai/generate-image", image_body())
+    assert first.status_code == 200
+    assert state.db.charges[-1][1]["legacy_free_images"] == 1
+    rejected = await post("/ai/generate-image", image_body())
+    assert rejected.status_code == 429
+    assert "免费图额度" in rejected.json()["error"]["message"]
+    assert len(state.nai.calls) == 1
+    other = await post("/ai/generate-image", image_body(), token="fixture-2")
+    assert other.status_code == 200
+    assert len(state.nai.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_paid_legacy_does_not_use_free_daily_quota(state):
+    key = state.db.keys["fixture-1"]
+    key["daily_images"] = 1
+    first = await post("/ai/generate-image", image_body())
+    assert first.status_code == 200
+    paid = await post("/ai/generate-image", image_body(precise=1))
+    assert paid.status_code == 200
+    assert state.db.charges[-1][1]["anlas"] > 0
+    assert state.db.charges[-1][1]["legacy_free_images"] == 0
+
+
+@pytest.mark.asyncio
+async def test_failed_legacy_generation_does_not_use_free_daily_quota(state):
+    state.db.keys["fixture-1"]["daily_images"] = 1
+    state.nai.status = 500
+    failed = await post("/ai/generate-image", image_body())
+    assert failed.status_code == 500
+    assert not state.db.charges
+    state.nai.status = 200
+    succeeded = await post("/ai/generate-image", image_body())
+    assert succeeded.status_code == 200
+    assert state.db.charges[-1][1]["legacy_free_images"] == 1
 
 
 @pytest.mark.asyncio
