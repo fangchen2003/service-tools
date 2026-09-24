@@ -91,12 +91,32 @@ def test_status_is_safe_no_retry_and_no_success(status):
             async with client.image_stream('https://offline.invalid', {}, v5_free=True, on_rate_limited=cooldown):
                 pytest.fail('Non-success response must not reach parser')
         assert error.value.status == (502 if status == 401 else status)
+        assert error.value.billing_uncertain is (status >= 500)
         assert 'fixture-a' not in str(error.value)
         assert len(client._client.calls) == 1 and response.closed == 1
         assert client.pool[0].pending_v5 == 0 and client.pool[0].last_ok == 0
         assert client.pool[0].disabled is (status == 401)
         assert cooldowns == ([7] if status == 429 else [])
         assert db.v5 == db.images == {}
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('error,uncertain', [
+    (httpx.ConnectError, False), (httpx.ConnectTimeout, False), (httpx.PoolTimeout, False),
+    (httpx.ReadError, True), (httpx.ReadTimeout, True), (httpx.WriteTimeout, True),
+    (httpx.RemoteProtocolError, True),
+])
+def test_stream_transport_billing_uncertainty_does_not_retry(error, uncertain):
+    async def run():
+        async def fail():
+            raise error('private transport detail')
+        client, db, _ = client_for(send=fail)
+        with pytest.raises(UpstreamError) as caught:
+            async with client.image_stream('https://offline.invalid', {}, requires_anlas=True):
+                pytest.fail('failed request yielded a stream')
+        assert caught.value.billing_uncertain is uncertain
+        assert 'private' not in str(caught.value)
+        assert len(client._client.calls) == 1 and not db.images
     asyncio.run(run())
 
 

@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS usage_log (
     images INTEGER NOT NULL DEFAULT 0,
     anlas REAL NOT NULL DEFAULT 0,
     tokens INTEGER NOT NULL DEFAULT 0,
+    unconfirmed_anlas REAL NOT NULL DEFAULT 0,
     detail TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_log_ts ON usage_log (ts DESC);
@@ -128,6 +129,13 @@ class Database:
                 await self._db.commit()
             except aiosqlite.OperationalError:
                 pass  # 列已存在
+        log_columns = await (await self._db.execute("PRAGMA table_info(usage_log)")).fetchall()
+        if "unconfirmed_anlas" not in {row["name"] for row in log_columns}:
+            # 旧日志没有完整请求报价，不能把历史 error 直接当作已发生的损失。
+            await self._db.execute(
+                "ALTER TABLE usage_log ADD COLUMN unconfirmed_anlas REAL NOT NULL DEFAULT 0"
+            )
+            await self._db.commit()
         columns = await (await self._db.execute("PRAGMA table_info(counters)")).fetchall()
         if "legacy_free_images" not in {row["name"] for row in columns}:
             # One-time migration: preserve today's usage rather than granting a fresh
@@ -436,14 +444,14 @@ class Database:
     async def add_log(
         self, key_id: Optional[int], key_name: str, kind: str, model: str,
         status: str, images: int = 0, anlas: float = 0.0, tokens: int = 0,
-        detail: str = "",
+        detail: str = "", unconfirmed_anlas: float = 0.0,
     ) -> None:
         await self._db.execute(
             """INSERT INTO usage_log (ts, key_id, key_name, kind, model, status,
-                                      images, anlas, tokens, detail)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                                      images, anlas, tokens, detail, unconfirmed_anlas)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (time.time(), key_id, key_name, kind, model, status,
-             images, anlas, tokens, detail[:500]),
+             images, anlas, tokens, detail[:500], unconfirmed_anlas),
         )
         await self._db.commit()
 
@@ -474,6 +482,9 @@ class Database:
 
     # ---------- overview ----------
     async def overview(self, today: str, week_days: list[str]) -> dict[str, Any]:
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
         async def one(sql: str, args: tuple = ()) -> Any:
             cur = await self._db.execute(sql, args)
             row = await cur.fetchone()
@@ -504,6 +515,17 @@ class Database:
             "SELECT COUNT(*) FROM api_keys WHERE enabled=1 AND (expires_at IS NULL OR expires_at>?)",
             (time.time(),),
         )
+        # 日志按时间戳保存；统计边界必须与配额使用同一时区。
+        day_start = datetime.fromisoformat(today).replace(tzinfo=ZoneInfo(self.tz))
+        anomaly = {}
+        for period, start in (("today", day_start), ("month", day_start.replace(day=1))):
+            row = await (await self._db.execute(
+                """SELECT COUNT(*), COALESCE(SUM(unconfirmed_anlas),0) FROM usage_log
+                   WHERE unconfirmed_anlas>0 AND ts>=? AND ts<?""",
+                (start.timestamp(), (day_start + timedelta(days=1)).timestamp()),
+            )).fetchone()
+            anomaly[period] = {"unconfirmed_requests": int(row[0]),
+                               "unconfirmed_anlas": round(float(row[1]), 2)}
         ph = ",".join("?" * len(week_days))
         cur = await self._db.execute(
             f"""SELECT day,
@@ -530,11 +552,12 @@ class Database:
                 "text_tokens": int(today_tokens),
                 "requests": int(today_requests),
                 "v5": int(today_v5),
+                **anomaly["today"],
             },
             "keys_total": int(keys_total),
             "keys_active": int(keys_active),
             "week": week,
             "month": {"anlas": round(float(await one(
                 "SELECT COALESCE(SUM(anlas),0) FROM counters WHERE substr(day,1,7)=?",
-                (today[:7],))), 2)},
+                (today[:7],))), 2), **anomaly["month"]},
         }

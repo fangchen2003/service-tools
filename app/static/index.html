@@ -52,6 +52,7 @@ tr:hover td{background:#182230}
 .tag.on{background:#173529;color:var(--accent2)}
 .tag.off{background:#3a2226;color:var(--bad)}
 .tag.warn{background:#3a2f1c;color:var(--warn)}
+.logs .tag{white-space:nowrap}
 .btn{background:var(--panel2);border:1px solid var(--line);color:var(--txt);
   padding:6px 12px;border-radius:8px;cursor:pointer;font-size:13px}
 .btn:hover{border-color:var(--accent)}
@@ -158,7 +159,7 @@ tr:hover td{background:#182230}
       <div style="overflow-x:auto">
       <table class="logs">
         <thead><tr><th>时间</th><th>Key</th><th>类型</th><th>模型</th><th>状态</th>
-          <th>图</th><th>Anlas</th><th>tokens</th><th>备注</th></tr></thead>
+          <th>图</th><th>Anlas</th><th>待核实 Anlas</th><th>tokens</th><th>备注</th></tr></thead>
         <tbody id="logBody"></tbody>
       </table>
       </div>
@@ -179,7 +180,7 @@ tr:hover td{background:#182230}
         <input id="s_v5" type="number" value="150">
         <button class="btn primary" style="white-space:nowrap" onclick="saveBudget()">保存</button>
       </div>
-      <div class="muted" style="font-size:12px;margin-top:8px">V5 符合条件的单张（≤Normal/≤28步）走官方周额度不扣 Anlas；额度外的 V5 及大图按估算 Anlas 扣。每把 Key 还受自己的「每日 Anlas / 每月 Anlas / 每日 V5」限制。</div>
+      <div class="muted" style="font-size:12px;margin-top:8px">V5 在官方额度可用、≤1024² 像素且≤28步时，首张走额度；同批其余图片按 Anlas 计费。额度耗尽后的付费请求仍受 Key 权限和预算限制。</div>
       <label>V5 官方余量告警阈值（%，低于此值持续提醒）</label>
       <input id="s_v5_alert" type="number" min="1" max="100" step="1" value="20">
       <div class="muted" style="font-size:12px;margin-top:8px">低于此比例时持续告警；余量随 V5 生成按需查询。点击上方“保存”生效。</div>
@@ -325,6 +326,7 @@ async function loadOverview(){
       <div class="card"><div class="k">今日消耗 Anlas（估算）</div><div class="v">${t.anlas}</div></div>
       <div class="card"><div class="k">今日 V5 张数 / 全站日限</div><div class="v">${t.v5||0} <small>/ ${d.v5_limit>0?d.v5_limit:'∞'}</small></div></div>
       <div class="card"><div class="k">本月 Anlas / 全站预算</div><div class="v">${d.month.anlas} <small>/ ${d.anlas_budget>0?d.anlas_budget:'∞'}</small></div></div>
+      <div class="card" title="请求异常结束，官方可能已扣费。按未结算部分估计，不计入用户扣费。"><div class="k">异常消耗（待核实）</div><div class="v">≈ ${t.unconfirmed_anlas||0} <small>Anlas</small></div><div class="muted">今日 ${t.unconfirmed_requests||0} 笔 · 本月 ≈ ${d.month.unconfirmed_anlas||0} Anlas / ${d.month.unconfirmed_requests||0} 笔</div></div>
       <div class="card"><div class="k">今日文本 tokens</div><div class="v">${fmt(t.text_tokens)}</div></div>
       <div class="card"><div class="k">今日请求数</div><div class="v">${t.requests}</div></div>
       <div class="card"><div class="k">Key 总数 / 有效</div><div class="v">${d.keys_total} <small>/ ${d.keys_active}</small></div></div>`;
@@ -542,9 +544,10 @@ async function loadLogs(){
         <td>${esc(l.kind)}</td>
         <td class="mono">${esc(l.model)}</td>
         <td>${l.status==='ok'?'<span class="tag on">ok</span>':l.status==='rejected'?'<span class="tag warn">拒绝</span>':'<span class="tag off">错误</span>'}</td>
-        <td>${l.images||''}</td><td>${l.anlas||''}</td><td>${l.tokens||''}</td>
+        <td>${l.images||''}</td><td>${l.anlas||''}</td>
+        <td>${l.unconfirmed_anlas>0?`<span class="tag warn">≈ ${l.unconfirmed_anlas}</span>`:'—'}</td><td>${l.tokens||''}</td>
         <td class="muted">${esc(l.detail)}</td>
-      </tr>`).join('') || '<tr><td colspan="9" class="muted">暂无记录</td></tr>';
+      </tr>`).join('') || '<tr><td colspan="10" class="muted">暂无记录</td></tr>';
     $('#logPager').innerHTML = `
       <span class="muted">共 ${d.total} 条，第 ${d.page} / ${d.pages} 页（每页 ${d.per_page} 条）</span>
       <button class="btn mini" onclick="changeLogPage(-1)" ${d.page<=1?'disabled':''}>上一页</button>

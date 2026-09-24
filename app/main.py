@@ -35,6 +35,7 @@ from .policy import (
     clamp_text_params,
     estimate_image_cost,
     image_model_tier,
+    legacy_normal_free_eligible,
     validate_image_references,
     validate_vibe_encoding,
     VIBE_ENCODING_ANLAS,
@@ -69,10 +70,11 @@ a{color:#7cc4ff} .card{background:#161e29;border:1px solid #243043;border-radius
 
 
 class GateError(Exception):
-    def __init__(self, status: int, message: str):
+    def __init__(self, status: int, message: str, *, billing_uncertain: bool = False):
         super().__init__(message)
         self.status = status
         self.message = message
+        self.billing_uncertain = billing_uncertain
 
 
 def err(status: int, message: str) -> GateError:
@@ -315,11 +317,13 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0) -> N
 
 def record(key, kind: str, model: str, status: str, *, images: int = 0,
            anlas: float = 0.0, tokens: int = 0, v5: int = 0,
-           legacy_free_images: int = 0, detail: str = "") -> asyncio.Task:
+           legacy_free_images: int = 0, detail: str = "",
+           unconfirmed_anlas: float = 0.0) -> asyncio.Task:
     """写日志；成功请求额外计入每日配额。"""
     async def _go():
         await STATE.db.add_log(key["id"], key["name"], kind, model, status,
-                               images=images, anlas=anlas, tokens=tokens, detail=detail)
+                               images=images, anlas=anlas, tokens=tokens, detail=detail,
+                               unconfirmed_anlas=unconfirmed_anlas)
         if status == "ok":
             await STATE.db.bump_counters(
                 key["id"], STATE.day(),
@@ -387,7 +391,8 @@ async def upstream_call(url: str, payload: dict, accept: str = "*/*", *,
             **({"resolve_v5_cost": resolve_v5_cost} if resolve_v5_cost is not None else {}),
         )
     except UpstreamError as e:
-        raise err(e.status if e.status in (429, 503) else 502, e.message)
+        raise GateError(e.status if e.status in (429, 503) else 502, e.message,
+                        billing_uncertain=e.billing_uncertain) from None
 
 
 def _text_url(model: str, stream: bool = True) -> str:
@@ -428,19 +433,24 @@ async def image_tool(request: Request, operation: str):
                 STATE.settings.image_429_cooldown_seconds, retry_after))
 
         async def perform():
+            billing_uncertain = False
             try:
                 resp = await upstream_call(
                     f"{STATE.nai.image_host}/ai/{operation}", payload,
                     on_rate_limited=limited, requires_anlas=cost > 0,
                     image_lane=True, max_response_bytes=MAX_RESPONSE_BYTES,
                 )
+                billing_uncertain = resp.status_code in (200, 201) or resp.status_code >= 500
                 if resp.status_code not in (200, 201):
                     raise err(resp.status_code if 400 <= resp.status_code < 500 else 502,
                               f"图片工具请求失败（上游状态 {resp.status_code}），未记费")
                 media, count = await anyio.to_thread.run_sync(
                     validate_result, resp.content, operation, payload.get("req_type", ""))
             except (GateError, httpx.HTTPError, ValueError, TimeoutError) as exc:
-                record(key, operation, model, "error", detail="图片工具失败，未记费")
+                billing_uncertain |= isinstance(exc, GateError) and exc.billing_uncertain
+                await record(key, operation, model, "error",
+                             detail=exc.message if isinstance(exc, GateError) else "图片工具连接失败或返回无效结果，未记费",
+                             unconfirmed_anlas=cost if billing_uncertain else 0)
                 if isinstance(exc, GateError):
                     raise
                 raise err(502, "图片工具连接失败或返回无效结果，未记费；请勿自动重试") from None
@@ -473,30 +483,35 @@ async def encode_vibe(request: Request):
     await quota_image_check(key, estimate)
 
     async def record_encoding_429(retry_after: float) -> None:
-        cooldown = await STATE.block_image_generation(max(
+        # 请求的结束路径统一记日志；回调仅更新冷却，避免一笔失败出现两行。
+        await STATE.block_image_generation(max(
             STATE.settings.image_429_cooldown_seconds, retry_after
         ))
-        record(key, "vibe_encode", model, "error", detail=f"上游限流(429)，冷却 {cooldown} 秒")
 
     async def perform_encoding():
         try:
             resp = await upstream_call(
                 f"{STATE.nai.image_host}/ai/encode-vibe", payload,
                 accept="application/octet-stream", on_rate_limited=record_encoding_429,
-                requires_anlas=True, image_lane=True,
+                requires_anlas=True, image_lane=True, max_response_bytes=MAX_RESPONSE_BYTES,
             )
-        except (GateError, httpx.HTTPError) as exc:
-            record(key, "vibe_encode", model, "error", detail="上游编码请求失败，未记费")
+        except (GateError, httpx.HTTPError, TimeoutError) as exc:
+            await record(key, "vibe_encode", model, "error",
+                         detail=exc.message if isinstance(exc, GateError) else "上游编码请求失败，未记费",
+                         unconfirmed_anlas=VIBE_ENCODING_ANLAS
+                         if isinstance(exc, GateError) and exc.billing_uncertain else 0)
             if isinstance(exc, GateError):
                 raise
-            raise err(502, "Vibe 编码连接失败，请稍后重试") from None
+            raise err(502, "Vibe 编码连接失败，未记费；请勿自动重试") from None
         if resp.status_code not in (200, 201):
-            record(key, "vibe_encode", model, "error", detail=f"upstream {resp.status_code}")
+            await record(key, "vibe_encode", model, "error", detail=f"upstream {resp.status_code}",
+                         unconfirmed_anlas=VIBE_ENCODING_ANLAS if resp.status_code >= 500 else 0)
             raise err(resp.status_code if 400 <= resp.status_code < 500 else 502,
                       f"Vibe 编码失败（上游状态 {resp.status_code}），未记费")
         content_type = resp.headers.get("content-type", "application/octet-stream").lower()
         if not resp.content or "json" in content_type or content_type.startswith("text/"):
-            record(key, "vibe_encode", model, "error", detail="上游未返回有效二进制编码，未记费")
+            await record(key, "vibe_encode", model, "error", detail="上游未返回有效二进制编码，未记费",
+                         unconfirmed_anlas=VIBE_ENCODING_ANLAS)
             raise err(502, "Vibe 编码未返回有效数据，未记费")
         await settle_record(key, "vibe_encode", model, "ok", anlas=VIBE_ENCODING_ANLAS,
                             detail=f"Vibe 编码 {VIBE_ENCODING_ANLAS} Anlas")
@@ -542,7 +557,7 @@ async def _generate_image(request: Request, *, streaming: bool):
             bool(key["is_admin"]) or
             (bool(key["allow_img2img"]) and STATE.settings.allow_img2img)):
         record(key, "image", model, "rejected", detail="img2img 未开放")
-        raise err(400, "本站未开放 img2img / 局部重绘（该功能会消耗 Anlas）")
+        raise err(400, "本站未开放 img2img / 局部重绘")
 
     # 免费档钳制：只对未开通 Anlas 的 Key 生效；开通 Anlas 的 Key 靠配额约束
     if STATE.settings.safe_clamp and not key["is_admin"] and not key["allow_anlas"]:
@@ -574,13 +589,15 @@ async def _generate_image(request: Request, *, streaming: bool):
     except (TypeError, ValueError, OverflowError) as exc:
         raise err(400, "图片参数无效，无法估算费用") from exc
     legacy_free_images = (
-        image_count if model_tier == "legacy" and not est["anlas"] else 0
+        1 if model_tier == "legacy" and legacy_normal_free_eligible(body) else 0
     )
     if not est["v5"]:
         await quota_image_check(key, est, legacy_free_images=legacy_free_images)
 
-    cost = (f"est={est['anlas']}A" if est["anlas"]
-            else (f"V5额度+{est['v5']}" if est["v5"] else "免费"))
+    cost = "; ".join(part for part in (
+        f"est={est['anlas']}A" if est["anlas"] else "",
+        f"V5额度+{est['v5']}" if est["v5"] else "",
+    ) if part) or "免费"
     detail = "; ".join(notes) if notes else (
         f"{p.get('width')}x{p.get('height')}/{p.get('steps')}step {cost}")
 
@@ -594,28 +611,31 @@ async def _generate_image(request: Request, *, streaming: bool):
                 "官方确认 V5 额度不可用，按 Anlas 估算记账"])
 
     async def record_image_429(retry_after: float) -> None:
-        cooldown = await STATE.block_image_generation(max(
+        # 普通响应和流式响应都会在收尾时记录错误，冷却回调不另记一笔。
+        await STATE.block_image_generation(max(
             STATE.settings.image_429_cooldown_seconds, retry_after
         ))
-        record(
-            key, "image", model, "error",
-            detail=(f"上游限流(429)：全站图片生成暂停约 {cooldown} 秒，"
-                    "保护上游 Token"),
-        )
 
     async def perform_generation():
-        resp = await upstream_call(
-            f"{STATE.nai.image_host}/ai/generate-image", body,
-            on_rate_limited=record_image_429,
-            requires_anlas=est["anlas"] > 0,
-            v5_free=est["v5"] > 0,
-            image_count=image_count,
-            image_lane=True,
-            resolve_v5_cost=resolve_v5_cost if est["v5"] else None,
-        )
+        try:
+            resp = await upstream_call(
+                f"{STATE.nai.image_host}/ai/generate-image", body,
+                on_rate_limited=record_image_429,
+                requires_anlas=est["anlas"] > 0,
+                v5_free=est["v5"] > 0,
+                image_count=image_count,
+                # Retain upstream status before reading the body, so a broken
+                # 4xx response is not mistaken for an unconfirmed paid job.
+                image_lane=True, max_response_bytes=MAX_RESPONSE_BYTES,
+                resolve_v5_cost=resolve_v5_cost if est["v5"] else None,
+            )
+        except GateError as exc:
+            await record(key, "image", model, "error", detail=exc.message,
+                         unconfirmed_anlas=est["anlas"] if exc.billing_uncertain else 0)
+            raise
         if resp.status_code not in (200, 201):
-            record(key, "image", model, "error",
-                   detail=f"upstream {resp.status_code}")
+            await record(key, "image", model, "error", detail=f"upstream {resp.status_code}",
+                         unconfirmed_anlas=est["anlas"] if resp.status_code >= 500 else 0)
             return Response(resp.content, status_code=resp.status_code,
                             media_type=resp.headers.get("content-type", "application/json"))
         await settle_record(key, "image", model, "ok", images=image_count, anlas=est["anlas"],
@@ -637,6 +657,7 @@ async def _generate_image(request: Request, *, streaming: bool):
         async def perform_stream(response):
             tracker = ImageEventTracker(image_count)
             failure = None
+            billing_uncertain = False
             try:
                 # Bound total drain time even when an upstream sends endless
                 # progress frames that would keep resetting its read timeout.
@@ -648,6 +669,7 @@ async def _generate_image(request: Request, *, streaming: bool):
                         on_dispatch=on_dispatch,
                         resolve_v5_cost=resolve_v5_cost if est["v5"] else None,
                     ) as handle:
+                        billing_uncertain = True
                         try:
                             content_type = handle.response.headers.get("content-type", "")
                             if content_type.split(";", 1)[0].strip().lower() != "text/event-stream":
@@ -667,6 +689,8 @@ async def _generate_image(request: Request, *, streaming: bool):
                         finally:
                             handle.completed_images = tracker.completed_images
             except (UpstreamError, ImageStreamProtocolError, httpx.HTTPError, TimeoutError) as exc:
+                billing_uncertain |= (isinstance(exc, UpstreamError) and exc.billing_uncertain
+                                      or isinstance(exc, TimeoutError) and dispatched)
                 status = exc.status if isinstance(exc, UpstreamError) else 502
                 message = exc.message if isinstance(exc, UpstreamError) else (
                     str(exc) if isinstance(exc, ImageStreamProtocolError) else "图片流连接中断或超时")
@@ -674,19 +698,27 @@ async def _generate_image(request: Request, *, streaming: bool):
                 await response.error(status, message)
             finally:
                 completed = tracker.completed_images
+                settled_anlas = 0
                 if completed:
-                    # Do not re-estimate partial batches as free single images.
-                    # Charge only their share of the prechecked batch estimate.
+                    # 按完整结果张数结算，首张减免只用一次。沿用本次派发前
+                    # 已确认的 V5 额度状态，不在断流结算时重新查询或假定可用。
+                    completed_body = {**body, "parameters": {**p, "n_samples": completed}}
+                    settled = estimate_image_cost(
+                        completed_body, v5_allowance_available=bool(est["v5"]))
+                    settled_anlas = settled["anlas"]
                     await settle_record(
                         key, "image_stream", model, "ok", images=completed,
-                        anlas=est["anlas"] * completed / image_count,
-                        v5=est["v5"] if completed else 0,
-                        legacy_free_images=completed if legacy_free_images else 0,
+                        anlas=settled["anlas"], v5=settled["v5"],
+                        legacy_free_images=legacy_free_images,
                         detail=detail + (f"; 完成 {completed}/{image_count}" if completed < image_count else ""),
                     )
                 if failure or not completed:
+                    # 每次请求收尾只记一次未结算差额；这是可能的上游扣款，
+                    # 不并入用户额度，也不通过额外余额查询把它假定为实扣。
                     await record(key, "image_stream", model, "error",
-                                 detail=failure or "未收到最终图片，未记费")
+                                 detail=failure or "未收到最终图片，未记费",
+                                 unconfirmed_anlas=max(0, est["anlas"]-settled_anlas)
+                                 if billing_uncertain else 0)
 
         async def run_stream(response):
             try:

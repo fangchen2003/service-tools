@@ -1,24 +1,11 @@
 """核心策略：Opus 免费档判定、Anlas 估算、参数钳制、token 估算。
 
-参考（社区逆向公式 + 官方博客，估算用）：
-- https://tapwavezodiac.github.io/novelaiUKB/Image-Generation.html
-- https://blog.novelai.net/subscription-updates-usage-limits-...-88a208d5d9c5
+计价依据：2026-09-24 官网客户端 787d312 与官方余额差额实测。
+Opus 在 <=28 步、像素面积 <=1024x1024 时减免首张基础费，包括图生图
+和局部重绘；参考附加费与后续图片另计。V5 的首张减免还需要官方额度。
 
-== 2026-08 V5 发布后的额度现实 ==
-
-* V4.5 及更老模型：单张纯文生图、<=28 步、像素面积 <=1024x1024
-  且无付费附加功能时为 0 Anlas；自定义长宽比不影响免费资格。
-* V5 (nai-diffusion-5)：不再参与上述无限免费档！
-  - Opus 有独立的「V5 周额度」：约 1800 张 Normal/周，服务端按 ~0.5%/小时恢复
-    （约 190 张/天）。额度内的 Normal(<=28步) 生成不扣 Anlas。
-  - 额度耗尽或超出条件时按 Anlas 计费，实测默认设置：Small 约 11A、
-    Normal(1024px) 约 26A、Large 约 39A —— 约为 V4 公式的 ~1.3 倍。
-* Anlas：订阅每月账单日「回满」到档位额度（Opus=10000），不叠加、不按天恢复。
-
-估算公式（V3+ 通用）：
-  per_image = ceil((2.951823174884865e-6 * r + 5.753298233447344e-7 * r * steps)
-                   * smea_factor)
-  1024x1024 / 28 steps -> 20 Anlas（与社区实测一致）；V5 再 x1.3。
+V3+ 基础价先向上取整，再乘 SMEA、模型倍率和图生图强度，最后按单张
+向上取整且至少 2 Anlas。V5 倍率为 1.5；多图可同时消耗额度和 Anlas。
 """
 
 from __future__ import annotations
@@ -30,7 +17,7 @@ import math
 import re
 from typing import Any, Optional, Tuple
 
-V5_COST_MULTIPLIER = 1.3  # V5 实测价格 / V4 公式 ≈ 1.3（11/26/39 vs 8/20/44）
+V5_COST_MULTIPLIER = 1.5  # 官网 787d312 计价逻辑及 2026-09-24 实测。
 
 # 仅允许明确认识的图片模型族。不能把未知模型当作旧模型，否则上游新增模型时
 # 可能绕过 V5/Anlas 的保护逻辑。
@@ -42,9 +29,7 @@ LEGACY_IMAGE_MODEL_EXACT = {
     "safe-diffusion", "nai-diffusion", "nai-diffusion-furry",
 }
 
-# V5 官方「Normal」预设（用户实测：这三个尺寸走周额度、不扣 Anlas）。
-# 判定规则：逐维小于等于任一预设即视为额度内（涵盖 Small 等更小尺寸）；
-# 面积达标但非预设的自定义尺寸（如 896x1152）按额度外计费（保守，防止真实 Anlas 被扣）。
+# 免费 Key 的尺寸钳制仍使用这些预设；计费资格单独按像素面积判断。
 V5_NORMAL_PRESETS = ((832, 1216), (1216, 832), (1024, 1024))
 
 # Official public client capabilities, checked 2026-09-21. V3 receives source
@@ -178,7 +163,7 @@ def validate_image_references(payload: dict) -> Optional[str]:
 
 
 def reference_surcharge(payload: dict) -> int:
-    """Additional Anlas per output image; encoding is a separate paid request."""
+    """单张参考附加费，批次减免在总价中处理；编码另行收费。"""
     p = payload.get("parameters", payload)
     precise = len(p.get("director_reference_images_cached") or [])
     vibes = len(p.get("reference_image_multiple") or p.get("reference_image_multiple_cached") or [])
@@ -217,12 +202,13 @@ def image_model_tier(model: str) -> Optional[str]:
 # ------------------------------------------------------------ 图片计费 ----
 
 def _per_image_cost(width: int, height: int, steps: int,
-                    smea: bool, smea_dyn: bool) -> int:
+                    smea: bool, smea_dyn: bool) -> float:
     """V3+ 通用单张价格（Anlas）。1024x1024/28steps -> 20A。"""
     r = width * height
     smea_factor = 1.4 if (smea and smea_dyn) else (1.2 if smea else 1.0)
     base = 2.951823174884865e-6 * r + 5.753298233447344e-7 * r * steps
-    return max(2, math.ceil(base * smea_factor))
+    # 模型倍率、SMEA 和强度之后才做最终取整，避免多次取整累积误差。
+    return math.ceil(base) * smea_factor
 
 
 def _has_paid_extras(params: dict) -> bool:
@@ -238,21 +224,15 @@ def _has_paid_extras(params: dict) -> bool:
 
 
 def opus_free_eligible(params: dict) -> bool:
-    """是否符合单张、纯文生图、低步数、无附加付费功能的基础条件。"""
+    """首张是否符合免费条件；批次内其余图片仍按张计费。"""
     p = params.get("parameters", params)
-    if int(p.get("n_samples", 1) or 1) != 1:
-        return False
-    if p.get("image") or p.get("mask"):
-        return False  # img2img / inpaint 不免费
     if _has_paid_extras(params):
         return False
     if int(p.get("steps", 28) or 0) > 28:
         return False
-    if p.get("sm") or p.get("sm_dyn"):
-        return False
     w = int(p.get("width", 0) or 0)
     h = int(p.get("height", 0) or 0)
-    if w * h > 1024 * 1024:
+    if w <= 0 or h <= 0 or w * h > 1024 * 1024:
         return False
     return True
 
@@ -268,17 +248,8 @@ def legacy_normal_free_eligible(params: dict) -> bool:
 
 
 def v5_allowance_eligible(params: dict) -> bool:
-    """V5 是否走 Opus 周额度（不扣 Anlas）。
-
-    形状条件与老模型相同（单张/纯文生图/<=28步/无SMEA/无付费特性），
-    分辨率额外要求：逐维 <= 任一 Normal 预设（832x1216 / 1216x832 / 1024x1024）。
-    """
-    if not opus_free_eligible(params):
-        return False
-    p = params.get("parameters", params)
-    w = int(p.get("width", 0) or 0)
-    h = int(p.get("height", 0) or 0)
-    return any(w <= pw and h <= ph for pw, ph in V5_NORMAL_PRESETS)
+    """V5 首张能否使用 Opus 额度；是否耗尽由上游额度检查决定。"""
+    return opus_free_eligible(params)
 
 
 def snap_v5_preset(width: int, height: int) -> Tuple[int, int]:
@@ -296,7 +267,7 @@ def estimate_image_cost(params: dict, is_opus: bool = True, *,
     """估算一次 /ai/generate-image 的消耗。
 
     返回 {"anlas": 扣多少 Anlas, "v5": 占多少个 V5 额度单位}。
-    二者互斥：V5 符合额度条件时只占额度，不符合时只按 Anlas（x1.3）。
+    V5 多图批次可同时占首张额度并支付其余图片的 Anlas。
     """
     problem = validate_image_references(params)
     if problem:
@@ -310,12 +281,27 @@ def estimate_image_cost(params: dict, is_opus: bool = True, *,
     n = max(1, int(p.get("n_samples", 1) or 1))
 
     per = _per_image_cost(w, h, steps, smea, smea_dyn)
-    if p.get("image"):  # img2img 按强度折算
-        strength = float(p.get("strength", 1.0) or 1.0)
-        per = max(2, math.ceil(per * max(0.01, strength)))
+    is_v5 = is_v5_model(str(params.get("model", "")))
+    if is_v5:
+        per *= V5_COST_MULTIPLIER
+    if p.get("mask"):
+        # 官网将局部重绘的强度放在 img2img.strength；普通 strength 不控制它。
+        inpaint = p.get("img2img") or {}
+        if not isinstance(inpaint, dict):
+            raise ValueError("img2img 必须是 JSON 对象")
+        strength = inpaint.get("strength", 1.0)
+        if not _unit_value(strength):
+            raise ValueError("img2img.strength 必须是 0 到 1 的有限数值")
+        # V4 系列按重绘强度折算。2026-09-24 V5 Full 实扣未折算，
+        # 按完整基础价估算；强度参数仍原样传给官方控制画面。
+        if str(params.get("model", "")).lower().startswith("nai-diffusion-4"):
+            per *= strength
+    elif p.get("image"):
+        strength = float(p.get("strength", 1.0))
+        per *= strength
+    per = max(2, math.ceil(per))
 
-    # Reference charges are additional to the base generation cost. Preserve
-    # the Opus base discount, then charge references even when that base is 0.
+    # 先排除参考附加费，判断基础生成是否满足 Opus 首张减免条件。
     base_params = dict(params)
     base_p = {name: value for name, value in p.items() if name not in REFERENCE_FIELDS}
     if "parameters" in params:
@@ -323,17 +309,16 @@ def estimate_image_cost(params: dict, is_opus: bool = True, *,
     else:
         base_params = base_p
     shaped = legacy_normal_free_eligible(base_params)
-    reference_cost = reference_surcharge(params) * n
 
-    if is_v5_model(str(params.get("model", ""))):
-        if v5_allowance_available and v5_allowance_eligible(params):
-            return {"anlas": 0, "v5": 1}   # 走 Opus 的 V5 周额度
-        return {"anlas": max(1, math.ceil(per * n * V5_COST_MULTIPLIER)), "v5": 0}
+    if is_v5:
+        free_first = bool(is_opus and v5_allowance_available and v5_allowance_eligible(params))
+        return {"anlas": per * (n - int(free_first)), "v5": int(free_first)}
 
-    total = per * n
-    if is_opus and shaped:
-        total -= per  # 老模型：Opus 免费档扣掉首张
-    return {"anlas": max(total, 0) + reference_cost, "v5": 0}
+    paid_outputs = n - int(is_opus and shaped)
+    # 官方余额实测：符合条件的多图批次也减免首张参考费，
+    # 但单张请求仍收一份参考费；不能直接按总输出张数相乘。
+    reference_cost = reference_surcharge(params) * max(1, paid_outputs)
+    return {"anlas": per * paid_outputs + reference_cost, "v5": 0}
 
 
 def estimate_image_anlas(params: dict, is_opus: bool = True) -> int:
@@ -378,12 +363,12 @@ def clamp_image_params(payload: dict, *, max_pixels: int, max_steps: int,
     # img2img / inpaint 审查
     is_img2img = bool(p.get("image") or p.get("mask"))
     if is_img2img and not allow_img2img:
-        return out, notes, "本站未开放 img2img / 局部重绘（该功能会消耗 Anlas）"
+        return out, notes, "本站未开放 img2img / 局部重绘"
 
     # 批量张数 -> 1
     if int(p.get("n_samples", 1) or 1) != 1:
         p["n_samples"] = 1
-        notes.append("n_samples 已强制为 1（免费档/额度条件仅限单张）")
+        notes.append("n_samples 已限制为 1，避免额外图片产生 Anlas")
 
     # steps -> 上限
     if int(p.get("steps", 0) or 0) > max_steps:
@@ -402,14 +387,13 @@ def clamp_image_params(payload: dict, *, max_pixels: int, max_steps: int,
             pw, ph = snap_v5_preset(w, h)
             if (w, h) != (pw, ph):
                 p["width"], p["height"] = pw, ph
-                notes.append(f"分辨率 {w}x{h} 已吸附到 Normal 预设 "
-                             f"{pw}x{ph}（避免产生 Anlas）")
+                notes.append(f"分辨率 {w}x{h} 已按安全钳制调整为 {pw}x{ph}")
 
-    # SMEA -> 关闭（额外计费）
+    # 沿用免费 Key 的保守钳制；SMEA 本身不排除首张减免资格。
     if p.get("sm") or p.get("sm_dyn"):
         p["sm"] = False
         p["sm_dyn"] = False
-        notes.append("SMEA 已关闭（会产生额外 Anlas 消耗）")
+        notes.append("SMEA 已按安全钳制规则关闭")
 
     # ControlNet / 角色参考（额外计费）
     if p.get("controlnet_model") or p.get("controlnet_condition"):
