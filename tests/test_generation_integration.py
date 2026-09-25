@@ -265,7 +265,7 @@ async def test_reference_batch_budget_matches_discounted_charge(state):
 
 
 @pytest.mark.asyncio
-async def test_free_img2img_still_requires_its_own_permission(state):
+async def test_free_img2img_requires_both_key_permissions(state):
     key = state.db.keys['fixture-1']
     key['allow_anlas'] = False
     key['allow_img2img'] = False
@@ -273,9 +273,56 @@ async def test_free_img2img_still_requires_its_own_permission(state):
     assert (await post('/ai/generate-image', body)).status_code == 400
     assert not state.nai.calls
     key['allow_img2img'] = True
+    denied = await post('/ai/generate-image', body)
+    assert denied.status_code == 402
+    assert 'Anlas 权限' in denied.json()['error']['message']
+    assert not state.nai.calls and not state.db.charges
+    key['allow_anlas'] = True
     assert (await post('/ai/generate-image', body)).status_code == 200
     assert state.db.charges[-1][1]['anlas'] == 0
     assert not state.nai.calls[-1][3]['requires_anlas']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("field", ["image", "mask"])
+async def test_img2img_anlas_permission_checked_before_dispatch(state, streaming, field):
+    state.db.keys["fixture-1"]["allow_anlas"] = False
+    response = await post("/ai/generate-image" + ("-stream" if streaming else ""),
+                          image_body(**{field: PNG}))
+    assert response.status_code == 402
+    assert not state.nai.calls and not state.db.charges
+    assert state.global_active == 0 and not state.image_budget_lock.locked()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admin", [False, True])
+async def test_img2img_admin_bypass_preserved(state, admin):
+    state.db.keys["fixture-1"].update(
+        is_admin=admin, allow_img2img=False, allow_anlas=False)
+    state.settings.allow_img2img = False
+    response = await post("/ai/generate-image", image_body(image=PNG))
+    assert response.status_code == (200 if admin else 400)
+    assert bool(state.nai.calls) is admin
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allow_anlas,admin,clamp,expected", [
+    (False, False, True, 512),
+    (True, False, True, 1024),
+    (False, True, True, 1024),
+    (False, False, False, 1024),
+])
+async def test_custom_pixel_limit_only_applies_to_free_key_clamp(
+        state, allow_anlas, admin, clamp, expected):
+    state.db.keys["fixture-1"].update(allow_anlas=allow_anlas, is_admin=admin)
+    state.settings.max_pixels = 512 * 512
+    state.settings.safe_clamp = clamp
+    assert (await post("/ai/generate-image", image_body())).status_code == 200
+    sent = state.nai.calls[0][2]["parameters"]
+    assert (sent["width"], sent["height"]) == (expected, expected)
+    assert not state.nai.calls[0][3]["requires_anlas"]
+    assert state.db.charges[0][1]["anlas"] == 0
 
 
 @pytest.mark.asyncio

@@ -228,6 +228,33 @@ def test_clamp_shrinks_resolution():
     assert p["width"] % 64 == 0 and p["height"] % 64 == 0
 
 
+@pytest.mark.parametrize("model", ["nai-diffusion-4-5-full", "nai-diffusion-5-full"])
+@pytest.mark.parametrize("size,limit", [
+    ((1024, 1024), 512 * 512),
+    ((896, 1152), 512 * 512),
+    ((1536, 1024), 512 * 512),
+    ((512, 512), 64 * 64),
+])
+def test_clamp_honors_custom_pixel_limit_after_preset(model, size, limit):
+    payload = img_payload(model=model, w=size[0], h=size[1])
+    out, notes, error = clamp_image_params(
+        payload, max_pixels=limit, max_steps=28, allow_img2img=False)
+    assert error is None and notes
+    p = out["parameters"]
+    assert 64 <= p["width"] and 64 <= p["height"]
+    assert p["width"] % 64 == p["height"] % 64 == 0
+    assert p["width"] * p["height"] <= limit
+    assert estimate_image_cost(out)["anlas"] == 0
+    assert (payload["parameters"]["width"], payload["parameters"]["height"]) == size
+
+
+@pytest.mark.parametrize("limit", [-1, 0, 64 * 64 - 1])
+def test_clamp_rejects_pixel_limit_below_smallest_image(limit):
+    _, _, error = clamp_image_params(
+        img_payload(), max_pixels=limit, max_steps=28, allow_img2img=False)
+    assert error and "MAX_PIXELS" in error
+
+
 def test_clamp_rejects_img2img_when_disallowed():
     _, _, err = clamp_image_params(
         img_payload(image="AAAA"), max_pixels=1048576, max_steps=28, allow_img2img=False)

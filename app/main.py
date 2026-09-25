@@ -548,16 +548,18 @@ async def _generate_image(request: Request, *, streaming: bool):
         record(key, "image", model, "rejected", detail="模型权限：仅允许 V4.5 及更低")
         raise err(403, "该 Key 仅允许 V4.5 及更低图片模型")
 
-    # img2img 权限：Key 标记 + 全局开关 双重控制（无论是否钳制都先查）
+    # 图生图功能权限与费用分开判断；免费规格也沿用 Anlas 权限要求。
     problem = validate_image_references(body)
     if problem:
         raise err(400, problem)
     p0 = body.get("parameters", {}) or {}
-    if (p0.get("image") or p0.get("mask")) and not (
-            bool(key["is_admin"]) or
-            (bool(key["allow_img2img"]) and STATE.settings.allow_img2img)):
-        record(key, "image", model, "rejected", detail="img2img 未开放")
-        raise err(400, "本站未开放 img2img / 局部重绘")
+    if (p0.get("image") or p0.get("mask")) and not key["is_admin"]:
+        if not (key["allow_img2img"] and STATE.settings.allow_img2img):
+            record(key, "image", model, "rejected", detail="img2img 未开放")
+            raise err(400, "本站未开放 img2img / 局部重绘")
+        if not key["allow_anlas"]:
+            record(key, "image", model, "rejected", detail="img2img 未开通 Anlas 权限")
+            raise err(402, "该 Key 未开通 Anlas 权限，无法使用图生图 / 局部重绘")
 
     # 免费档钳制：只对未开通 Anlas 的 Key 生效；开通 Anlas 的 Key 靠配额约束
     if STATE.settings.safe_clamp and not key["is_admin"] and not key["allow_anlas"]:

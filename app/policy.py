@@ -358,6 +358,9 @@ def clamp_image_params(payload: dict, *, max_pixels: int, max_steps: int,
     if is_img2img and not allow_img2img:
         return out, notes, "本站未开放 img2img / 局部重绘"
 
+    if max_pixels < 64 * 64:
+        return out, notes, "MAX_PIXELS 不能小于 4096（最小尺寸 64x64）"
+
     # 批量张数 -> 1
     if int(p.get("n_samples", 1) or 1) != 1:
         p["n_samples"] = 1
@@ -376,11 +379,12 @@ def clamp_image_params(payload: dict, *, max_pixels: int, max_steps: int,
             eligible = any(w <= pw and h <= ph for pw, ph in V5_NORMAL_PRESETS)
         else:
             eligible = w * h <= 1024 * 1024
-        if not eligible:
-            pw, ph = snap_v5_preset(w, h)
-            if (w, h) != (pw, ph):
-                p["width"], p["height"] = pw, ph
-                notes.append(f"分辨率 {w}x{h} 已按安全钳制调整为 {pw}x{ph}")
+        pw, ph = (w, h) if eligible else snap_v5_preset(w, h)
+        # 先保留原有预设限制，再缩到站点面积上限内，避免预设调整反而超限。
+        pw, ph = fit_size(pw, ph, max_pixels)
+        if (w, h) != (pw, ph):
+            p["width"], p["height"] = pw, ph
+            notes.append(f"分辨率 {w}x{h} 已按安全钳制调整为 {pw}x{ph}")
 
     # 沿用免费 Key 的保守钳制；SMEA 本身不排除首张减免资格。
     if p.get("sm") or p.get("sm_dyn"):
