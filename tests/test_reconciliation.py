@@ -303,14 +303,14 @@ async def test_wait_timeout_or_cancel_makes_no_official_request(env, cancel):
 @pytest.mark.asyncio
 async def test_real_generation_must_settle_before_balance_read(env, monkeypatch):
     entered, release = asyncio.Event(), asyncio.Event()
-    original = env.st.db.bump_counters
+    original = env.st.db.record_success
 
     async def settle(*args, **kwargs):
         entered.set()
         await release.wait()
         await original(*args, **kwargs)
 
-    monkeypatch.setattr(env.st.db, "bump_counters", settle)
+    monkeypatch.setattr(env.st.db, "record_success", settle)
     generation = asyncio.create_task(post("/ai/generate-image", image_body(steps=29)))
     reconcile = None
     try:

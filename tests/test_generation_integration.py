@@ -79,6 +79,12 @@ class FakeDB:
     async def add_log(self, *args, **kwargs):
         self.logs.append((args, kwargs))
 
+    async def record_success(self, key_id, name, kind, model, day, **kwargs):
+        await self.bump_counters(key_id, day, images=kwargs["images"], anlas=kwargs["anlas"],
+                                 text_tokens=kwargs["tokens"], requests=1,
+                                 v5=kwargs.pop("v5"), legacy_free_images=kwargs.pop("legacy_free_images"))
+        await self.add_log(key_id, name, kind, model, "ok", **kwargs)
+
     async def bump_counters(self, key_id, _day, **kwargs):
         self.accounting_entered.set()
         if self.accounting_release:

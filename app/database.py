@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import Any, Optional
+from uuid import uuid4
 
 import aiosqlite
 
@@ -106,15 +108,36 @@ BEGIN
 END;
 """
 
+_INSERT_LOG = """INSERT INTO usage_log (ts, key_id, key_name, kind, model, status,
+                                      images, anlas, tokens, detail, unconfirmed_anlas)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)"""
+_UPSERT_COUNTERS = """INSERT INTO counters
+                     (key_id, day, images, anlas, text_tokens, requests, v5, legacy_free_images)
+                     VALUES (?,?,?,?,?,?,?,?)
+                     ON CONFLICT(key_id, day) DO UPDATE SET
+                       images = images + excluded.images,
+                       anlas = anlas + excluded.anlas,
+                       text_tokens = text_tokens + excluded.text_tokens,
+                       requests = requests + excluded.requests,
+                       v5 = v5 + excluded.v5,
+                       legacy_free_images = legacy_free_images + excluded.legacy_free_images"""
+
 
 class Database:
     def __init__(self, path: str, tz: str = "Asia/Shanghai"):
         self.path = path
         self.tz = tz
         self._db: Optional[aiosqlite.Connection] = None
+        self._record_lock = asyncio.Lock()
+        # 独立事务也需访问同一个内存库；主连接关闭前保留该库。
+        self._connection_path = (f"file:gate-{uuid4().hex}?mode=memory&cache=shared"
+                                 if path == ":memory:" else path)
+
+    def _open_connection(self):
+        return aiosqlite.connect(self._connection_path, uri=self.path == ":memory:")
 
     async def connect(self) -> None:
-        self._db = await aiosqlite.connect(self.path)
+        self._db = await self._open_connection()
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(SCHEMA)
@@ -189,7 +212,7 @@ class Database:
 
     async def save_reconciliation(self, snapshot: dict) -> None:
         # Isolate snapshot commits and rollbacks from concurrent ledger writes.
-        async with aiosqlite.connect(self.path) as db:
+        async with self._open_connection() as db:
             await db.execute("INSERT INTO anlas_reconciliations(snapshot) VALUES (?)",
                              (json.dumps(snapshot, ensure_ascii=False, allow_nan=False),))
             await db.commit()
@@ -380,15 +403,7 @@ class Database:
         v5: int = 0, legacy_free_images: int = 0,
     ) -> None:
         await self._db.execute(
-            """INSERT INTO counters (key_id, day, images, anlas, text_tokens, requests, v5, legacy_free_images)
-               VALUES (?,?,?,?,?,?,?,?)
-               ON CONFLICT(key_id, day) DO UPDATE SET
-                 images = images + excluded.images,
-                 anlas = anlas + excluded.anlas,
-                 text_tokens = text_tokens + excluded.text_tokens,
-                 requests = requests + excluded.requests,
-                 v5 = v5 + excluded.v5,
-                 legacy_free_images = legacy_free_images + excluded.legacy_free_images""",
+            _UPSERT_COUNTERS,
             (key_id, day, images, anlas, text_tokens, requests, v5, legacy_free_images),
         )
         await self._db.commit()
@@ -468,15 +483,37 @@ class Database:
         await self._db.commit()
 
     # ---------- logs ----------
+    async def record_success(
+        self, key_id: int, key_name: str, kind: str, model: str, day: str, *,
+        images: int = 0, anlas: float = 0.0, tokens: int = 0, v5: int = 0,
+        legacy_free_images: int = 0, detail: str = "", unconfirmed_anlas: float = 0.0,
+    ) -> None:
+        """成功日志、额度与使用时间一起提交；写入失败时整笔回退。"""
+        # 不使用共享连接，避免其他请求的 commit 提前保存半笔记账。
+        async with self._record_lock, self._open_connection() as db:
+            try:
+                await db.execute("BEGIN IMMEDIATE")
+                now = time.time()
+                await db.execute(_INSERT_LOG, (
+                    now, key_id, key_name, kind, model, "ok", images, anlas,
+                    tokens, detail[:500], unconfirmed_anlas,
+                ))
+                await db.execute(_UPSERT_COUNTERS, (
+                    key_id, day, images, anlas, tokens, 1, v5, legacy_free_images,
+                ))
+                await db.execute("UPDATE api_keys SET last_used_at=? WHERE id=?", (now, key_id))
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
+
     async def add_log(
         self, key_id: Optional[int], key_name: str, kind: str, model: str,
         status: str, images: int = 0, anlas: float = 0.0, tokens: int = 0,
         detail: str = "", unconfirmed_anlas: float = 0.0,
     ) -> None:
         await self._db.execute(
-            """INSERT INTO usage_log (ts, key_id, key_name, kind, model, status,
-                                      images, anlas, tokens, detail, unconfirmed_anlas)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            _INSERT_LOG,
             (time.time(), key_id, key_name, kind, model, status,
              images, anlas, tokens, detail[:500], unconfirmed_anlas),
         )

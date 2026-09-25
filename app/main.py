@@ -288,16 +288,17 @@ def record(key, kind: str, model: str, status: str, *, images: int = 0,
            unconfirmed_anlas: float = 0.0) -> asyncio.Task:
     """写日志；成功请求额外计入每日配额。"""
     async def _go():
-        await STATE.db.add_log(key["id"], key["name"], kind, model, status,
-                               images=images, anlas=anlas, tokens=tokens, detail=detail,
-                               unconfirmed_anlas=unconfirmed_anlas)
         if status == "ok":
-            await STATE.db.bump_counters(
-                key["id"], STATE.day(),
-                images=images, anlas=anlas, text_tokens=tokens, requests=1, v5=v5,
-                legacy_free_images=legacy_free_images,
+            await STATE.db.record_success(
+                key["id"], key["name"], kind, model, STATE.day(),
+                images=images, anlas=anlas, tokens=tokens, v5=v5,
+                legacy_free_images=legacy_free_images, detail=detail,
+                unconfirmed_anlas=unconfirmed_anlas,
             )
-            await STATE.db.touch_key(key["id"])
+        else:
+            await STATE.db.add_log(key["id"], key["name"], kind, model, status,
+                                   images=images, anlas=anlas, tokens=tokens, detail=detail,
+                                   unconfirmed_anlas=unconfirmed_anlas)
     task = asyncio.create_task(_go())
     task.add_done_callback(_log_task_failure)
     return task
