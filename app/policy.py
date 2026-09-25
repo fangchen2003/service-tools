@@ -1,11 +1,6 @@
 """核心策略：Opus 免费档判定、Anlas 估算、参数钳制、token 估算。
 
 计价依据：2026-09-24 官网客户端 787d312 与官方余额差额实测。
-Opus 在 <=28 步、像素面积 <=1024x1024 时减免首张基础费，包括图生图
-和局部重绘；参考附加费与后续图片另计。V5 的首张减免还需要官方额度。
-
-V3+ 基础价先向上取整，再乘 SMEA、模型倍率和图生图强度，最后按单张
-向上取整且至少 2 Anlas。V5 倍率为 1.5；多图可同时消耗额度和 Anlas。
 """
 
 from __future__ import annotations
@@ -17,7 +12,7 @@ import math
 import re
 from typing import Any, Optional, Tuple
 
-V5_COST_MULTIPLIER = 1.5  # 官网 787d312 计价逻辑及 2026-09-24 实测。
+V5_COST_MULTIPLIER = 1.5
 
 # 仅允许明确认识的图片模型族。不能把未知模型当作旧模型，否则上游新增模型时
 # 可能绕过 V5/Anlas 的保护逻辑。
@@ -29,7 +24,7 @@ LEGACY_IMAGE_MODEL_EXACT = {
     "safe-diffusion", "nai-diffusion", "nai-diffusion-furry",
 }
 
-# 免费 Key 的尺寸钳制仍使用这些预设；计费资格单独按像素面积判断。
+# 免费 Key 按预设钳制尺寸，计费按像素面积判断。
 V5_NORMAL_PRESETS = ((832, 1216), (1216, 832), (1024, 1024))
 
 # Official public client capabilities, checked 2026-09-21. V3 receives source
@@ -285,15 +280,14 @@ def estimate_image_cost(params: dict, is_opus: bool = True, *,
     if is_v5:
         per *= V5_COST_MULTIPLIER
     if p.get("mask"):
-        # 官网将局部重绘的强度放在 img2img.strength；普通 strength 不控制它。
+        # 局部重绘使用 img2img.strength。
         inpaint = p.get("img2img") or {}
         if not isinstance(inpaint, dict):
             raise ValueError("img2img 必须是 JSON 对象")
         strength = inpaint.get("strength", 1.0)
         if not _unit_value(strength):
             raise ValueError("img2img.strength 必须是 0 到 1 的有限数值")
-        # V4 系列按重绘强度折算。2026-09-24 V5 Full 实扣未折算，
-        # 按完整基础价估算；强度参数仍原样传给官方控制画面。
+        # V4 按强度折算；2026-09-24 实测 V5 Full 重绘使用完整基础价。
         if str(params.get("model", "")).lower().startswith("nai-diffusion-4"):
             per *= strength
     elif p.get("image"):
@@ -315,8 +309,7 @@ def estimate_image_cost(params: dict, is_opus: bool = True, *,
         return {"anlas": per * (n - int(free_first)), "v5": int(free_first)}
 
     paid_outputs = n - int(is_opus and shaped)
-    # 官方余额实测：符合条件的多图批次也减免首张参考费，
-    # 但单张请求仍收一份参考费；不能直接按总输出张数相乘。
+    # 官方余额实测：符合条件的多图首张参考费减免，单张照收。
     reference_cost = reference_surcharge(params) * max(1, paid_outputs)
     return {"anlas": per * paid_outputs + reference_cost, "v5": 0}
 

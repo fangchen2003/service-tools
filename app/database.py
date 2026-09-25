@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS site_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS anlas_reconciliations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS counters (
     key_id INTEGER NOT NULL,
     day TEXT NOT NULL,            -- YYYY-MM-DD (按配置时区)
@@ -131,7 +135,7 @@ class Database:
                 pass  # 列已存在
         log_columns = await (await self._db.execute("PRAGMA table_info(usage_log)")).fetchall()
         if "unconfirmed_anlas" not in {row["name"] for row in log_columns}:
-            # 旧日志没有完整请求报价，不能把历史 error 直接当作已发生的损失。
+            # 旧日志缺少报价，待核对金额初始为 0。
             await self._db.execute(
                 "ALTER TABLE usage_log ADD COLUMN unconfirmed_anlas REAL NOT NULL DEFAULT 0"
             )
@@ -172,6 +176,29 @@ class Database:
     async def close(self) -> None:
         if self._db:
             await self._db.close()
+
+    async def reconciliation_totals(self) -> dict:
+        # Lifetime totals include deleted Keys and survive daily quota resets.
+        row = await (await self._db.execute("""
+            SELECT (SELECT COALESCE(SUM(anlas), 0) FROM counters) AS anlas,
+                   COALESCE(SUM(unconfirmed_anlas), 0) AS unconfirmed_anlas,
+                   COALESCE(SUM(unconfirmed_anlas > 0), 0) AS unconfirmed_requests,
+                   COALESCE(MAX(id), 0) AS last_log_id FROM usage_log
+        """)).fetchone()
+        return dict(row)
+
+    async def save_reconciliation(self, snapshot: dict) -> None:
+        # Isolate snapshot commits and rollbacks from concurrent ledger writes.
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("INSERT INTO anlas_reconciliations(snapshot) VALUES (?)",
+                             (json.dumps(snapshot, ensure_ascii=False, allow_nan=False),))
+            await db.commit()
+
+    async def reconciliation_history(self, limit: int = 20) -> list[dict]:
+        rows = await (await self._db.execute(
+            "SELECT id, snapshot FROM anlas_reconciliations ORDER BY id DESC LIMIT ?",
+            (min(20, max(1, limit)),))).fetchall()
+        return [{**json.loads(row["snapshot"]), "id": row["id"]} for row in rows]
 
     # ---------- upstream token counters ----------
     async def get_upstream_counter(self, token_id: str, day: str) -> dict[str, int]:

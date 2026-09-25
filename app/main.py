@@ -483,7 +483,7 @@ async def encode_vibe(request: Request):
     await quota_image_check(key, estimate)
 
     async def record_encoding_429(retry_after: float) -> None:
-        # 请求的结束路径统一记日志；回调仅更新冷却，避免一笔失败出现两行。
+        # 回调更新冷却，日志由请求收尾时统一记录。
         await STATE.block_image_generation(max(
             STATE.settings.image_429_cooldown_seconds, retry_after
         ))
@@ -611,7 +611,7 @@ async def _generate_image(request: Request, *, streaming: bool):
                 "官方确认 V5 额度不可用，按 Anlas 估算记账"])
 
     async def record_image_429(retry_after: float) -> None:
-        # 普通响应和流式响应都会在收尾时记录错误，冷却回调不另记一笔。
+        # 两种响应均在收尾时记日志，回调只更新冷却。
         await STATE.block_image_generation(max(
             STATE.settings.image_429_cooldown_seconds, retry_after
         ))
@@ -624,8 +624,7 @@ async def _generate_image(request: Request, *, streaming: bool):
                 requires_anlas=est["anlas"] > 0,
                 v5_free=est["v5"] > 0,
                 image_count=image_count,
-                # Retain upstream status before reading the body, so a broken
-                # 4xx response is not mistaken for an unconfirmed paid job.
+                # Retain the status to distinguish rejected requests from uncertain charges.
                 image_lane=True, max_response_bytes=MAX_RESPONSE_BYTES,
                 resolve_v5_cost=resolve_v5_cost if est["v5"] else None,
             )
@@ -700,8 +699,7 @@ async def _generate_image(request: Request, *, streaming: bool):
                 completed = tracker.completed_images
                 settled_anlas = 0
                 if completed:
-                    # 按完整结果张数结算，首张减免只用一次。沿用本次派发前
-                    # 已确认的 V5 额度状态，不在断流结算时重新查询或假定可用。
+                    # 按完整结果重算首张减免，沿用派发前确认的 V5 额度状态。
                     completed_body = {**body, "parameters": {**p, "n_samples": completed}}
                     settled = estimate_image_cost(
                         completed_body, v5_allowance_available=bool(est["v5"]))
@@ -713,8 +711,7 @@ async def _generate_image(request: Request, *, streaming: bool):
                         detail=detail + (f"; 完成 {completed}/{image_count}" if completed < image_count else ""),
                     )
                 if failure or not completed:
-                    # 每次请求收尾只记一次未结算差额；这是可能的上游扣款，
-                    # 不并入用户额度，也不通过额外余额查询把它假定为实扣。
+                    # 未结算部分单独记为待核对费用。
                     await record(key, "image_stream", model, "error",
                                  detail=failure or "未收到最终图片，未记费",
                                  unconfirmed_anlas=max(0, est["anlas"]-settled_anlas)

@@ -359,8 +359,7 @@ class NaiClient:
             except (httpx.HTTPError, TimeoutError) as exc:
                 if not image_lane:
                     raise
-                # 只有发送后的读写故障才可能已扣款；已知 4xx、连接/连接池
-                # 失败和派发前的额度检查不记待核实费用，也不自动重发图片。
+                # 已发送请求的读写故障可能产生扣款；明确的 4xx 除外。
                 uncertain = send_started and (
                     response_status is None or response_status in (200, 201) or response_status >= 500
                 ) and isinstance(exc, (
@@ -455,7 +454,7 @@ class NaiClient:
             handle = ImageStreamHandle(resp)
             yield handle
         except httpx.HTTPError as exc:
-            # 读写阶段中断可能发生在上游已开始生成之后；连接失败不作此推断。
+            # 读写中断可能发生在上游已开始生成之后。
             uncertain = send_started and isinstance(exc, (
                 httpx.ReadError, httpx.ReadTimeout, httpx.WriteError,
                 httpx.WriteTimeout, httpx.RemoteProtocolError,
