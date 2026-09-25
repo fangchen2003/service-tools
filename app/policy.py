@@ -123,6 +123,10 @@ def validate_image_references(payload: dict) -> Optional[str]:
         return "精确参考仅支持 V4.5"
 
     for name in ("reference_information_extracted_multiple", "reference_strength_multiple"):
+        # V4/V4.5 encodings already contain the extraction amount. V3 raw images
+        # still require it; an explicitly supplied array must always be valid.
+        if name == "reference_information_extracted_multiple" and model in VIBE_ENCODED_MODELS and name not in p:
+            continue
         values = groups[name]
         if len(values) != vibe_count or not all(_unit_value(value) for value in values):
             return f"{name} 须与 Vibe 数量一致，且各值在 0 到 1 之间"

@@ -396,7 +396,7 @@ class NaiClient:
         on_dispatch: Optional[Callable[[], None]] = None,
         resolve_v5_cost: Optional[Callable[[bool], Awaitable[None]]] = None,
     ) -> AsyncIterator[ImageStreamHandle]:
-        """图片 SSE 不重试；调用方只在确认完整最终图片后增加 completed_images。"""
+        """图片流不重试；调用方只在确认完整最终图片后增加 completed_images。"""
         if self._client is None:
             raise RuntimeError("client not started")
         ts = await self.pick_token(requires_anlas=requires_anlas, v5_free=v5_free)
@@ -432,7 +432,9 @@ class NaiClient:
                     v5_free = False
             req = self._client.build_request(
                 "POST", url, json=json_body,
-                headers=self._headers(ts, "text/event-stream"),
+                headers=self._headers(ts, "application/x-msgpack" if
+                                      json_body.get("parameters", {}).get("stream") == "msgpack"
+                                      else "text/event-stream"),
             )
             async with ts.dispatch_lock:
                 if not ts.admin_enabled:

@@ -383,6 +383,8 @@ async def test_encoding_binary_response_and_own_two_anlas_fee(state, path, statu
     options = state.nai.calls[0][3]
     assert options["requires_anlas"] and options["image_lane"]
     assert options["image_count"] == 0 and not options["v5_free"]
+    assert state.nai.calls[0][2]["information_extracted"] == 0.7
+    assert "informationExtracted" not in state.nai.calls[0][2]
 
 
 @pytest.mark.asyncio

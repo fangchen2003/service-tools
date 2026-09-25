@@ -102,6 +102,16 @@ def test_cached_vibe_form_cannot_bypass_surcharge():
     assert estimate_image_cost(body)["anlas"] == 2
 
 
+@pytest.mark.parametrize("model", ["nai-diffusion-3", "nai-diffusion-4-full", "nai-diffusion-4-5-full"])
+def test_only_encoded_vibes_can_omit_extraction_amount(model):
+    body = payload(model, vibes=1)
+    del body["parameters"]["reference_information_extracted_multiple"]
+    assert (validate_image_references(body) is None) == (model != "nai-diffusion-3")
+    for invalid in ([], [float("nan")], [True]):
+        body["parameters"]["reference_information_extracted_multiple"] = invalid
+        assert validate_image_references(body)
+
+
 
 def test_vibe_encoding_validation_and_price():
     body = {"model": "nai-diffusion-4-5-full", "image": PNG, "informationExtracted": 0.7}

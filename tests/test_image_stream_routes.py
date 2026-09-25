@@ -94,7 +94,7 @@ def state(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["/ai/generate-image-stream", "/nai/ai/generate-image-stream"])
 async def test_stream_reuses_reference_validation_cost_and_sse_wire_format(state, path):
-    response = await post(path, image_body(precise=1, stream="msgpack"))
+    response = await post(path, image_body(precise=1))
     assert response.status_code == 200
     assert response.content == event("intermediate") + event()
     assert response.headers["x-accel-buffering"] == "no"
