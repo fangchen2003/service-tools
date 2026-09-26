@@ -1,5 +1,7 @@
 """策略层单元测试：Anlas 估算、Opus 免费档判定、参数钳制。"""
 
+import pytest
+
 from app.policy import (
     clamp_image_params,
     clamp_text_params,
@@ -32,8 +34,9 @@ def test_opus_free_max_size_1024():
     assert opus_free_eligible(img_payload(w=1024, h=1024))
 
 
-def test_not_free_multi_sample():
-    assert not opus_free_eligible(img_payload(n=4))
+def test_multi_sample_keeps_one_free_image():
+    assert opus_free_eligible(img_payload(n=4))
+    assert estimate_image_cost(img_payload(n=4))["anlas"] == 60
 
 
 def test_not_free_big_size():
@@ -44,12 +47,12 @@ def test_not_free_high_steps():
     assert not opus_free_eligible(img_payload(steps=50))
 
 
-def test_not_free_smea():
-    assert not opus_free_eligible(img_payload(sm=True))
+def test_smea_keeps_opus_discount():
+    assert opus_free_eligible(img_payload(sm=True))
 
 
-def test_not_free_img2img():
-    assert not opus_free_eligible(img_payload(image="AAAA"))
+def test_img2img_keeps_opus_discount():
+    assert opus_free_eligible(img_payload(image="AAAA"))
 
 
 # ------------------------------------------------------------ 计费估算 ----
@@ -67,11 +70,10 @@ def test_second_image_costs():
     assert single["anlas"] == 0
 
 
-def test_1024_28steps_price_matches_community():
-    # V3+ 公式：1024x1024 / 28 steps 单张 20 Anlas（社区实测值）
+def test_1024_28steps_second_image_costs_20():
     payload = img_payload(w=1024, h=1024, steps=28, n=2, sm=False)
-    cost = estimate_image_cost(payload)
-    assert 15 <= cost["anlas"] / 2 <= 25
+    assert estimate_image_cost(payload) == {"anlas": 20, "v5": 0}
+    assert estimate_image_cost(payload, is_opus=False) == {"anlas": 40, "v5": 0}
 
 
 # ---------------------------------------------------------------- V5 ----
@@ -90,11 +92,10 @@ def test_v5_small_sizes_also_allowance():
         assert estimate_image_cost(payload) == {"anlas": 0, "v5": 1}, (w, h)
 
 
-def test_v5_nonpreset_inbetween_size_charged():
-    """896x1152 面积达标但不是预设（逐维比较不满足）-> 保守按 Anlas 计费。"""
-    payload = img_payload(model="nai-diffusion-5", w=896, h=1152)
-    est = estimate_image_cost(payload)
-    assert est["v5"] == 0 and est["anlas"] > 0
+def test_v5_custom_sizes_use_area_limit():
+    for w, h in ((896, 1152), (512, 2048)):
+        payload = img_payload(model="nai-diffusion-5", w=w, h=h)
+        assert estimate_image_cost(payload) == {"anlas": 0, "v5": 1}
 
 
 def test_v5_clamp_snaps_to_preset():
@@ -123,19 +124,17 @@ def test_old_model_custom_sizes_within_pixel_limit_are_free():
         assert error is None and not notes
         assert out == payload
 
-    for overrides in (dict(w=1088, h=1024), dict(steps=29), dict(n=2),
-                      dict(image="AAAA"), dict(sm=True)):
+    for overrides in (dict(w=1088, h=1024), dict(steps=29)):
         payload = img_payload(model="nai-diffusion-4-5-full", **overrides)
         assert not legacy_normal_free_eligible(payload)
         assert estimate_image_cost(payload)["anlas"] > 0
 
 
-def test_v5_unshaped_burns_anlas_with_multiplier():
-    """V5 多张/大图/超步数 -> 按 Anlas 计费（x1.3）。1024²x28 单张 20*1.3=26A。"""
+def test_v5_batch_combines_allowance_and_anlas():
     payload = img_payload(model="nai-diffusion-5", w=1024, h=1024, n=2)
-    est = estimate_image_cost(payload)
-    assert est["v5"] == 0
-    assert 24 <= est["anlas"] / 2 <= 28  # ≈26
+    assert estimate_image_cost(payload) == {"anlas": 30, "v5": 1}
+    assert estimate_image_cost(payload, v5_allowance_available=False) == {"anlas": 60, "v5": 0}
+    assert estimate_image_cost(payload, is_opus=False) == {"anlas": 60, "v5": 0}
 
     payload = img_payload(model="nai-diffusion-5", w=1216, h=1856, steps=50)
     assert estimate_image_cost(payload)["anlas"] > 80  # 大图高步数很贵(估算≈94A)
@@ -159,9 +158,54 @@ def test_image_model_tier_is_an_explicit_allowlist():
     assert image_model_tier("made-up-model") is None
 
 
-def test_img2img_charged():
+def test_img2img_free_and_paid_step_boundary():
     payload = img_payload(image="AAAA", strength=0.7)
-    assert estimate_image_anlas(payload) > 0
+    assert estimate_image_anlas(payload) == 0
+    payload["parameters"]["steps"] = 29
+    assert estimate_image_anlas(payload) == 14
+
+
+@pytest.mark.parametrize("model,settings,anlas,v5", [
+    # 固定预期来自 2026-09-24 余额实测；不调用同一公式生成断言值。
+    ("nai-diffusion-4-5-full", dict(steps=20, n=2), 9, 0),
+    ("nai-diffusion-4-5-full", dict(w=512, h=512, steps=20, n=3, strength=1), 8, 0),
+    ("nai-diffusion-4-5-full", dict(steps=29), 12, 0),
+    ("nai-diffusion-4-5-full", dict(steps=29, strength=.1), 2, 0),
+    ("nai-diffusion-4-5-full-inpainting", dict(mask="AAAA"), 0, 0),
+    ("nai-diffusion-5-full", dict(steps=29), 18, 0),
+    ("nai-diffusion-5-full", dict(w=512, h=512, steps=29, strength=1), 9, 0),
+    ("nai-diffusion-5-full", dict(w=512, h=2048), 0, 1),
+])
+def test_recorded_img2img_billing(model, settings, anlas, v5):
+    payload = img_payload(model=model, image="AAAA", **({"strength": .6} | settings))
+    assert estimate_image_cost(payload) == {"anlas": anlas, "v5": v5}
+
+
+def test_paid_modifiers_round_once_after_base_rounding():
+    # 官网计算顺序：ceil(base) -> 模型/SMEA/强度 -> ceil -> 至少 2。
+    payload = img_payload(model="nai-diffusion-5-full", w=512, h=512,
+                          steps=20, n=2, image="AAAA", strength=.6)
+    assert estimate_image_cost(payload) == {"anlas": 4, "v5": 1}
+    payload["parameters"].update(steps=29, strength=0)
+    assert estimate_image_cost(payload) == {"anlas": 4, "v5": 0}
+    smea = img_payload(w=512, h=512, steps=29, sm=True, image="AAAA", strength=1)
+    assert estimate_image_cost(smea) == {"anlas": 8, "v5": 0}
+
+
+def test_paid_inpainting_uses_nested_strength_and_defaults_to_one():
+    payload = img_payload(model='nai-diffusion-4-5-full-inpainting', w=512, h=512,
+                          steps=29, image='fixture', mask='fixture', strength=.1)
+    assert estimate_image_cost(payload) == {'anlas': 6, 'v5': 0}
+    payload['parameters']['img2img'] = {'strength': .6, 'color_correct': True}
+    assert estimate_image_cost(payload) == {'anlas': 4, 'v5': 0}
+    payload['model'] = 'nai-diffusion-5-full-inpainting'
+    assert estimate_image_cost(payload) == {'anlas': 9, 'v5': 0}
+    payload['model'] = 'nai-diffusion-3-inpainting'
+    assert estimate_image_cost(payload) == {'anlas': 6, 'v5': 0}
+    for invalid in ('invalid', {'strength': float('nan')}, {'strength': -1}):
+        payload['parameters']['img2img'] = invalid
+        with pytest.raises(ValueError):
+            estimate_image_cost(payload)
 
 
 # ---------------------------------------------------------------- 钳制 ----
@@ -182,6 +226,33 @@ def test_clamp_shrinks_resolution():
     p = out["parameters"]
     assert p["width"] * p["height"] <= 1048576
     assert p["width"] % 64 == 0 and p["height"] % 64 == 0
+
+
+@pytest.mark.parametrize("model", ["nai-diffusion-4-5-full", "nai-diffusion-5-full"])
+@pytest.mark.parametrize("size,limit", [
+    ((1024, 1024), 512 * 512),
+    ((896, 1152), 512 * 512),
+    ((1536, 1024), 512 * 512),
+    ((512, 512), 64 * 64),
+])
+def test_clamp_honors_custom_pixel_limit_after_preset(model, size, limit):
+    payload = img_payload(model=model, w=size[0], h=size[1])
+    out, notes, error = clamp_image_params(
+        payload, max_pixels=limit, max_steps=28, allow_img2img=False)
+    assert error is None and notes
+    p = out["parameters"]
+    assert 64 <= p["width"] and 64 <= p["height"]
+    assert p["width"] % 64 == p["height"] % 64 == 0
+    assert p["width"] * p["height"] <= limit
+    assert estimate_image_cost(out)["anlas"] == 0
+    assert (payload["parameters"]["width"], payload["parameters"]["height"]) == size
+
+
+@pytest.mark.parametrize("limit", [-1, 0, 64 * 64 - 1])
+def test_clamp_rejects_pixel_limit_below_smallest_image(limit):
+    _, _, error = clamp_image_params(
+        img_payload(), max_pixels=limit, max_steps=28, allow_img2img=False)
+    assert error and "MAX_PIXELS" in error
 
 
 def test_clamp_rejects_img2img_when_disallowed():

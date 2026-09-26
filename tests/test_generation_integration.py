@@ -79,6 +79,12 @@ class FakeDB:
     async def add_log(self, *args, **kwargs):
         self.logs.append((args, kwargs))
 
+    async def record_success(self, key_id, name, kind, model, day, **kwargs):
+        await self.bump_counters(key_id, day, images=kwargs["images"], anlas=kwargs["anlas"],
+                                 text_tokens=kwargs["tokens"], requests=1,
+                                 v5=kwargs.pop("v5"), legacy_free_images=kwargs.pop("legacy_free_images"))
+        await self.add_log(key_id, name, kind, model, "ok", **kwargs)
+
     async def bump_counters(self, key_id, _day, **kwargs):
         self.accounting_entered.set()
         if self.accounting_release:
@@ -222,6 +228,110 @@ async def test_failed_legacy_generation_does_not_use_free_daily_quota(state):
 
 
 @pytest.mark.asyncio
+async def test_disconnect_during_unknown_result_records_pending_once(state):
+    state.nai.release = asyncio.Event()
+    state.nai.error = UpstreamError(502, '上游响应中断', billing_uncertain=True)
+    task = asyncio.create_task(post('/ai/generate-image', image_body(width=256, height=256, steps=29)))
+    await state.nai.entered.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    assert state.image_budget_lock.locked()
+    state.nai.release.set()
+    # The shielded upstream failure completes its error response and ledger,
+    # even though the downstream caller has already cancelled.
+    assert (await task).status_code == 502
+    assert len(state.nai.calls) == 1 and len(state.db.logs) == 1
+    assert state.db.logs[0][1]['unconfirmed_anlas'] == 2
+    assert not state.db.charges and not state.image_budget_lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_img2img_batch_counts_only_one_free_image_against_daily_limit(state):
+    state.db.keys['fixture-1']['daily_images'] = 1
+    batch = image_body(width=512, height=512, steps=20, image='fixture', strength=1, n_samples=3)
+    assert (await post('/ai/generate-image', batch)).status_code == 200
+    charge, = state.db.charges
+    assert (charge[1]['anlas'], charge[1]['images'], charge[1]['legacy_free_images']) == (8, 3, 1)
+    assert (await post('/ai/generate-image', batch)).status_code == 429
+    assert len(state.nai.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_reference_batch_budget_matches_discounted_charge(state):
+    key = state.db.keys['fixture-1']
+    body = image_body(precise=1, width=512, height=512, steps=20,
+                      image='fixture', strength=1, n_samples=2)
+    key['daily_anlas'] = 8
+    assert (await post('/ai/generate-image', body)).status_code == 402
+    assert not state.nai.calls
+    key['daily_anlas'] = 9
+    assert (await post('/ai/generate-image', body)).status_code == 200
+    charge, = state.db.charges
+    assert (charge[1]['anlas'], charge[1]['legacy_free_images']) == (9, 0)
+
+
+@pytest.mark.asyncio
+async def test_free_img2img_requires_both_key_permissions(state):
+    key = state.db.keys['fixture-1']
+    key['allow_anlas'] = False
+    key['allow_img2img'] = False
+    body = image_body(image='fixture', strength=.6)
+    assert (await post('/ai/generate-image', body)).status_code == 400
+    assert not state.nai.calls
+    key['allow_img2img'] = True
+    denied = await post('/ai/generate-image', body)
+    assert denied.status_code == 402
+    assert 'Anlas 权限' in denied.json()['error']['message']
+    assert not state.nai.calls and not state.db.charges
+    key['allow_anlas'] = True
+    assert (await post('/ai/generate-image', body)).status_code == 200
+    assert state.db.charges[-1][1]['anlas'] == 0
+    assert not state.nai.calls[-1][3]['requires_anlas']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("field", ["image", "mask"])
+async def test_img2img_anlas_permission_checked_before_dispatch(state, streaming, field):
+    state.db.keys["fixture-1"]["allow_anlas"] = False
+    response = await post("/ai/generate-image" + ("-stream" if streaming else ""),
+                          image_body(**{field: PNG}))
+    assert response.status_code == 402
+    assert not state.nai.calls and not state.db.charges
+    assert state.global_active == 0 and not state.image_budget_lock.locked()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admin", [False, True])
+async def test_img2img_admin_bypass_preserved(state, admin):
+    state.db.keys["fixture-1"].update(
+        is_admin=admin, allow_img2img=False, allow_anlas=False)
+    state.settings.allow_img2img = False
+    response = await post("/ai/generate-image", image_body(image=PNG))
+    assert response.status_code == (200 if admin else 400)
+    assert bool(state.nai.calls) is admin
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allow_anlas,admin,clamp,expected", [
+    (False, False, True, 512),
+    (True, False, True, 1024),
+    (False, True, True, 1024),
+    (False, False, False, 1024),
+])
+async def test_custom_pixel_limit_only_applies_to_free_key_clamp(
+        state, allow_anlas, admin, clamp, expected):
+    state.db.keys["fixture-1"].update(allow_anlas=allow_anlas, is_admin=admin)
+    state.settings.max_pixels = 512 * 512
+    state.settings.safe_clamp = clamp
+    assert (await post("/ai/generate-image", image_body())).status_code == 200
+    sent = state.nai.calls[0][2]["parameters"]
+    assert (sent["width"], sent["height"]) == (expected, expected)
+    assert not state.nai.calls[0][3]["requires_anlas"]
+    assert state.db.charges[0][1]["anlas"] == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("allow_anlas", [False, True])
 async def test_custom_free_size_preserved_and_zero_billed(state, allow_anlas):
     state.db.keys["fixture-1"]["allow_anlas"] = allow_anlas
@@ -256,10 +366,12 @@ async def test_precise_generation_settles_and_uses_paid_token_policy(state, stat
     response = await post("/ai/generate-image", body)
     assert response.status_code == 200
     assert state.db.charges[0][1]["anlas"] == 10
+    assert state.db.logs[-1][1]['unconfirmed_anlas'] == 0
     assert state.nai.calls[0][2] == body
     assert state.nai.calls[0][3] | {"on_rate_limited": None} == {
         "accept": "*/*", "on_rate_limited": None, "requires_anlas": True,
-        "v5_free": False, "image_count": 1, "image_lane": True}
+        "v5_free": False, "image_count": 1, "image_lane": True,
+        "max_response_bytes": 64 * 1024 * 1024}
     assert not state.image_budget_lock.locked() and state.global_active == 0
 
 
@@ -272,10 +384,13 @@ async def test_encoding_binary_response_and_own_two_anlas_fee(state, path, statu
     assert response.status_code == 200 and response.content == state.nai.content
     assert response.headers["cache-control"] == "no-store"
     assert state.db.charges[0][1]["anlas"] == 2
+    assert state.db.logs[-1][1]['unconfirmed_anlas'] == 0
     assert state.db.charges[0][1]["images"] == 0
     options = state.nai.calls[0][3]
     assert options["requires_anlas"] and options["image_lane"]
     assert options["image_count"] == 0 and not options["v5_free"]
+    assert state.nai.calls[0][2]["information_extracted"] == 0.7
+    assert "informationExtracted" not in state.nai.calls[0][2]
 
 
 @pytest.mark.asyncio
@@ -329,6 +444,7 @@ async def test_encoding_rate_limit_keeps_upstream_global_cooldown_minimum(state)
     state.nai.error = UpstreamError(429, "fixture-rate-limit")
     assert (await post("/ai/encode-vibe", encoding_body())).status_code == 429
     assert state.cooldowns == [60] and not state.db.charges
+    assert len(state.db.logs) == 1 and state.db.logs[0][1]['unconfirmed_anlas'] == 0
 
 
 @pytest.mark.asyncio

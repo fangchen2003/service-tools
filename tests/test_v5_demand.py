@@ -1,6 +1,8 @@
 """Real route/client path with fake HTTP: no polling, no unconfirmed paid switch."""
 import asyncio
+import io
 import json
+import zipfile
 from types import SimpleNamespace
 
 import httpx
@@ -49,7 +51,7 @@ def env(monkeypatch):
     st.nai = NaiClient(['private-fixture-token'], 'https://official.invalid', '', '',
         db=st.db, day_fn=st.day, v5_daily_limits=[100], allow_anlas=[True], image_min_interval=0)
     e = SimpleNamespace(st=st, queries=[], generations=[], subscription=usage(), status=200,
-                        generation_status=200, wait=None)
+                        generation_status=200, wait=None, frames=None)
     async def handler(request):
         if request.method == 'GET':
             e.queries.append(request)
@@ -59,7 +61,16 @@ def env(monkeypatch):
                                   headers={'location':'https://untrusted.invalid'})
         e.generations.append(request)
         is_stream = request.url.path.endswith('-stream')
-        return httpx.Response(e.generation_status, content=event() if is_stream else IMAGE_PNG,
+        count = json.loads(request.content)['parameters'].get('n_samples', 1)
+        content = IMAGE_PNG
+        if is_stream:
+            content = e.frames if e.frames is not None else b''.join(event(index=i) for i in range(count))
+        elif count > 1:
+            output = io.BytesIO()
+            with zipfile.ZipFile(output, 'w') as archive:
+                for i in range(count): archive.writestr(f'image_{i}.png', IMAGE_PNG)
+            content = output.getvalue()
+        return httpx.Response(e.generation_status, content=content,
             headers={'content-type':'text/event-stream' if is_stream else 'application/octet-stream'})
     st.nai._client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True)
     monkeypatch.setattr(main, 'STATE', st)
@@ -152,8 +163,69 @@ async def test_failed_generation_does_not_charge_or_consume_reservation(env):
 @pytest.mark.asyncio
 async def test_legacy_and_already_paid_v5_make_no_subscription_query(env):
     await post('/ai/generate-image',image_body())
-    await post('/ai/generate-image',{**body(),'parameters':{**body()['parameters'],'n_samples':2}})
+    await post('/ai/generate-image',{**body(),'parameters':{**body()['parameters'],'steps':29}})
     assert not env.queries and len(env.generations)==2
+
+
+@pytest.mark.asyncio
+async def test_paid_v5_inpainting_preserves_strength_without_cost_discount(env):
+    masked = {**body(), 'model': 'nai-diffusion-5-full-inpainting', 'action': 'infill',
+              'parameters': {**body()['parameters'], 'width': 512, 'height': 512,
+              'steps': 29, 'image': 'fixture', 'mask': 'fixture', 'strength': .6,
+              'img2img': {'strength': .6, 'color_correct': True}}}
+    response = await post('/ai/generate-image', masked)
+    assert response.status_code == 200
+    charge, = env.st.db.charges
+    assert (charge[1]['anlas'], charge[1]['v5']) == (9, 0)
+    assert not env.queries and len(env.generations) == 1
+    assert json.loads(env.generations[0].content)['parameters']['img2img'] == masked['parameters']['img2img']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('streaming', [False, True])
+@pytest.mark.parametrize('exhausted', [False, True])
+async def test_img2img_batch_settles_mixed_or_exhausted_cost(env, streaming, exhausted):
+    env.subscription = usage(0 if exhausted else 80, exhausted)
+    batch = {**body(), 'parameters': {**body()['parameters'], 'width': 512, 'height': 512,
+             'steps': 20, 'n_samples': 2, 'image': 'fixture', 'strength': .6}}
+    response = await post('/ai/generate-image' + ('-stream' if streaming else ''), batch)
+    assert response.status_code == 200
+    charge, = env.st.db.charges
+    assert (charge[1]['anlas'], charge[1]['v5']) == ((8, 0) if exhausted else (4, 1))
+    assert charge[1]['images'] == 2
+    assert len(env.queries) == len(env.generations) == 1
+    assert env.queries[0].headers['authorization'] == env.generations[0].headers['authorization']
+    assert env.st.nai.pool[0].pending_v5 == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('restriction', ['token', 'key', 'budget', 'exhausted_budget'])
+async def test_mixed_batch_keeps_paid_permissions_and_rechecks_budget(env, restriction):
+    env.st.settings.safe_clamp = False
+    batch = {**body(), 'parameters': {**body()['parameters'], 'width': 512, 'height': 512,
+             'steps': 20, 'n_samples': 2, 'image': 'fixture', 'strength': .6}}
+    if restriction == 'token': env.st.nai.pool[0].allow_anlas = False
+    elif restriction == 'key': env.st.db.keys['fixture-1']['allow_anlas'] = False
+    else:
+        env.st.db.keys['fixture-1']['daily_anlas'] = 4 if restriction == 'exhausted_budget' else 3
+        if restriction == 'exhausted_budget': env.subscription = usage(0, True)
+    response = await post('/ai/generate-image', batch)
+    assert response.status_code in (402, 503)
+    assert not env.generations and not env.st.db.charges
+    assert env.st.nai.pool[0].pending_v5 == 0
+
+
+@pytest.mark.asyncio
+async def test_partial_stream_retains_confirmed_exhausted_price(env):
+    env.subscription = usage(0, True)
+    env.frames = event(index=1)
+    batch = {**body(), 'parameters': {**body()['parameters'], 'width': 512, 'height': 512,
+             'steps': 20, 'n_samples': 3, 'image': 'fixture', 'strength': 1}}
+    response = await post('/ai/generate-image-stream', batch)
+    assert b'"event_type": "error"' in response.content
+    charge, = env.st.db.charges
+    assert (charge[1]['images'], charge[1]['anlas'], charge[1]['v5']) == (1, 6, 0)
+    assert len(env.queries) == 1
 
 
 @pytest.mark.asyncio

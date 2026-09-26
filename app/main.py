@@ -20,21 +20,22 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.datastructures import UploadFile
 
 from . import admin
-from .body import read_bounded_body, read_json_body
+from .body import read_json_body
 from .config import load_settings
 from .client_views import subscription_payload
-from .image_events import ImageEventTracker, ImageStreamProtocolError
+from .image_events import ImageEventTracker, ImageStreamProtocolError, STREAM_MEDIA_TYPES
 from .image_streaming import ImageStreamResponse
 from .image_tools import prepare_tool, validate_result, MAX_RESPONSE_BYTES
+from .image_payload import read_image_body
 from .nai import NaiClient, UpstreamError, _wait_cleanup
 from .policy import (
     clamp_image_params,
     clamp_text_params,
     estimate_image_cost,
     image_model_tier,
+    legacy_normal_free_eligible,
     validate_image_references,
     validate_vibe_encoding,
     VIBE_ENCODING_ANLAS,
@@ -43,6 +44,8 @@ from .policy import (
     text_model_host,
 )
 from .state import GateState
+from .upstream_errors import upstream_error_message, text_stream_events
+from .sse import encode_sse
 
 SETTINGS = load_settings()
 STATE: Optional[GateState] = None
@@ -69,10 +72,11 @@ a{color:#7cc4ff} .card{background:#161e29;border:1px solid #243043;border-radius
 
 
 class GateError(Exception):
-    def __init__(self, status: int, message: str):
+    def __init__(self, status: int, message: str, *, billing_uncertain: bool = False):
         super().__init__(message)
         self.status = status
         self.message = message
+        self.billing_uncertain = billing_uncertain
 
 
 def err(status: int, message: str) -> GateError:
@@ -154,7 +158,7 @@ async def gate_error_handler(request: Request, exc: GateError):
 
 @app.exception_handler(Exception)
 async def fallback_handler(request: Request, exc: Exception):
-    return JSONResponse({"error": {"message": f"服务器内部错误: {exc}", "status": 500}},
+    return JSONResponse({"error": {"message": "服务器内部错误，请联系站长", "status": 500}},
                         status_code=500)
 
 
@@ -212,46 +216,11 @@ async def read_json(request: Request, limit_mb: float = 25) -> dict:
 
 
 async def read_image_payload(request: Request, limit_mb: float = 25) -> dict:
-    """兼容原生 NAI JSON 与 Launcher 的 multipart `request` JSON 部分。"""
-    content_type = request.headers.get("content-type", "").lower()
-    if not content_type.startswith("multipart/form-data"):
-        return await read_json(request, limit_mb)
-
+    """JSON 与 multipart 附件统一进入后续权限、参数和费用检查。"""
     try:
-        body = await read_bounded_body(request, int(limit_mb * 1024 * 1024))
+        return await read_image_body(request, int(limit_mb * 1024 * 1024))
     except HTTPException as exc:
         raise err(exc.status_code, exc.detail) from None
-
-    async def receive():
-        return {"type": "http.request", "body": body, "more_body": False}
-
-    # The parser only sees a body whose total size has already been checked.
-    bounded_request = Request(request.scope, receive)
-    try:
-        async with bounded_request.form(max_files=2, max_fields=10) as form:
-            part = form.get("request")
-            if isinstance(part, UploadFile):
-                raw = await part.read()
-            elif isinstance(part, str):
-                raw = part.encode("utf-8")
-            else:
-                raise err(400, "multipart 请求缺少 request JSON 字段")
-            # Close every file, including rejected attachments and duplicates.
-            if any(name != "request" for name, _ in form.multi_items()):
-                raise err(400, "本站未开放携带图片附件的 img2img / 参考图请求")
-    except GateError:
-        raise
-    except Exception:
-        raise err(400, "multipart 请求格式无效或过大") from None
-    if len(raw) > limit_mb * 1024 * 1024:
-        raise err(413, "请求体过大")
-    try:
-        data = json.loads(raw)
-    except (TypeError, ValueError, RecursionError):
-        raise err(400, "multipart request 字段不是合法 JSON")
-    if not isinstance(data, dict):
-        raise err(400, "multipart request 字段必须是 JSON 对象")
-    return data
 
 
 @asynccontextmanager
@@ -315,18 +284,21 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0) -> N
 
 def record(key, kind: str, model: str, status: str, *, images: int = 0,
            anlas: float = 0.0, tokens: int = 0, v5: int = 0,
-           legacy_free_images: int = 0, detail: str = "") -> asyncio.Task:
+           legacy_free_images: int = 0, detail: str = "",
+           unconfirmed_anlas: float = 0.0) -> asyncio.Task:
     """写日志；成功请求额外计入每日配额。"""
     async def _go():
-        await STATE.db.add_log(key["id"], key["name"], kind, model, status,
-                               images=images, anlas=anlas, tokens=tokens, detail=detail)
         if status == "ok":
-            await STATE.db.bump_counters(
-                key["id"], STATE.day(),
-                images=images, anlas=anlas, text_tokens=tokens, requests=1, v5=v5,
-                legacy_free_images=legacy_free_images,
+            await STATE.db.record_success(
+                key["id"], key["name"], kind, model, STATE.day(),
+                images=images, anlas=anlas, tokens=tokens, v5=v5,
+                legacy_free_images=legacy_free_images, detail=detail,
+                unconfirmed_anlas=unconfirmed_anlas,
             )
-            await STATE.db.touch_key(key["id"])
+        else:
+            await STATE.db.add_log(key["id"], key["name"], kind, model, status,
+                                   images=images, anlas=anlas, tokens=tokens, detail=detail,
+                                   unconfirmed_anlas=unconfirmed_anlas)
     task = asyncio.create_task(_go())
     task.add_done_callback(_log_task_failure)
     return task
@@ -387,7 +359,8 @@ async def upstream_call(url: str, payload: dict, accept: str = "*/*", *,
             **({"resolve_v5_cost": resolve_v5_cost} if resolve_v5_cost is not None else {}),
         )
     except UpstreamError as e:
-        raise err(e.status if e.status in (429, 503) else 502, e.message)
+        raise GateError(e.status if e.status in (429, 503) else 502, e.message,
+                        billing_uncertain=e.billing_uncertain) from None
 
 
 def _text_url(model: str, stream: bool = True) -> str:
@@ -411,7 +384,7 @@ async def image_tool(request: Request, operation: str):
     await check_rpm(key)
     if not key["is_admin"] and not (key["allow_img2img"] and STATE.settings.allow_img2img):
         raise err(403, "此 Key 或本站未开放图片处理权限（img2img）")
-    body = await read_json(request)
+    body = await read_image_payload(request)
     if not key["is_admin"]:
         await STATE.wait_for_key_image_slot(key["id"])
     async with acquire_concurrency(key, image=True):
@@ -428,19 +401,24 @@ async def image_tool(request: Request, operation: str):
                 STATE.settings.image_429_cooldown_seconds, retry_after))
 
         async def perform():
+            billing_uncertain = False
             try:
                 resp = await upstream_call(
                     f"{STATE.nai.image_host}/ai/{operation}", payload,
                     on_rate_limited=limited, requires_anlas=cost > 0,
                     image_lane=True, max_response_bytes=MAX_RESPONSE_BYTES,
                 )
+                billing_uncertain = resp.status_code in (200, 201) or resp.status_code >= 500
                 if resp.status_code not in (200, 201):
                     raise err(resp.status_code if 400 <= resp.status_code < 500 else 502,
                               f"图片工具请求失败（上游状态 {resp.status_code}），未记费")
                 media, count = await anyio.to_thread.run_sync(
                     validate_result, resp.content, operation, payload.get("req_type", ""))
             except (GateError, httpx.HTTPError, ValueError, TimeoutError) as exc:
-                record(key, operation, model, "error", detail="图片工具失败，未记费")
+                billing_uncertain |= isinstance(exc, GateError) and exc.billing_uncertain
+                await record(key, operation, model, "error",
+                             detail=exc.message if isinstance(exc, GateError) else "图片工具连接失败或返回无效结果，未记费",
+                             unconfirmed_anlas=cost if billing_uncertain else 0)
                 if isinstance(exc, GateError):
                     raise
                 raise err(502, "图片工具连接失败或返回无效结果，未记费；请勿自动重试") from None
@@ -463,40 +441,52 @@ async def encode_vibe(request: Request):
     key = await authenticate(request)
     check_image_cooldown()
     await check_rpm(key)
-    body = await read_json(request)
+    body = await read_image_payload(request)
+    # Accept Launcher's spelling as well as the existing Gate client field.
+    if "information_extracted" in body:
+        value = body.pop("information_extracted")
+        if "informationExtracted" in body and body["informationExtracted"] != value:
+            raise err(400, "两种 informationExtracted 字段的值不一致")
+        body["informationExtracted"] = value
     problem = validate_vibe_encoding(body)
     if problem:
         raise err(400, problem)
     model = body["model"]
-    payload = {name: body[name] for name in ("image", "model", "informationExtracted")}
+    payload = {"image": body["image"], "model": model,
+               "information_extracted": body["informationExtracted"]}
     estimate = {"anlas": VIBE_ENCODING_ANLAS, "v5": 0}
     await quota_image_check(key, estimate)
 
     async def record_encoding_429(retry_after: float) -> None:
-        cooldown = await STATE.block_image_generation(max(
+        # 回调更新冷却，日志由请求收尾时统一记录。
+        await STATE.block_image_generation(max(
             STATE.settings.image_429_cooldown_seconds, retry_after
         ))
-        record(key, "vibe_encode", model, "error", detail=f"上游限流(429)，冷却 {cooldown} 秒")
 
     async def perform_encoding():
         try:
             resp = await upstream_call(
                 f"{STATE.nai.image_host}/ai/encode-vibe", payload,
                 accept="application/octet-stream", on_rate_limited=record_encoding_429,
-                requires_anlas=True, image_lane=True,
+                requires_anlas=True, image_lane=True, max_response_bytes=MAX_RESPONSE_BYTES,
             )
-        except (GateError, httpx.HTTPError) as exc:
-            record(key, "vibe_encode", model, "error", detail="上游编码请求失败，未记费")
+        except (GateError, httpx.HTTPError, TimeoutError) as exc:
+            await record(key, "vibe_encode", model, "error",
+                         detail=exc.message if isinstance(exc, GateError) else "上游编码请求失败，未记费",
+                         unconfirmed_anlas=VIBE_ENCODING_ANLAS
+                         if isinstance(exc, GateError) and exc.billing_uncertain else 0)
             if isinstance(exc, GateError):
                 raise
-            raise err(502, "Vibe 编码连接失败，请稍后重试") from None
+            raise err(502, "Vibe 编码连接失败，未记费；请勿自动重试") from None
         if resp.status_code not in (200, 201):
-            record(key, "vibe_encode", model, "error", detail=f"upstream {resp.status_code}")
+            await record(key, "vibe_encode", model, "error", detail=f"upstream {resp.status_code}",
+                         unconfirmed_anlas=VIBE_ENCODING_ANLAS if resp.status_code >= 500 else 0)
             raise err(resp.status_code if 400 <= resp.status_code < 500 else 502,
                       f"Vibe 编码失败（上游状态 {resp.status_code}），未记费")
         content_type = resp.headers.get("content-type", "application/octet-stream").lower()
         if not resp.content or "json" in content_type or content_type.startswith("text/"):
-            record(key, "vibe_encode", model, "error", detail="上游未返回有效二进制编码，未记费")
+            await record(key, "vibe_encode", model, "error", detail="上游未返回有效二进制编码，未记费",
+                         unconfirmed_anlas=VIBE_ENCODING_ANLAS)
             raise err(502, "Vibe 编码未返回有效数据，未记费")
         await settle_record(key, "vibe_encode", model, "ok", anlas=VIBE_ENCODING_ANLAS,
                             detail=f"Vibe 编码 {VIBE_ENCODING_ANLAS} Anlas")
@@ -533,16 +523,20 @@ async def _generate_image(request: Request, *, streaming: bool):
         record(key, "image", model, "rejected", detail="模型权限：仅允许 V4.5 及更低")
         raise err(403, "该 Key 仅允许 V4.5 及更低图片模型")
 
-    # img2img 权限：Key 标记 + 全局开关 双重控制（无论是否钳制都先查）
+    # 图生图功能权限与费用分开判断；免费规格也沿用 Anlas 权限要求。
+    if body.get("image") or body.get("mask"):
+        raise err(400, "生图请求的 image 和 mask 请放在 parameters 中")
     problem = validate_image_references(body)
     if problem:
         raise err(400, problem)
     p0 = body.get("parameters", {}) or {}
-    if (p0.get("image") or p0.get("mask")) and not (
-            bool(key["is_admin"]) or
-            (bool(key["allow_img2img"]) and STATE.settings.allow_img2img)):
-        record(key, "image", model, "rejected", detail="img2img 未开放")
-        raise err(400, "本站未开放 img2img / 局部重绘（该功能会消耗 Anlas）")
+    if (p0.get("image") or p0.get("mask")) and not key["is_admin"]:
+        if not (key["allow_img2img"] and STATE.settings.allow_img2img):
+            record(key, "image", model, "rejected", detail="img2img 未开放")
+            raise err(400, "本站未开放 img2img / 局部重绘")
+        if not key["allow_anlas"]:
+            record(key, "image", model, "rejected", detail="img2img 未开通 Anlas 权限")
+            raise err(402, "该 Key 未开通 Anlas 权限，无法使用图生图 / 局部重绘")
 
     # 免费档钳制：只对未开通 Anlas 的 Key 生效；开通 Anlas 的 Key 靠配额约束
     if STATE.settings.safe_clamp and not key["is_admin"] and not key["allow_anlas"]:
@@ -574,13 +568,15 @@ async def _generate_image(request: Request, *, streaming: bool):
     except (TypeError, ValueError, OverflowError) as exc:
         raise err(400, "图片参数无效，无法估算费用") from exc
     legacy_free_images = (
-        image_count if model_tier == "legacy" and not est["anlas"] else 0
+        1 if model_tier == "legacy" and legacy_normal_free_eligible(body) else 0
     )
     if not est["v5"]:
         await quota_image_check(key, est, legacy_free_images=legacy_free_images)
 
-    cost = (f"est={est['anlas']}A" if est["anlas"]
-            else (f"V5额度+{est['v5']}" if est["v5"] else "免费"))
+    cost = "; ".join(part for part in (
+        f"est={est['anlas']}A" if est["anlas"] else "",
+        f"V5额度+{est['v5']}" if est["v5"] else "",
+    ) if part) or "免费"
     detail = "; ".join(notes) if notes else (
         f"{p.get('width')}x{p.get('height')}/{p.get('steps')}step {cost}")
 
@@ -594,30 +590,31 @@ async def _generate_image(request: Request, *, streaming: bool):
                 "官方确认 V5 额度不可用，按 Anlas 估算记账"])
 
     async def record_image_429(retry_after: float) -> None:
-        cooldown = await STATE.block_image_generation(max(
+        # 两种响应均在收尾时记日志，回调只更新冷却。
+        await STATE.block_image_generation(max(
             STATE.settings.image_429_cooldown_seconds, retry_after
         ))
-        record(
-            key, "image", model, "error",
-            detail=(f"上游限流(429)：全站图片生成暂停约 {cooldown} 秒，"
-                    "保护上游 Token"),
-        )
 
     async def perform_generation():
-        resp = await upstream_call(
-            f"{STATE.nai.image_host}/ai/generate-image", body,
-            on_rate_limited=record_image_429,
-            requires_anlas=est["anlas"] > 0,
-            v5_free=est["v5"] > 0,
-            image_count=image_count,
-            image_lane=True,
-            resolve_v5_cost=resolve_v5_cost if est["v5"] else None,
-        )
+        try:
+            resp = await upstream_call(
+                f"{STATE.nai.image_host}/ai/generate-image", body,
+                on_rate_limited=record_image_429,
+                requires_anlas=est["anlas"] > 0,
+                v5_free=est["v5"] > 0,
+                image_count=image_count,
+                # Retain the status to distinguish rejected requests from uncertain charges.
+                image_lane=True, max_response_bytes=MAX_RESPONSE_BYTES,
+                resolve_v5_cost=resolve_v5_cost if est["v5"] else None,
+            )
+        except GateError as exc:
+            await record(key, "image", model, "error", detail=exc.message,
+                         unconfirmed_anlas=est["anlas"] if exc.billing_uncertain else 0)
+            raise
         if resp.status_code not in (200, 201):
-            record(key, "image", model, "error",
-                   detail=f"upstream {resp.status_code}")
-            return Response(resp.content, status_code=resp.status_code,
-                            media_type=resp.headers.get("content-type", "application/json"))
+            await record(key, "image", model, "error", detail=f"upstream {resp.status_code}",
+                         unconfirmed_anlas=est["anlas"] if resp.status_code >= 500 else 0)
+            raise err(resp.status_code, upstream_error_message(resp.status_code))
         await settle_record(key, "image", model, "ok", images=image_count, anlas=est["anlas"],
                             v5=est["v5"], legacy_free_images=legacy_free_images,
                             detail=detail)
@@ -625,9 +622,11 @@ async def _generate_image(request: Request, *, streaming: bool):
                         media_type=resp.headers.get("content-type", "application/octet-stream"))
 
     if streaming:
-        # The official endpoint also accepts MessagePack; the existing Panel
-        # consumes SSE JSON, so make the wire protocol explicit.
-        body.setdefault("parameters", {})["stream"] = "sse"
+        # Existing panels default to SSE; Launcher explicitly requests MessagePack.
+        wire_format = p.get("stream", "sse")
+        if wire_format not in ("sse", "msgpack"):
+            raise err(400, "stream 仅支持 sse 或 msgpack")
+        body.setdefault("parameters", {})["stream"] = wire_format
         dispatched = False
 
         def on_dispatch():
@@ -635,8 +634,9 @@ async def _generate_image(request: Request, *, streaming: bool):
             dispatched = True
 
         async def perform_stream(response):
-            tracker = ImageEventTracker(image_count)
+            tracker = ImageEventTracker(image_count, wire_format)
             failure = None
+            billing_uncertain = False
             try:
                 # Bound total drain time even when an upstream sends endless
                 # progress frames that would keep resetting its read timeout.
@@ -648,15 +648,25 @@ async def _generate_image(request: Request, *, streaming: bool):
                         on_dispatch=on_dispatch,
                         resolve_v5_cost=resolve_v5_cost if est["v5"] else None,
                     ) as handle:
+                        billing_uncertain = True
                         try:
                             content_type = handle.response.headers.get("content-type", "")
-                            if content_type.split(";", 1)[0].strip().lower() != "text/event-stream":
+                            media_type = content_type.split(";", 1)[0].strip().lower()
+                            allowed = {STREAM_MEDIA_TYPES[wire_format]}
+                            if wire_format == "msgpack":
+                                # The endpoint's Swagger still advertises SSE;
+                                # validate binary framing even under that header.
+                                allowed.update(("application/msgpack", "application/octet-stream",
+                                                "text/event-stream"))
+                            if media_type not in allowed:
                                 raise UpstreamError(502, "上游未返回有效的图片事件流")
                             await response.start()
                             async for chunk in handle.response.aiter_bytes():
-                                tracker.feed(chunk)
-                                handle.completed_images = tracker.completed_images
-                                await response.chunk(chunk)
+                                # Never forward part of an error event before it
+                                # has been identified, even across network chunks.
+                                for frame in tracker.frames(chunk):
+                                    handle.completed_images = tracker.completed_images
+                                    await response.chunk(frame)
                                 if tracker.failed:
                                     raise UpstreamError(502, "上游流式生成失败")
                                 if tracker.completed_images == image_count:
@@ -667,6 +677,8 @@ async def _generate_image(request: Request, *, streaming: bool):
                         finally:
                             handle.completed_images = tracker.completed_images
             except (UpstreamError, ImageStreamProtocolError, httpx.HTTPError, TimeoutError) as exc:
+                billing_uncertain |= (isinstance(exc, UpstreamError) and exc.billing_uncertain
+                                      or isinstance(exc, TimeoutError) and dispatched)
                 status = exc.status if isinstance(exc, UpstreamError) else 502
                 message = exc.message if isinstance(exc, UpstreamError) else (
                     str(exc) if isinstance(exc, ImageStreamProtocolError) else "图片流连接中断或超时")
@@ -674,19 +686,25 @@ async def _generate_image(request: Request, *, streaming: bool):
                 await response.error(status, message)
             finally:
                 completed = tracker.completed_images
+                settled_anlas = 0
                 if completed:
-                    # Do not re-estimate partial batches as free single images.
-                    # Charge only their share of the prechecked batch estimate.
+                    # 按完整结果重算首张减免，沿用派发前确认的 V5 额度状态。
+                    completed_body = {**body, "parameters": {**p, "n_samples": completed}}
+                    settled = estimate_image_cost(
+                        completed_body, v5_allowance_available=bool(est["v5"]))
+                    settled_anlas = settled["anlas"]
                     await settle_record(
                         key, "image_stream", model, "ok", images=completed,
-                        anlas=est["anlas"] * completed / image_count,
-                        v5=est["v5"] if completed else 0,
-                        legacy_free_images=completed if legacy_free_images else 0,
+                        anlas=settled["anlas"], v5=settled["v5"],
+                        legacy_free_images=legacy_free_images,
                         detail=detail + (f"; 完成 {completed}/{image_count}" if completed < image_count else ""),
                     )
                 if failure or not completed:
+                    # 未结算部分单独记为待核对费用。
                     await record(key, "image_stream", model, "error",
-                                 detail=failure or "未收到最终图片，未记费")
+                                 detail=failure or "未收到最终图片，未记费",
+                                 unconfirmed_anlas=max(0, est["anlas"]-settled_anlas)
+                                 if billing_uncertain else 0)
 
         async def run_stream(response):
             try:
@@ -700,7 +718,7 @@ async def _generate_image(request: Request, *, streaming: bool):
             except GateError as exc:
                 await response.error(exc.status, exc.message)
 
-        return ImageStreamResponse(run_stream)
+        return ImageStreamResponse(run_stream, wire_format)
 
     if not key["is_admin"]:
         await STATE.wait_for_key_image_slot(key["id"])
@@ -763,7 +781,7 @@ async def _suggest_tags(request: Request, key):
             record(key, "tags", "", "error", detail=f"upstream {exc.status}")
             raise err(exc.status if exc.status in (429, 503) else 502, exc.message)
     if resp.status_code != 200:
-        return Response(resp.content, status_code=resp.status_code, media_type="application/json")
+        raise err(resp.status_code, upstream_error_message(resp.status_code))
     record(key, "tags", "", "ok")
     return Response(resp.content, media_type="application/json")
 
@@ -823,28 +841,24 @@ async def generate_stream(request: Request):
 
         async def passthrough() -> AsyncIterator[bytes]:
             counted = 0
-            buf = b""
             hard_cut = False
             try:
-                async for chunk in resp.aiter_bytes():
-                    buf += chunk
-                    *lines, buf = buf.split(b"\n")
-                    for line in lines:
-                        s = line.strip()
-                        if s.startswith(b"data:"):
-                            data = s[5:].strip()
-                            if data != b"[DONE]":
-                                counted += 1
-                                if 0 <= daily_limit <= already + counted:
-                                    hard_cut = True
-                                    yield b"data: [DONE]\n\n"
-                                    return
-                        yield line + b"\n"
-                    if buf.endswith(b"\r"):
-                        pass
+                async for raw, event, payload in text_stream_events(resp):
+                    if payload is not None:
+                        counted += 1
+                        if 0 <= daily_limit <= already + counted:
+                            hard_cut = True
+                            yield b"data: [DONE]\n\n"
+                            return
+                    yield encode_sse(raw, event)
+            except UpstreamError as exc:
+                record(key, "text", model, "error", detail=exc.message)
+                yield encode_sse(json.dumps({"error": exc.message, "message": exc.message,
+                                             "status_code": exc.status}, ensure_ascii=False).encode(), b"error")
             finally:
                 d = ("达到每日上限被截断; " if hard_cut else "") + "; ".join(notes)
-                record(key, "text", model, "ok", tokens=counted, detail=d.strip("; "))
+                if counted:
+                    record(key, "text", model, "ok", tokens=counted, detail=d.strip("; "))
 
         return TextStreamResponse(passthrough(), resources, media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache",
@@ -871,7 +885,7 @@ async def generate_text(request: Request):
         resp = await upstream_call(_text_url(model, False), body, accept="application/json")
     if resp.status_code != 200:
         record(key, "text", model, "error", detail=f"upstream {resp.status_code}")
-        return Response(resp.content, status_code=resp.status_code, media_type="application/json")
+        raise err(resp.status_code, upstream_error_message(resp.status_code))
     try:
         out = (resp.json() or {}).get("output", "")
     except Exception:
@@ -887,7 +901,7 @@ async def generate_voice(request: Request):
     async with acquire_concurrency(key):
         resp = await upstream_call(f"{STATE.nai.legacy_text_host}/ai/generate-voice", body)
     if resp.status_code != 200:
-        return Response(resp.content, status_code=resp.status_code, media_type="application/json")
+        raise err(resp.status_code, upstream_error_message(resp.status_code))
     record(key, "voice", str(body.get("voice", "")), "ok")
     return Response(resp.content, media_type=resp.headers.get("content-type", "audio/mpeg"))
 
@@ -986,46 +1000,35 @@ async def v1_chat(request: Request):
 
         async def run_stream() -> AsyncIterator[bytes]:
             """消费 NAI SSE；流式时产出 OpenAI chunk，非流式时只收集文本。"""
-            buf = b""
             try:
                 if want_stream:
                     yield ("data: " + openai_chunk("", None) + "\n\n").encode()
-                done = False
-                async for chunk in resp.aiter_bytes():
-                    if done:
+                async for _raw, _event, obj in text_stream_events(resp):
+                    if obj is None:
                         break
-                    buf += chunk
-                    *lines, buf = buf.split(b"\n")
-                    for line in lines:
-                        s = line.strip()
-                        if not s.startswith(b"data:"):
-                            continue
-                        data = s[5:].strip()
-                        if data == b"[DONE]":
-                            done = True
-                            break
-                        text = ""
-                        try:
-                            obj = json.loads(data)
-                            if isinstance(obj, dict):
-                                text = str(obj.get("token", ""))
-                        except Exception:
-                            text = data.decode("utf-8", "replace")
-                        if not text:
-                            continue
-                        result["counted"] += 1
-                        if 0 <= daily_limit <= already + result["counted"]:
-                            done = True
-                            break
-                        if want_stream:
-                            yield ("data: " + openai_chunk(text, None) + "\n\n").encode()
-                        else:
-                            result["collected"].append(text)
+                    text = obj["token"]
+                    if not text:
+                        continue
+                    result["counted"] += 1
+                    if 0 <= daily_limit <= already + result["counted"]:
+                        break
+                    if want_stream:
+                        yield ("data: " + openai_chunk(text, None) + "\n\n").encode()
+                    else:
+                        result["collected"].append(text)
                 if want_stream:
                     yield ("data: " + openai_chunk("", "stop") + "\n\n").encode()
                     yield b"data: [DONE]\n\n"
+            except UpstreamError as exc:
+                record(key, "chat", model, "error", detail=exc.message)
+                if not want_stream:
+                    raise err(exc.status, exc.message) from None
+                yield encode_sse(json.dumps({"error": {"message": exc.message, "status": exc.status}},
+                                             ensure_ascii=False).encode())
+                yield b"data: [DONE]\n\n"
             finally:
-                record(key, "chat", model, "ok", tokens=result["counted"])
+                if result["counted"]:
+                    record(key, "chat", model, "ok", tokens=result["counted"])
 
         if want_stream:
             return TextStreamResponse(run_stream(), resources, media_type="text/event-stream",

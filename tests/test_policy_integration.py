@@ -34,11 +34,25 @@ def test_vibe_surcharge_preserves_base_opus_discount(vibes, anlas):
     assert opus_free_eligible(body) is (anlas == 0)
 
 
-def test_precise_is_charged_per_reference_per_output_image():
+def test_precise_fee_keeps_single_request_floor_and_batch_discount():
     assert estimate_image_cost(payload(precise=2)) == {"anlas": 10, "v5": 0}
     assert not opus_free_eligible(payload(precise=1))
-    assert estimate_image_cost(payload(precise=2, n_samples=2)) == {"anlas": 60, "v5": 0}
+    assert estimate_image_cost(payload(precise=2, n_samples=2)) == {"anlas": 30, "v5": 0}
     assert estimate_image_cost(payload(precise=1), is_opus=False) == {"anlas": 25, "v5": 0}
+
+
+@pytest.mark.parametrize("references,n,steps,strength,expected", [
+    # 2026-09-24 官方余额差额，覆盖附加费的首张减免与单张下限。
+    ({"precise": 1}, 1, 20, 1, 5),
+    ({"precise": 1}, 2, 20, 1, 9),
+    ({"precise": 1}, 3, 20, 1, 18),
+    ({"precise": 1}, 2, 29, .1, 14),
+    ({"vibes": 5}, 3, 20, 1, 12),
+])
+def test_recorded_reference_batch_billing(references, n, steps, strength, expected):
+    body = payload(**references, width=512, height=512, steps=steps,
+                   n_samples=n, image=PNG, strength=strength)
+    assert estimate_image_cost(body) == {"anlas": expected, "v5": 0}
 
 
 def test_v3_raw_vibes_do_not_acquire_v4_encoding_or_multivibe_charges():
@@ -86,6 +100,16 @@ def test_cached_vibe_form_cannot_bypass_surcharge():
     p["reference_image_multiple_cached"] = [{"cache_secret_key": "b" * 64, "data": item} for item in p.pop("reference_image_multiple")]
     assert validate_image_references(body) is None
     assert estimate_image_cost(body)["anlas"] == 2
+
+
+@pytest.mark.parametrize("model", ["nai-diffusion-3", "nai-diffusion-4-full", "nai-diffusion-4-5-full"])
+def test_only_encoded_vibes_can_omit_extraction_amount(model):
+    body = payload(model, vibes=1)
+    del body["parameters"]["reference_information_extracted_multiple"]
+    assert (validate_image_references(body) is None) == (model != "nai-diffusion-3")
+    for invalid in ([], [float("nan")], [True]):
+        body["parameters"]["reference_information_extracted_multiple"] = invalid
+        assert validate_image_references(body)
 
 
 

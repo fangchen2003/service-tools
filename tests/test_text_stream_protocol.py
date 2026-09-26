@@ -7,6 +7,7 @@ import pytest
 
 from test_nai_integration import make_client
 from test_text_stream_lifetime import state, body, post
+from test_image_stream_routes import Frames
 
 
 @pytest.mark.asyncio
@@ -87,3 +88,34 @@ async def test_cancel_during_rejection_close_finishes_cleanup():
         with pytest.raises(asyncio.CancelledError):
             await task
         assert frames.closed and not frames.read
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chat,stream", [(False, True), (True, True), (True, False)])
+@pytest.mark.parametrize("error", [
+    b'event: error\r\ndata: {"message":"fixture-private-upstream"}\r\n\r\n',
+    b'data: {"error":"fixture-private-upstream"}\r\n\r\n',
+    b'data: <html>fixture-private-upstream</html>\r\n\r\n',
+])
+async def test_stream_errors_filtered_before_delivery_and_count_only_prior_tokens(state, chat, stream, error):
+    wire = b'data: {"token":"hello"}\r\n\r\n' + error
+    frames = Frames([bytes([byte]) for byte in wire])
+
+    async def open_stream(*args):
+        return httpx.Response(200, stream=frames)
+
+    state.nai.stream = open_stream
+    path = "/v1/chat/completions" if chat else "/ai/generate-stream"
+    response = await post(path, body(chat, stream))
+    await asyncio.sleep(0)
+    assert response.status_code == (200 if stream else 502)
+    assert "fixture-private" not in response.text
+    assert "error" in response.text
+    if stream:
+        assert "hello" in response.text
+    if chat and stream:
+        assert '"finish_reason": "stop"' not in response.text
+        assert response.text.endswith("data: [DONE]\n\n")
+    assert sum(values.get("text_tokens", 0) for _, values in state.db.charges) == 1
+    assert frames.closed and state.global_active == 0
+    assert all("fixture-private" not in str(log) for log in state.db.logs)

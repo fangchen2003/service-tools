@@ -3,6 +3,7 @@ import asyncio
 import base64
 import io
 import zipfile
+from contextlib import asynccontextmanager
 
 import anyio
 import httpx
@@ -54,6 +55,14 @@ class FakeHTTP:
         if self.operation:
             return await self.operation()
         return httpx.Response(self.status, headers={'retry-after': '5'}, content=self.content)
+
+    @asynccontextmanager
+    async def stream(self, *args, **kwargs):
+        response = await self.request(*args, **kwargs)
+        try:
+            yield response
+        finally:
+            await response.aclose()
 
 
 def make_client(db=None, http=None, *, tokens=None, allow=None):
@@ -188,9 +197,10 @@ def test_unknown_transport_result_never_retries_or_counts_as_success():
             raise httpx.ReadTimeout('offline ambiguous outcome')
         http = FakeHTTP(operation=fail)
         client, db = make_client(http=http)
-        with pytest.raises(httpx.ReadTimeout):
+        with pytest.raises(UpstreamError) as error:
             await client.request('POST', 'https://offline.invalid', v5_free=True,
                                  image_count=1, image_lane=True)
+        assert error.value.billing_uncertain
         assert len(http.calls) == 1 and client.pool[0].pending_v5 == 0
         assert db.v5 == {} and db.images == {}
     asyncio.run(run())
@@ -223,6 +233,7 @@ async def test_invalid_image_success_releases_reservation_without_accounting(sta
         await client.request('POST', 'https://offline.invalid', image_count=count,
                              v5_free=True, image_lane=True)
     assert error.value.status == 502 and 'private' not in error.value.message
+    assert error.value.billing_uncertain
     assert len(http.calls) == 1 and client.pool[0].pending_v5 == 0
     assert client.pool[0].last_ok == 0 and db.v5 == db.images == {}
 
@@ -249,3 +260,113 @@ async def test_invalid_image_success_never_reaches_user_ledger(monkeypatch):
     assert response.status_code == 502
     assert not state.db.charges and not upstream_db.images
     assert not state.image_budget_lock.locked() and state.global_active == 0
+    assert state.db.logs[-1][1]['unconfirmed_anlas'] == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure,uncertain', [
+    (httpx.ConnectError, False), (httpx.ConnectTimeout, False), (httpx.PoolTimeout, False),
+    (httpx.ReadError, True), (httpx.ReadTimeout, True), (httpx.WriteError, True),
+    (httpx.WriteTimeout, True), (httpx.RemoteProtocolError, True), (httpx.DecodingError, True),
+])
+async def test_transport_failure_preserves_dispatch_uncertainty(failure, uncertain):
+    async def fail():
+        raise failure('private upstream token')
+    http = FakeHTTP(operation=fail)
+    client, db = make_client(http=http)
+    with pytest.raises(UpstreamError) as error:
+        await client.request('POST', 'https://offline.invalid', image_count=1,
+                             v5_free=True, image_lane=True)
+    assert error.value.billing_uncertain is uncertain
+    assert 'private' not in error.value.message
+    assert len(http.calls) == 1 and not db.images and not db.v5
+    assert not client.pool[0].pending_v5
+
+
+@pytest.mark.asyncio
+async def test_non_image_transport_error_keeps_original_contract():
+    async def fail():
+        raise httpx.ReadTimeout('offline text error')
+    client, _ = make_client(http=FakeHTTP(operation=fail))
+    with pytest.raises(httpx.ReadTimeout):
+        await client.request('POST', 'https://offline.invalid')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('operation,cost', [
+    ('generate-image', 2), ('upscale', 1), ('augment-image', 65), ('encode-vibe', 2),
+])
+@pytest.mark.parametrize('outcome,uncertain', [
+    ('connect', False), ('rejected', False), ('limited', False),
+    ('read', True), ('server_error', True), ('invalid_result', True),
+    ('rejected_body', False), ('limited_body', False), ('server_body', True),
+])
+async def test_nonstream_anomaly_reaches_ledger_without_charging_or_retrying(
+        monkeypatch, operation, cost, outcome, uncertain):
+    """Run real dispatch, validation and ASGI paths with an offline upstream."""
+    from app import main
+    from test_generation_integration import FakeState, image_body, encoding_body, post
+    from test_image_tools import body as tool_body
+
+    payload = (image_body(width=256, height=256, steps=29) if operation == 'generate-image'
+               else encoding_body() if operation == 'encode-vibe'
+               else tool_body('bg-removal' if operation == 'augment-image' else None))
+    calls = []
+
+    class BrokenBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'partial'
+            raise httpx.ReadError('private upstream token')
+
+    async def handler(request):
+        calls.append(request.url.path)
+        if outcome in ('connect', 'read'):
+            failure = httpx.ConnectError if outcome == 'connect' else httpx.ReadError
+            raise failure('private upstream token')
+        if outcome.endswith('_body'):
+            return httpx.Response({'rejected_body': 400, 'limited_body': 429, 'server_body': 503}[outcome],
+                                  stream=BrokenBody())
+        status = {'rejected': 400, 'limited': 429, 'server_error': 503,
+                  'invalid_result': 200}[outcome]
+        return httpx.Response(status, headers={'content-type': 'application/json'},
+                              content=b'{"error":"private upstream token"}')
+
+    state = FakeState()
+    state.nai, upstream_db = make_client()
+    monkeypatch.setattr(main, 'STATE', state)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        state.nai._client = http
+        response = await post('/ai/' + operation, payload)
+    assert response.status_code >= 400
+    # One operation only: no generation retry or official balance query.
+    assert calls == ['/ai/' + operation]
+    assert len(state.db.logs) == 1
+    pending = [row for _, row in state.db.logs if row['unconfirmed_anlas'] > 0]
+    assert len(pending) == int(uncertain)
+    if pending:
+        assert pending[0]['unconfirmed_anlas'] == cost
+    assert all('private' not in row['detail'] for _, row in state.db.logs)
+    assert not state.db.charges and not upstream_db.images and not upstream_db.v5
+    assert not state.image_budget_lock.locked() and state.global_active == 0
+    assert not state.nai.pool[0].pending_v5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,uncertain', [(200, True), (400, False), (429, False), (503, True)])
+async def test_bounded_response_uses_known_headers_when_body_breaks(status, uncertain):
+    class BrokenBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'partial'
+            raise httpx.ReadError('private response body')
+
+    async def handler(request):
+        return httpx.Response(status, stream=BrokenBody())
+
+    client, db = make_client()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client._client = http
+        with pytest.raises(UpstreamError) as error:
+            await client.request('POST', 'https://offline.invalid', image_lane=True,
+                                 max_response_bytes=1024)
+    assert error.value.billing_uncertain is uncertain
+    assert not db.images and not db.v5

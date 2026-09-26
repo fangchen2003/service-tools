@@ -94,7 +94,7 @@ def state(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["/ai/generate-image-stream", "/nai/ai/generate-image-stream"])
 async def test_stream_reuses_reference_validation_cost_and_sse_wire_format(state, path):
-    response = await post(path, image_body(precise=1, stream="msgpack"))
+    response = await post(path, image_body(precise=1))
     assert response.status_code == 200
     assert response.content == event("intermediate") + event()
     assert response.headers["x-accel-buffering"] == "no"
@@ -117,14 +117,73 @@ async def test_empty_progress_error_truncated_and_malformed_never_charge(state, 
 
 
 @pytest.mark.asyncio
-async def test_partial_batch_charges_only_completed_share_and_counts_duplicate_once(state):
+async def test_partial_batch_charges_completed_reference_fee_and_counts_duplicate_once(state):
     body = image_body(precise=1, n_samples=2)
     state.nai.frames = Frames([event(), event(), httpx.ReadError("private transport detail")])
     response = await post("/ai/generate-image-stream", body)
     assert b"private transport detail" not in response.content
     assert state.nai.counts == [1]
     assert state.db.charges[0][1]["images"] == 1
-    assert state.db.charges[0][1]["anlas"] == estimate_image_cost(body)["anlas"] / 2
+    assert state.db.charges[0][1]["anlas"] == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('completed,anlas', [(2, 9), (3, 18)])
+async def test_stream_reference_batch_discount_uses_completed_count(state, completed, anlas):
+    body = image_body(precise=1, width=512, height=512, steps=20,
+                      image='fixture', strength=1, n_samples=3)
+    state.nai.frames = Frames([*(event(index=i) for i in range(completed)),
+                              httpx.ReadError('fixture')])
+    await post('/ai/generate-image-stream', body)
+    assert state.db.charges[0][1]['anlas'] == anlas
+    assert state.db.charges[0][1]['images'] == completed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('indices,anlas', [([0], 0), ([1], 0), ([1, 0, 1], 4)])
+async def test_partial_batch_applies_one_discount_to_completed_images(state, indices, anlas):
+    # Gate 只对完整结果结算；折扣按已完成张数重算，不由到达顺序或重复事件决定。
+    body = image_body(width=512, height=512, steps=20, image='fixture', strength=1, n_samples=3)
+    state.nai.frames = Frames([*(event(index=i) for i in indices), httpx.ReadError('fixture')])
+    await post('/ai/generate-image-stream', body)
+    charge, = state.db.charges
+    assert charge[1]['anlas'] == anlas
+    assert charge[1]['images'] == len(set(indices))
+    assert charge[1]['legacy_free_images'] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('paid,finals,expected_charge,expected_uncertain', [
+    (True, [], 0, 2), (True, [0], 2, 0), (False, [], 0, 0),
+])
+async def test_stream_anomaly_is_estimated_separately_from_user_charge(
+        state, paid, finals, expected_charge, expected_uncertain):
+    state.nai.frames = Frames([event('intermediate'), *(event(index=i) for i in finals),
+                              httpx.ReadError('private failure')])
+    await post('/ai/generate-image-stream', image_body(width=256, height=256, steps=29 if paid else 28))
+    assert sum(row['anlas'] for _, row in state.db.charges) == expected_charge
+    assert sum(row.get('unconfirmed_anlas', 0) for _, row in state.db.logs) == expected_uncertain
+    assert sum(row.get('unconfirmed_anlas', 0) > 0 for _, row in state.db.logs) == bool(expected_uncertain)
+    assert state.global_active == 0 and not state.image_budget_lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_partial_reference_batch_records_only_unsettled_difference_once(state):
+    state.nai.frames = Frames([event(), event(), httpx.ReadError('fixture')])
+    await post('/ai/generate-image-stream', image_body(
+        precise=1, width=512, height=512, steps=20, image='fixture', strength=1, n_samples=3))
+    assert sum(row['anlas'] for _, row in state.db.charges) == 5
+    pending = [row for _, row in state.db.logs if row.get('unconfirmed_anlas', 0) > 0]
+    assert len(pending) == 1 and pending[0]['unconfirmed_anlas'] == 13  # 整单18，完整首张5。
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('uncertain', [False, True])
+async def test_stream_before_headers_preserves_upstream_outcome_flag(state, uncertain):
+    state.nai.error = UpstreamError(502, 'fixture', billing_uncertain=uncertain)
+    await post('/ai/generate-image-stream', image_body(width=256, height=256, steps=29))
+    assert not state.db.charges
+    assert sum(row.get('unconfirmed_anlas', 0) for _, row in state.db.logs) == (2 if uncertain else 0)
 
 
 @pytest.mark.asyncio
@@ -133,6 +192,7 @@ async def test_http_failure_before_stream_and_cooldown_stays_http_error(state):
     response = await post("/ai/generate-image-stream", image_body())
     assert response.status_code == 429 and response.headers["content-type"] == "application/json"
     assert state.cooldowns == [60] and not state.db.charges
+    assert len(state.db.logs) == 1 and state.db.logs[0][1]['unconfirmed_anlas'] == 0
 
 
 @pytest.mark.asyncio
@@ -207,6 +267,7 @@ async def test_disconnect_does_not_release_budget_or_skip_final_settlement(state
     assert state.nai.frames.closed and state.nai.counts == [1]
     assert state.db.charges[0][1]["anlas"] == 5
     assert state.global_active == 0 and not state.image_budget_lock.locked()
+    assert not any(row.get('unconfirmed_anlas', 0) for _, row in state.db.logs)
 
 
 @pytest.mark.asyncio

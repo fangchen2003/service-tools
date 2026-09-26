@@ -31,7 +31,7 @@ def test_fragmented_progress_and_final(newline, chunk_size):
         tracker.feed(stream[pos:pos + chunk_size])
     tracker.finish()
     assert tracker.completed_images == 1 and not tracker.failed
-    assert not tracker._line and not tracker._data
+    assert not tracker._sse._line and not tracker._sse._data
 
 
 def test_multiple_out_of_order_finals_duplicate_sample_and_generation():
@@ -155,7 +155,7 @@ def test_per_event_limit_includes_fragmented_lines(monkeypatch):
     tracker.feed(b"data: " + b"x" * 18)
     with pytest.raises(ImageStreamProtocolError):
         tracker.feed(b"x")
-    assert tracker.failed and not tracker._line and not tracker._data
+    assert tracker.failed and not tracker._sse._line and not tracker._sse._data
 
 
 def test_total_limit_bounds_unending_progress(monkeypatch):
