@@ -68,7 +68,7 @@ class Settings:
     safe_clamp: bool = _bool("SAFE_CLAMP", True)
     max_pixels: int = _int("MAX_PIXELS", 1024 * 1024)
     max_steps: int = _int("MAX_STEPS", 28)
-    allow_img2img: bool = _bool("ALLOW_IMG2IMG", False)  # img2img/局部重绘会消耗 Anlas
+    allow_img2img: bool = _bool("ALLOW_IMG2IMG", False)  # 独立功能权限；费用由图片参数决定
 
     # ---- 全站月度 Anlas 预算（所有 Key 共享的总闸，后台可改）----
     # Opus Anlas 每月账单日回满到 10000（不叠加），预算建议留 20~30% 余量

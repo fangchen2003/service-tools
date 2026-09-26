@@ -82,6 +82,7 @@ async def test_routes_permissions_and_success(state, prefix, operation, tool, co
     response = await post(url,data)
     assert response.status_code == 200 and response.headers['cache-control'] == 'no-store'
     assert len(state.db.charges) == 1
+    assert all(row['unconfirmed_anlas'] == 0 for _, row in state.db.logs)
     assert state.db.charges[0][1]['anlas'] == cost
     assert state.db.charges[0][1]['v5'] == 0 and state.db.charges[0][1]['images'] == count
     options = state.nai.calls[0][3]
@@ -169,8 +170,9 @@ async def test_real_client_enforces_paid_token_and_response_limit():
     client,_=make_client()
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client._client=http
-        with pytest.raises(UpstreamError):
+        with pytest.raises(UpstreamError) as error:
             await client.request('POST','https://fixture.invalid',image_lane=True,max_response_bytes=16)
+        assert error.value.billing_uncertain
     assert len(calls)==1
 
 

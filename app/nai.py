@@ -18,10 +18,11 @@ from .image_tools import validate_result
 
 
 class UpstreamError(Exception):
-    def __init__(self, status: int, message: str):
+    def __init__(self, status: int, message: str, *, billing_uncertain: bool = False):
         super().__init__(message)
         self.status = status
         self.message = message
+        self.billing_uncertain = billing_uncertain
 
 
 @dataclass
@@ -292,6 +293,8 @@ class NaiClient:
             if ts is None:
                 raise self._unavailable(requires_anlas, v5_free)
             succeeded = False
+            send_started = False
+            response_status = None
             try:
                 if image_lane:
                     if wait_for_image_slot:
@@ -311,6 +314,7 @@ class NaiClient:
                 async with ts.dispatch_lock:
                     if not ts.admin_enabled:
                         continue  # 停用发生在排队期间；改选其他上游，且不发出此请求。
+                    send_started = True
                     if max_response_bytes is None:
                         resp = await self._client.request(
                             method, url, json=json_body, headers=self._headers(ts, accept))
@@ -319,21 +323,27 @@ class NaiClient:
                             async with self._client.stream(
                                 method, url, json=json_body, headers=self._headers(ts, accept)
                             ) as stream:
+                                response_status = stream.status_code
                                 data = bytearray()
                                 async for chunk in stream.aiter_bytes():
                                     if len(data) + len(chunk) > max_response_bytes:
-                                        raise UpstreamError(502, "上游图片工具结果过大")
+                                        raise UpstreamError(
+                                            502, "上游图片工具结果过大",
+                                            billing_uncertain=image_lane and (
+                                                response_status in (200, 201) or response_status >= 500))
                                     data.extend(chunk)
                                 headers = {k: v for k, v in stream.headers.items()
                                            if k.lower() not in {"content-encoding", "content-length"}}
                                 resp = httpx.Response(stream.status_code, headers=headers,
                                                       content=bytes(data))
+                response_status = resp.status_code
                 if resp.status_code in (200, 201) and image_count > 0:
                     try:
                         await anyio.to_thread.run_sync(lambda: validate_result(
                             resp.content, "generate-image", "", expected_images=image_count))
                     except ValueError:
-                        raise UpstreamError(502, "上游未返回完整有效的图片结果") from None
+                        raise UpstreamError(502, "上游未返回完整有效的图片结果",
+                                            billing_uncertain=True) from None
                 succeeded = resp.status_code in (200, 201)
                 if resp.status_code == 429:
                     await self._rate_limit(ts, resp, on_rate_limited)
@@ -346,6 +356,18 @@ class NaiClient:
                 if succeeded:
                     self.mark_ok(ts)
                 return resp
+            except (httpx.HTTPError, TimeoutError) as exc:
+                if not image_lane:
+                    raise
+                # 已发送请求的读写故障可能产生扣款；明确的 4xx 除外。
+                uncertain = send_started and (
+                    response_status is None or response_status in (200, 201) or response_status >= 500
+                ) and isinstance(exc, (
+                    httpx.ReadError, httpx.ReadTimeout, httpx.WriteError,
+                    httpx.WriteTimeout, httpx.RemoteProtocolError, httpx.DecodingError, TimeoutError,
+                ))
+                raise UpstreamError(502, "上游图片请求连接中断或超时，未记费；请勿自动重试",
+                                    billing_uncertain=uncertain) from None
             finally:
                 await _wait_cleanup(asyncio.create_task(self._settle(
                     ts, succeeded=succeeded, v5_free=v5_free, image_count=image_count
@@ -374,7 +396,7 @@ class NaiClient:
         on_dispatch: Optional[Callable[[], None]] = None,
         resolve_v5_cost: Optional[Callable[[bool], Awaitable[None]]] = None,
     ) -> AsyncIterator[ImageStreamHandle]:
-        """图片 SSE 不重试；调用方只在确认完整最终图片后增加 completed_images。"""
+        """图片流不重试；调用方只在确认完整最终图片后增加 completed_images。"""
         if self._client is None:
             raise RuntimeError("client not started")
         ts = await self.pick_token(requires_anlas=requires_anlas, v5_free=v5_free)
@@ -382,6 +404,7 @@ class NaiClient:
             raise self._unavailable(requires_anlas, v5_free)
         resp: Optional[httpx.Response] = None
         handle: Optional[ImageStreamHandle] = None
+        send_started = False
 
         async def cleanup() -> None:
             close_failed = False
@@ -409,13 +432,16 @@ class NaiClient:
                     v5_free = False
             req = self._client.build_request(
                 "POST", url, json=json_body,
-                headers=self._headers(ts, "text/event-stream"),
+                headers=self._headers(ts, "application/x-msgpack" if
+                                      json_body.get("parameters", {}).get("stream") == "msgpack"
+                                      else "text/event-stream"),
             )
             async with ts.dispatch_lock:
                 if not ts.admin_enabled:
                     raise UpstreamError(503, "上游令牌已停用，未发送生图")
                 if on_dispatch is not None:
                     on_dispatch()
+                send_started = True
                 resp = await self._client.send(req, stream=True)
             if resp.status_code == 429:
                 await self._rate_limit(ts, resp, on_rate_limited)
@@ -425,11 +451,18 @@ class NaiClient:
                 raise UpstreamError(502, "上游令牌已失效（401），请站长更换 NovelAI Token")
             if resp.status_code not in (200, 201):
                 status = resp.status_code if 400 <= resp.status_code <= 599 else 502
-                raise UpstreamError(status, f"上游图片流请求失败（HTTP {status}）")
+                raise UpstreamError(status, f"上游图片流请求失败（HTTP {status}）",
+                                    billing_uncertain=resp.status_code >= 500)
             handle = ImageStreamHandle(resp)
             yield handle
-        except httpx.HTTPError:
-            raise UpstreamError(502, "上游图片流连接中断，请检查任务结果后再决定是否重试") from None
+        except httpx.HTTPError as exc:
+            # 读写中断可能发生在上游已开始生成之后。
+            uncertain = send_started and isinstance(exc, (
+                httpx.ReadError, httpx.ReadTimeout, httpx.WriteError,
+                httpx.WriteTimeout, httpx.RemoteProtocolError,
+            ))
+            raise UpstreamError(502, "上游图片流连接中断，请检查任务结果后再决定是否重试",
+                                billing_uncertain=uncertain) from None
         finally:
             await _wait_cleanup(asyncio.create_task(cleanup()))
 

@@ -5,6 +5,45 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.database import Database
+from app.database import SCHEMA
+
+
+def test_anomaly_migration_timezone_and_history_stay_separate_from_quotas(tmp_path):
+    path = tmp_path / 'old-anomaly.db'
+    with sqlite3.connect(path) as raw:
+        raw.executescript(SCHEMA.replace('    unconfirmed_anlas REAL NOT NULL DEFAULT 0,\n', ''))
+        raw.execute("INSERT INTO api_keys(id,name,token,created_at) VALUES(1,'fixture','fixture',0)")
+        raw.execute("INSERT INTO usage_log(ts,key_id,kind,status,detail) VALUES(0,1,'image_stream','error','old failure')")
+        raw.execute("ALTER TABLE usage_log ADD COLUMN custom_note TEXT DEFAULT 'preserved'")
+
+    async def run():
+        for iteration in range(2):
+            db = Database(str(path), 'Asia/Shanghai')
+            await db.connect()
+            try:
+                if iteration == 0:
+                    for stamp, amount in [('2026-08-31T23:59:59',16), ('2026-09-01T00:00:00',5),
+                                          ('2026-09-24T23:59:59',2), ('2026-09-25T00:00:00',3),
+                                          ('2026-09-25T23:59:59',4), ('2026-09-26T00:00:00',8)]:
+                        await db.add_log(1, 'fixture', 'image_stream', 'nai-diffusion-4-5-full',
+                                         'error', detail=stamp, unconfirmed_anlas=amount)
+                        ts = datetime.fromisoformat(stamp).replace(tzinfo=ZoneInfo(db.tz)).timestamp()
+                        await db._db.execute('UPDATE usage_log SET ts=? WHERE detail=?', (ts,stamp))
+                    await db._db.commit()
+                    await db.bump_counters(1, '2026-09-25', images=1, anlas=9, requests=1)
+                    await db.reset_daily_image_quota(1, '2026-09-25')
+                    await db.delete_key(1)
+                overview = await db.overview('2026-09-25', ['2026-09-25'])
+                assert (overview['today']['unconfirmed_anlas'], overview['today']['unconfirmed_requests']) == (7,2)
+                assert (overview['month']['unconfirmed_anlas'], overview['month']['unconfirmed_requests']) == (14,4)
+                assert overview['today']['anlas'] == overview['month']['anlas'] == 9
+                assert await db.month_anlas_all('2026-09') == 9
+                old = await (await db._db.execute("SELECT * FROM usage_log WHERE detail='old failure'")).fetchone()
+                assert old['unconfirmed_anlas'] == 0 and old['custom_note'] == 'preserved'
+                assert len(await db.list_logs()) == 7
+            finally:
+                await db.close()
+    asyncio.run(run())
 
 
 def test_repeated_resets_preserve_month_global_and_history(tmp_path):

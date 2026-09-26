@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from .config import Settings
 from .database import Database
 from .nai import NaiClient
+from .reconciliation import ManualReconciliation
 
 
 class GateState:
@@ -41,6 +42,7 @@ class GateState:
         self._image_blocked_until = 0.0
         # Keep quota check, dispatch and successful accounting in one boundary.
         self.image_budget_lock = asyncio.Lock()
+        self.reconciliation = ManualReconciliation(self.db, self.nai, self.image_budget_lock)
         self.global_waiting = 0
         self.global_active = 0
         self._image_pacing_waiting = 0

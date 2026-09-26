@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from .policy import gen_key
 from .body import read_json_body
 from .allowance import SETTING, read_alert_threshold
+from .reconciliation import ReconciliationError
 
 router = APIRouter(prefix="/admin/api")
 
@@ -104,6 +105,39 @@ async def logout(request: Request, response: Response):
 async def me(request: Request):
     require_admin(request)
     return {"ok": True}
+
+
+@router.get("/reconciliation")
+async def reconciliation_status(request: Request, response: Response):
+    require_admin(request)
+    response.headers["Cache-Control"] = "no-store"
+    return {**await request.app.state.gate.reconciliation.status(),
+            "csrf_token": _reconciliation_csrf(request)}
+
+
+def _reconciliation_csrf(request: Request) -> str:
+    # Use a purpose-specific HMAC of the authenticated session for CSRF checks.
+    return _sign(_secret(request), "reconciliation:" + request.cookies[COOKIE])
+
+
+@router.post("/reconciliation")
+async def reconcile_anlas(request: Request, response: Response):
+    require_admin(request)
+    # Session-bound CSRF works across TLS proxies and isolates sibling origins.
+    csrf = request.headers.get("x-nai-admin-csrf", "")
+    if not hmac.compare_digest(csrf.encode(), _reconciliation_csrf(request).encode()):
+        raise HTTPException(403, "会话校验失败，请刷新后台后重试")
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(415, "请使用 JSON 请求")
+    if await read_json_body(request, limit=1024):
+        raise HTTPException(400, "本操作不接受自定义账号或地址")
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return {**await request.app.state.gate.reconciliation.run(),
+                "csrf_token": _reconciliation_csrf(request)}
+    except ReconciliationError as exc:
+        headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+        raise HTTPException(exc.status, str(exc), headers=headers) from None
 
 
 def _key_json(row, counter) -> dict[str, Any]:

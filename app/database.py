@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import Any, Optional
+from uuid import uuid4
 
 import aiosqlite
 
@@ -33,6 +35,10 @@ CREATE TABLE IF NOT EXISTS site_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS anlas_reconciliations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS counters (
     key_id INTEGER NOT NULL,
     day TEXT NOT NULL,            -- YYYY-MM-DD (按配置时区)
@@ -55,6 +61,7 @@ CREATE TABLE IF NOT EXISTS usage_log (
     images INTEGER NOT NULL DEFAULT 0,
     anlas REAL NOT NULL DEFAULT 0,
     tokens INTEGER NOT NULL DEFAULT 0,
+    unconfirmed_anlas REAL NOT NULL DEFAULT 0,
     detail TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_log_ts ON usage_log (ts DESC);
@@ -101,15 +108,36 @@ BEGIN
 END;
 """
 
+_INSERT_LOG = """INSERT INTO usage_log (ts, key_id, key_name, kind, model, status,
+                                      images, anlas, tokens, detail, unconfirmed_anlas)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)"""
+_UPSERT_COUNTERS = """INSERT INTO counters
+                     (key_id, day, images, anlas, text_tokens, requests, v5, legacy_free_images)
+                     VALUES (?,?,?,?,?,?,?,?)
+                     ON CONFLICT(key_id, day) DO UPDATE SET
+                       images = images + excluded.images,
+                       anlas = anlas + excluded.anlas,
+                       text_tokens = text_tokens + excluded.text_tokens,
+                       requests = requests + excluded.requests,
+                       v5 = v5 + excluded.v5,
+                       legacy_free_images = legacy_free_images + excluded.legacy_free_images"""
+
 
 class Database:
     def __init__(self, path: str, tz: str = "Asia/Shanghai"):
         self.path = path
         self.tz = tz
         self._db: Optional[aiosqlite.Connection] = None
+        self._record_lock = asyncio.Lock()
+        # 独立事务也需访问同一个内存库；主连接关闭前保留该库。
+        self._connection_path = (f"file:gate-{uuid4().hex}?mode=memory&cache=shared"
+                                 if path == ":memory:" else path)
+
+    def _open_connection(self):
+        return aiosqlite.connect(self._connection_path, uri=self.path == ":memory:")
 
     async def connect(self) -> None:
-        self._db = await aiosqlite.connect(self.path)
+        self._db = await self._open_connection()
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(SCHEMA)
@@ -128,6 +156,13 @@ class Database:
                 await self._db.commit()
             except aiosqlite.OperationalError:
                 pass  # 列已存在
+        log_columns = await (await self._db.execute("PRAGMA table_info(usage_log)")).fetchall()
+        if "unconfirmed_anlas" not in {row["name"] for row in log_columns}:
+            # 旧日志缺少报价，待核对金额初始为 0。
+            await self._db.execute(
+                "ALTER TABLE usage_log ADD COLUMN unconfirmed_anlas REAL NOT NULL DEFAULT 0"
+            )
+            await self._db.commit()
         columns = await (await self._db.execute("PRAGMA table_info(counters)")).fetchall()
         if "legacy_free_images" not in {row["name"] for row in columns}:
             # One-time migration: preserve today's usage rather than granting a fresh
@@ -164,6 +199,29 @@ class Database:
     async def close(self) -> None:
         if self._db:
             await self._db.close()
+
+    async def reconciliation_totals(self) -> dict:
+        # Lifetime totals include deleted Keys and survive daily quota resets.
+        row = await (await self._db.execute("""
+            SELECT (SELECT COALESCE(SUM(anlas), 0) FROM counters) AS anlas,
+                   COALESCE(SUM(unconfirmed_anlas), 0) AS unconfirmed_anlas,
+                   COALESCE(SUM(unconfirmed_anlas > 0), 0) AS unconfirmed_requests,
+                   COALESCE(MAX(id), 0) AS last_log_id FROM usage_log
+        """)).fetchone()
+        return dict(row)
+
+    async def save_reconciliation(self, snapshot: dict) -> None:
+        # Isolate snapshot commits and rollbacks from concurrent ledger writes.
+        async with self._open_connection() as db:
+            await db.execute("INSERT INTO anlas_reconciliations(snapshot) VALUES (?)",
+                             (json.dumps(snapshot, ensure_ascii=False, allow_nan=False),))
+            await db.commit()
+
+    async def reconciliation_history(self, limit: int = 20) -> list[dict]:
+        rows = await (await self._db.execute(
+            "SELECT id, snapshot FROM anlas_reconciliations ORDER BY id DESC LIMIT ?",
+            (min(20, max(1, limit)),))).fetchall()
+        return [{**json.loads(row["snapshot"]), "id": row["id"]} for row in rows]
 
     # ---------- upstream token counters ----------
     async def get_upstream_counter(self, token_id: str, day: str) -> dict[str, int]:
@@ -345,15 +403,7 @@ class Database:
         v5: int = 0, legacy_free_images: int = 0,
     ) -> None:
         await self._db.execute(
-            """INSERT INTO counters (key_id, day, images, anlas, text_tokens, requests, v5, legacy_free_images)
-               VALUES (?,?,?,?,?,?,?,?)
-               ON CONFLICT(key_id, day) DO UPDATE SET
-                 images = images + excluded.images,
-                 anlas = anlas + excluded.anlas,
-                 text_tokens = text_tokens + excluded.text_tokens,
-                 requests = requests + excluded.requests,
-                 v5 = v5 + excluded.v5,
-                 legacy_free_images = legacy_free_images + excluded.legacy_free_images""",
+            _UPSERT_COUNTERS,
             (key_id, day, images, anlas, text_tokens, requests, v5, legacy_free_images),
         )
         await self._db.commit()
@@ -433,17 +483,39 @@ class Database:
         await self._db.commit()
 
     # ---------- logs ----------
+    async def record_success(
+        self, key_id: int, key_name: str, kind: str, model: str, day: str, *,
+        images: int = 0, anlas: float = 0.0, tokens: int = 0, v5: int = 0,
+        legacy_free_images: int = 0, detail: str = "", unconfirmed_anlas: float = 0.0,
+    ) -> None:
+        """成功日志、额度与使用时间一起提交；写入失败时整笔回退。"""
+        # 不使用共享连接，避免其他请求的 commit 提前保存半笔记账。
+        async with self._record_lock, self._open_connection() as db:
+            try:
+                await db.execute("BEGIN IMMEDIATE")
+                now = time.time()
+                await db.execute(_INSERT_LOG, (
+                    now, key_id, key_name, kind, model, "ok", images, anlas,
+                    tokens, detail[:500], unconfirmed_anlas,
+                ))
+                await db.execute(_UPSERT_COUNTERS, (
+                    key_id, day, images, anlas, tokens, 1, v5, legacy_free_images,
+                ))
+                await db.execute("UPDATE api_keys SET last_used_at=? WHERE id=?", (now, key_id))
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
+
     async def add_log(
         self, key_id: Optional[int], key_name: str, kind: str, model: str,
         status: str, images: int = 0, anlas: float = 0.0, tokens: int = 0,
-        detail: str = "",
+        detail: str = "", unconfirmed_anlas: float = 0.0,
     ) -> None:
         await self._db.execute(
-            """INSERT INTO usage_log (ts, key_id, key_name, kind, model, status,
-                                      images, anlas, tokens, detail)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            _INSERT_LOG,
             (time.time(), key_id, key_name, kind, model, status,
-             images, anlas, tokens, detail[:500]),
+             images, anlas, tokens, detail[:500], unconfirmed_anlas),
         )
         await self._db.commit()
 
@@ -474,6 +546,9 @@ class Database:
 
     # ---------- overview ----------
     async def overview(self, today: str, week_days: list[str]) -> dict[str, Any]:
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
         async def one(sql: str, args: tuple = ()) -> Any:
             cur = await self._db.execute(sql, args)
             row = await cur.fetchone()
@@ -504,6 +579,17 @@ class Database:
             "SELECT COUNT(*) FROM api_keys WHERE enabled=1 AND (expires_at IS NULL OR expires_at>?)",
             (time.time(),),
         )
+        # 日志按时间戳保存；统计边界必须与配额使用同一时区。
+        day_start = datetime.fromisoformat(today).replace(tzinfo=ZoneInfo(self.tz))
+        anomaly = {}
+        for period, start in (("today", day_start), ("month", day_start.replace(day=1))):
+            row = await (await self._db.execute(
+                """SELECT COUNT(*), COALESCE(SUM(unconfirmed_anlas),0) FROM usage_log
+                   WHERE unconfirmed_anlas>0 AND ts>=? AND ts<?""",
+                (start.timestamp(), (day_start + timedelta(days=1)).timestamp()),
+            )).fetchone()
+            anomaly[period] = {"unconfirmed_requests": int(row[0]),
+                               "unconfirmed_anlas": round(float(row[1]), 2)}
         ph = ",".join("?" * len(week_days))
         cur = await self._db.execute(
             f"""SELECT day,
@@ -530,11 +616,12 @@ class Database:
                 "text_tokens": int(today_tokens),
                 "requests": int(today_requests),
                 "v5": int(today_v5),
+                **anomaly["today"],
             },
             "keys_total": int(keys_total),
             "keys_active": int(keys_active),
             "week": week,
             "month": {"anlas": round(float(await one(
                 "SELECT COALESCE(SUM(anlas),0) FROM counters WHERE substr(day,1,7)=?",
-                (today[:7],))), 2)},
+                (today[:7],))), 2), **anomaly["month"]},
         }

@@ -7,12 +7,15 @@ import anyio
 from starlette.responses import Response
 
 from .nai import _wait_cleanup
+from .image_events import STREAM_MEDIA_TYPES, encode_image_event
 
 
 class ImageStreamResponse(Response):
     media_type = "text/event-stream"
 
-    def __init__(self, run):
+    def __init__(self, run, wire_format="sse"):
+        self.wire_format = wire_format
+        self.media_type = STREAM_MEDIA_TYPES[wire_format]
         super().__init__(content=None, media_type=self.media_type)
         self.run = run
         self.started = False
@@ -28,12 +31,12 @@ class ImageStreamResponse(Response):
         except (OSError, TimeoutError):
             self.disconnected.set()
 
-    async def start(self, status=200, content_type="text/event-stream"):
+    async def start(self, status=200, content_type=None):
         if self.started:
             return
         self.started = True
         await self.write({"type": "http.response.start", "status": status, "headers": [
-            (b"content-type", content_type.encode()), (b"cache-control", b"no-store"),
+            (b"content-type", (content_type or self.media_type).encode()), (b"cache-control", b"no-store"),
             (b"x-accel-buffering", b"no"),
         ]})
 
@@ -45,9 +48,9 @@ class ImageStreamResponse(Response):
             await self.start(status, "application/json")
             await self.chunk(json.dumps({"error": message, "message": message}, ensure_ascii=False).encode())
         else:
-            data = json.dumps({"event_type": "error", "error": message,
-                               "message": message, "status_code": status}, ensure_ascii=False)
-            await self.chunk(("event: error\ndata: " + data + "\n\n").encode())
+            await self.chunk(encode_image_event({"event_type": "error", "error": message,
+                                                "message": message, "status_code": status},
+                                               self.wire_format))
 
     async def __call__(self, scope, receive, send):
         self._send = send

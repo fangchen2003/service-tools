@@ -52,6 +52,7 @@ tr:hover td{background:#182230}
 .tag.on{background:#173529;color:var(--accent2)}
 .tag.off{background:#3a2226;color:var(--bad)}
 .tag.warn{background:#3a2f1c;color:var(--warn)}
+.logs .tag{white-space:nowrap}
 .btn{background:var(--panel2);border:1px solid var(--line);color:var(--txt);
   padding:6px 12px;border-radius:8px;cursor:pointer;font-size:13px}
 .btn:hover{border-color:var(--accent)}
@@ -125,6 +126,19 @@ tr:hover td{background:#182230}
     <div class="cards" id="ovCards"></div>
     <div class="panel"><h2>近 7 天生成量（图片）</h2><div class="chart" id="chart"></div></div>
     <div class="panel"><h2>上游 NovelAI 令牌池</h2><div id="pool"></div><div id="allowanceDetails" class="muted">V5 余量：正在读取本地状态…</div></div>
+    <div class="panel">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <h2 style="margin:0;flex:1">Anlas 消耗核对</h2>
+        <button class="btn" id="reconReload" onclick="loadReconciliation()">刷新记录</button>
+        <button class="btn primary" id="reconRun" onclick="runReconciliation()" disabled>查询并核对</button>
+      </div>
+      <div id="reconStatus" class="muted" role="status" aria-live="polite">正在读取记录…</div>
+      <div id="reconResult"></div>
+      <details style="margin-top:12px"><summary>历史记录与说明</summary>
+        <p class="muted">点击「查询并核对」会读取官方账号余额，再和本站记录的消耗比较。充值、续费或在其他地方使用账号，也会影响余额。核对结果不会修改用户积分。</p>
+        <div style="overflow-x:auto"><table><thead><tr><th>查询时间</th><th>官方余额</th><th>余额减少</th><th>本站记录</th><th>相差</th><th>说明</th></tr></thead><tbody id="reconHistory"></tbody></table></div>
+      </details>
+    </div>
   </section>
 
   <!-- 密钥 -->
@@ -158,7 +172,7 @@ tr:hover td{background:#182230}
       <div style="overflow-x:auto">
       <table class="logs">
         <thead><tr><th>时间</th><th>Key</th><th>类型</th><th>模型</th><th>状态</th>
-          <th>图</th><th>Anlas</th><th>tokens</th><th>备注</th></tr></thead>
+          <th>图</th><th>Anlas</th><th title="失败请求可能产生的费用，实际扣款尚未确认">可能消耗 Anlas</th><th>tokens</th><th>备注</th></tr></thead>
         <tbody id="logBody"></tbody>
       </table>
       </div>
@@ -179,7 +193,7 @@ tr:hover td{background:#182230}
         <input id="s_v5" type="number" value="150">
         <button class="btn primary" style="white-space:nowrap" onclick="saveBudget()">保存</button>
       </div>
-      <div class="muted" style="font-size:12px;margin-top:8px">V5 符合条件的单张（≤Normal/≤28步）走官方周额度不扣 Anlas；额度外的 V5 及大图按估算 Anlas 扣。每把 Key 还受自己的「每日 Anlas / 每月 Anlas / 每日 V5」限制。</div>
+      <div class="muted" style="font-size:12px;margin-top:8px">V5 在官方额度可用、≤1024² 像素且≤28步时，首张走额度；同批其余图片按 Anlas 计费。额度耗尽后的付费请求仍受 Key 权限和预算限制。</div>
       <label>V5 官方余量告警阈值（%，低于此值持续提醒）</label>
       <input id="s_v5_alert" type="number" min="1" max="100" step="1" value="20">
       <div class="muted" style="font-size:12px;margin-top:8px">低于此比例时持续告警；余量随 V5 生成按需查询。点击上方“保存”生效。</div>
@@ -233,6 +247,67 @@ tr:hover td{background:#182230}
 const $ = s => document.querySelector(s);
 let editingId = null, keysCache = [], logPage = 1;
 let allowanceTimer = null, allowanceLoading = false;
+let reconBusy = false, reconReady = false, reconRemoteRunning = false, reconRetryAt = 0, reconTimer = null, reconVersion = 0;
+let reconCsrf = '';
+
+const reconReasons = {first:'已记下当前余额', accounts_changed:'账号列表有变化，已重新记录余额',
+  cycle_changed:'订阅周期已更新，已重新记录余额', balance_increased:'余额增加了，已重新记录余额',
+  ledger_reset:'本站用量记录有变动，已重新记录余额'};
+const reconNumber = n => n == null ? '—' : Number(n).toLocaleString('zh-CN', {maximumFractionDigits:4});
+const reconTime = n => new Date(n*1000).toLocaleString('zh-CN');
+function updateReconciliationButton(){
+  const seconds = Math.max(0, Math.ceil((reconRetryAt-Date.now())/1000));
+  $('#reconRun').disabled = reconBusy || reconRemoteRunning || !reconReady || seconds>0;
+  $('#reconRun').textContent = reconBusy ? '正在核对…' : seconds ? `${seconds} 秒后可再次查询` : '查询并核对';
+  $('#reconReload').disabled = reconBusy;
+  if(!seconds){ clearInterval(reconTimer); reconTimer=null; }
+}
+function renderReconciliation(d){
+  reconCsrf=typeof d.csrf_token === 'string' ? d.csrf_token : '';
+  reconReady=!!reconCsrf;
+  reconRemoteRunning=d.running;
+  reconRetryAt=Date.now() + d.retry_after*1000;
+  clearInterval(reconTimer);
+  if(d.retry_after>0) reconTimer=setInterval(updateReconciliationButton, 1000); // Local countdown only.
+  updateReconciliationButton();
+  const rows=d.history || [], latest=rows[0], c=latest?.comparison;
+  const differenceText = !c || c.reason ? '' : c.difference === 0 ? '余额变化与本站记录一致。'
+    : `官方余额减少了 ${reconNumber(c.balance_decrease)} Anlas，比本站记录${c.difference>0?'多':'少'} ${reconNumber(Math.abs(c.difference))} Anlas。`;
+  $('#reconStatus').textContent=d.running ? '其他页面正在核对，稍后刷新记录即可。'
+    : !latest ? '还没有记录。点击「查询并核对」获取当前余额。'
+    : `上次查询 ${reconTime(latest.checked_at)} · ${Object.keys(latest.accounts).length} 个账号 · 官方余额 ${reconNumber(latest.balance)} Anlas`;
+  $('#reconResult').innerHTML=!latest ? '' : c.reason ? `<p>${esc(reconReasons[c.reason] || '已记下当前余额')}。下次查询时，会核对这期间用了多少 Anlas。</p>`
+    : `<p class="muted">这次核对的时间段：${esc(reconTime(c.since))} — ${esc(reconTime(latest.checked_at))}</p>
+       <div class="cards" style="margin:12px 0">
+        ${[['官方余额减少',c.balance_decrease],['本站记录消耗',c.recorded],['相差',c.difference]].map(([label,value])=>
+          `<div class="card"><div class="k">${label}</div><div class="v">${reconNumber(value)} <small>Anlas</small></div></div>`).join('')}
+       </div><p>${differenceText}</p>${c.unconfirmed_requests>0 ? `<div class="muted">有 ${reconNumber(c.unconfirmed_requests)} 笔失败请求可能产生费用，合计预估 ${reconNumber(c.unconfirmed_anlas)} Anlas。</div>` : ''}`;
+  $('#reconHistory').innerHTML=rows.map(row=>{ const x=row.comparison; return `<tr>
+    <td>${esc(reconTime(row.checked_at))}</td><td>${reconNumber(row.balance)}</td><td>${reconNumber(x.balance_decrease)}</td>
+    <td>${reconNumber(x.recorded)}</td><td>${reconNumber(x.difference)}</td><td>${esc(reconReasons[x.reason] || '核对完成')}</td></tr>`; }).join('')
+    || '<tr><td colspan="6" class="muted">尚无记录</td></tr>';
+}
+async function loadReconciliation(){
+  if(reconBusy) return;
+  const version=++reconVersion;
+  try{
+    const d=await api('/admin/api/reconciliation'); // Read local history.
+    if(version===reconVersion) renderReconciliation(d);
+  }catch(e){ if(version===reconVersion) $('#reconStatus').textContent=e.message; }
+}
+async function runReconciliation(){
+  if($('#reconRun').disabled) return;
+  ++reconVersion; reconBusy=true; updateReconciliationButton();
+  $('#reconStatus').textContent='正在核对，请稍候…';
+  try{
+    renderReconciliation(await api('/admin/api/reconciliation', {method:'POST', body:'{}',
+      headers:{'Content-Type':'application/json', 'X-NAI-Admin-CSRF':reconCsrf}}));
+  }catch(e){
+    // Refresh the cooldown after failure, then restore the error message.
+    try{ renderReconciliation(await api('/admin/api/reconciliation')); }catch(_){}
+    $('#reconStatus').textContent=e.message;
+  }finally{ reconBusy=false; updateReconciliationButton(); }
+}
 
 function renderAllowance(d){
   const rows = d.accounts || [], box = $('#allowanceStatus');
@@ -292,7 +367,9 @@ async function logout(){
   showLogin();
 }
 function showLogin(){
+  reconCsrf=''; reconReady=false; ++reconVersion;
   clearInterval(allowanceTimer); allowanceTimer = null;
+  clearInterval(reconTimer); reconTimer = null;
   $('#login').style.display='flex'; $('#app').style.display='none';
 }
 async function boot(){
@@ -317,6 +394,7 @@ function tab(name){
 
 /* ---------- overview ---------- */
 async function loadOverview(){
+  loadReconciliation();
   try{
     const d = await api('/admin/api/overview');
     const t = d.today;
@@ -325,6 +403,7 @@ async function loadOverview(){
       <div class="card"><div class="k">今日消耗 Anlas（估算）</div><div class="v">${t.anlas}</div></div>
       <div class="card"><div class="k">今日 V5 张数 / 全站日限</div><div class="v">${t.v5||0} <small>/ ${d.v5_limit>0?d.v5_limit:'∞'}</small></div></div>
       <div class="card"><div class="k">本月 Anlas / 全站预算</div><div class="v">${d.month.anlas} <small>/ ${d.anlas_budget>0?d.anlas_budget:'∞'}</small></div></div>
+      <div class="card" title="按今日、本月累计；查询官方余额不会清空这些记录"><div class="k">失败请求可能产生的费用</div><div class="v">${t.unconfirmed_anlas||0} <small>Anlas</small></div><div class="muted">今日预估 · ${t.unconfirmed_requests||0} 笔</div><div class="muted">本月预估 ${d.month.unconfirmed_anlas||0} Anlas · ${d.month.unconfirmed_requests||0} 笔</div><div class="muted" style="margin-top:8px">仅为估算，实际扣款尚未确认。</div></div>
       <div class="card"><div class="k">今日文本 tokens</div><div class="v">${fmt(t.text_tokens)}</div></div>
       <div class="card"><div class="k">今日请求数</div><div class="v">${t.requests}</div></div>
       <div class="card"><div class="k">Key 总数 / 有效</div><div class="v">${d.keys_total} <small>/ ${d.keys_active}</small></div></div>`;
@@ -542,9 +621,10 @@ async function loadLogs(){
         <td>${esc(l.kind)}</td>
         <td class="mono">${esc(l.model)}</td>
         <td>${l.status==='ok'?'<span class="tag on">ok</span>':l.status==='rejected'?'<span class="tag warn">拒绝</span>':'<span class="tag off">错误</span>'}</td>
-        <td>${l.images||''}</td><td>${l.anlas||''}</td><td>${l.tokens||''}</td>
+        <td>${l.images||''}</td><td>${l.anlas||''}</td>
+        <td>${l.unconfirmed_anlas>0?`<span class="tag warn">≈ ${l.unconfirmed_anlas}</span>`:'—'}</td><td>${l.tokens||''}</td>
         <td class="muted">${esc(l.detail)}</td>
-      </tr>`).join('') || '<tr><td colspan="9" class="muted">暂无记录</td></tr>';
+      </tr>`).join('') || '<tr><td colspan="10" class="muted">暂无记录</td></tr>';
     $('#logPager').innerHTML = `
       <span class="muted">共 ${d.total} 条，第 ${d.page} / ${d.pages} 页（每页 ${d.per_page} 条）</span>
       <button class="btn mini" onclick="changeLogPage(-1)" ${d.page<=1?'disabled':''}>上一页</button>
