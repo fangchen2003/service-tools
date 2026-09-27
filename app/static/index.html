@@ -63,6 +63,13 @@ tr:hover td{background:#182230}
 .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 .key-summary{font-size:12px;line-height:1.6;white-space:nowrap}
 .key-summary .muted{font-size:11px}
+#keysTable .key-name{width:150px;max-width:150px;overflow-wrap:anywhere;word-break:break-word}
+#keysTable th:last-child,#keysTable td:last-child{
+  position:sticky;right:0;min-width:180px;background:var(--panel);box-shadow:-8px 0 12px -10px #000;
+}
+#keysTable th:last-child{z-index:2}
+#keysTable td:last-child{z-index:1}
+#keysTable tr:hover td:last-child{background:#182230}
 
 /* chart */
 .chart{display:flex;align-items:flex-end;gap:10px;height:120px;padding-top:8px}
@@ -152,8 +159,8 @@ tr:hover td{background:#182230}
       <div style="overflow-x:auto">
       <table id="keysTable">
         <thead><tr>
-          <th>名称</th><th>Key</th><th>状态</th>
-          <th>今日用量</th><th>配额</th><th>RPM</th><th>到期</th><th>操作</th>
+          <th class="key-name">名称</th><th>Key</th><th>状态</th>
+          <th>今日用量</th><th>配额</th><th>RPM</th><th>最近使用</th><th>到期</th><th>操作</th>
         </tr></thead>
         <tbody></tbody>
       </table>
@@ -467,7 +474,7 @@ async function loadKeys(){
     tb.innerHTML = d.keys.map(k=>{
       const exp = k.expires_at ? new Date(k.expires_at*1000).toLocaleDateString() : '永久';
       return `<tr>
-        <td>${esc(k.name)}</td>
+        <td class="key-name">${esc(k.name)}</td>
         <td><span class="mono" data-tok="${esc(k.token)}">${mask(k.token)}</span><br>
             <button class="btn mini" onclick="copyKey(this)">复制</button></td>
         <td>${k.enabled?'<span class="tag on">启用</span>':'<span class="tag off">禁用</span>'}
@@ -482,6 +489,7 @@ async function loadKeys(){
           <span class="muted">Anlas ${k.allow_anlas ? `${k.daily_anlas>0?k.daily_anlas:'∞'}/日 · ${k.monthly_anlas>0?k.monthly_anlas:'∞'}/月` : '未开'} · 文本 ${fmt(k.daily_text_tokens)}/日</span>`}
         </td>
         <td>${k.rpm}</td>
+        <td>${k.last_used_at ? new Date(k.last_used_at*1000).toLocaleString() : '从未使用'}</td>
         <td>${exp}</td>
         <td><div class="row-actions">
           <button class="btn mini" onclick="openEdit(${k.id})">编辑</button>
@@ -491,7 +499,7 @@ async function loadKeys(){
           <button class="btn mini danger" onclick="delKey(${k.id})">删除</button>
         </div></td>
       </tr>`;
-    }).join('') || '<tr><td colspan="8" class="muted">还没有 Key，点右上角「新建 Key」</td></tr>';
+    }).join('') || '<tr><td colspan="9" class="muted">还没有 Key，点右上角「新建 Key」</td></tr>';
     $('#logFilter').innerHTML = '<option value="">全部 Key</option>' +
       d.keys.map(k=>`<option value="${k.id}">${esc(k.name)}</option>`).join('');
   }catch(e){ toast(e.message); }
