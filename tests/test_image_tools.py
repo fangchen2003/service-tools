@@ -136,7 +136,7 @@ async def test_budget_serializes_competing_tools_and_settlement(state):
     await state.db.accounting_entered.wait()
     second=asyncio.create_task(post('/ai/upscale',body()))
     await asyncio.sleep(.03)
-    assert not second.done() and len(state.nai.calls)==1
+    assert len(state.nai.calls)==1 and (not second.done() or (await second).status_code==402)
     state.db.accounting_release.set()
     assert (await first).status_code==200
     assert (await second).status_code==402
@@ -151,7 +151,7 @@ async def test_disconnect_after_dispatch_settles_once(state):
     await state.nai.entered.wait()
     task.cancel()
     await asyncio.sleep(.02)
-    assert state.image_budget_lock.locked()
+    assert len(state.image_reservations) == 1
     state.nai.release.set()
     with pytest.raises(asyncio.CancelledError):await task
     assert len(state.db.charges)==1 and not state.image_budget_lock.locked()

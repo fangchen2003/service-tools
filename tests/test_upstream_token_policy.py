@@ -71,6 +71,7 @@ def test_saved_v5_limit_and_usage_follow_token_after_reorder(tmp_path):
             await db.migrate_upstream_token_ids([token.token_id for token in original.pool])
             assert await db.get_upstream_counter(second_id, "2026-09-11") == {"images": 3, "v5": 1}
             assert await original.set_v5_daily_limit(second_id, 1)
+            assert await original.set_image_concurrency(second_id, 2)
             assert await original.set_admin_enabled(second_id, False)
             assert await original.pick_token(v5_free=True) is original.pool[0]
 
@@ -82,6 +83,7 @@ def test_saved_v5_limit_and_usage_follow_token_after_reorder(tmp_path):
             await reordered.load_saved_limits()
             assert reordered.pool[0].token_id == second_id
             assert reordered.pool[0].v5_daily_limit == 1
+            assert reordered.pool[0].image_slots.limit == 2
             assert reordered.pool[0].admin_enabled is False
             status = await reordered.status()
             assert status[0]["v5_used"] == 1 and status[0]["images_today"] == 3
@@ -130,11 +132,13 @@ def test_admin_can_set_only_configured_upstream_limit(tmp_path):
         token_id = state.nai.pool[0].token_id
         path = f"/admin/api/upstream-tokens/{token_id}/v5-limit"
         enabled_path = f"/admin/api/upstream-tokens/{token_id}/enabled"
+        concurrency_path = f"/admin/api/upstream-tokens/{token_id}/image-concurrency"
         try:
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://fixture.invalid"
             ) as client:
                 assert (await client.put(path, json={"v5_daily_limit": 12})).status_code == 401
+                assert (await client.put(concurrency_path, json={"image_concurrency": 2})).status_code == 401
                 assert (await client.put(enabled_path, json={"enabled": False})).status_code == 401
                 assert (await client.post("/admin/api/login", json={"password": "fixture-password"})).status_code == 200
                 for invalid in (-1, 100001, 1.5, "12", True):
@@ -146,6 +150,11 @@ def test_admin_can_set_only_configured_upstream_limit(tmp_path):
                 assert (await client.put(path, json={"v5_daily_limit": 12})).status_code == 200
                 assert state.nai.pool[0].v5_daily_limit == 12
                 assert (await state.db.get_upstream_token_limits())[token_id] == 12
+                for invalid in (0, 5, 1.5, "2", True):
+                    assert (await client.put(concurrency_path, json={"image_concurrency": invalid})).status_code == 422
+                assert (await client.put(concurrency_path, json={"image_concurrency": 2})).status_code == 200
+                assert state.nai.pool[0].image_slots.limit == 2
+                assert (await state.db.get_upstream_token_image_concurrency())[token_id] == 2
                 for invalid in (0, 1, "false", None):
                     assert (await client.put(enabled_path, json={"enabled": invalid})).status_code == 422
                 assert (await client.put(
@@ -190,8 +199,10 @@ def test_disabling_during_image_wait_reroutes_before_dispatch(tmp_path):
             task = asyncio.create_task(client.request("POST", "https://image.example",
                                                       image_lane=True))
             await entered.wait()
-            assert await client.set_admin_enabled(client.pool[1].token_id, False)
+            disable = asyncio.create_task(client.set_admin_enabled(client.pool[1].token_id, False))
+            await asyncio.sleep(0)
             release.set()
+            assert await disable
             assert (await task).status_code == 200
             assert sent == ["Bearer first-token"]
         finally:

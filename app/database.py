@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from typing import Any, Optional
 from uuid import uuid4
@@ -38,6 +39,11 @@ CREATE TABLE IF NOT EXISTS site_settings (
 CREATE TABLE IF NOT EXISTS anlas_reconciliations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     snapshot TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS discord_registrations (
+    discord_id TEXT PRIMARY KEY,
+    key_id INTEGER NOT NULL UNIQUE,
+    created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS counters (
     key_id INTEGER NOT NULL,
@@ -80,6 +86,10 @@ CREATE TABLE IF NOT EXISTS upstream_token_settings (
 CREATE TABLE IF NOT EXISTS upstream_token_enabled (
     token_id TEXT PRIMARY KEY,
     enabled INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS upstream_token_image_concurrency (
+    token_id TEXT PRIMARY KEY,
+    concurrency INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS daily_quota_offsets (
     key_id INTEGER NOT NULL,
@@ -283,6 +293,20 @@ class Database:
         )
         await self._db.commit()
 
+    async def get_upstream_token_image_concurrency(self) -> dict[str, int]:
+        rows = await (await self._db.execute(
+            "SELECT token_id, concurrency FROM upstream_token_image_concurrency"
+        )).fetchall()
+        return {row["token_id"]: int(row["concurrency"]) for row in rows}
+
+    async def set_upstream_token_image_concurrency(self, token_id: str, limit: int) -> None:
+        await self._db.execute(
+            """INSERT INTO upstream_token_image_concurrency(token_id, concurrency) VALUES(?,?)
+               ON CONFLICT(token_id) DO UPDATE SET concurrency=excluded.concurrency""",
+            (token_id, limit),
+        )
+        await self._db.commit()
+
     async def get_upstream_v5_counter(self, token_id: str, day: str) -> int:
         return (await self.get_upstream_counter(token_id, day))["v5"]
 
@@ -377,12 +401,19 @@ class Database:
         await self._db.commit()
 
     async def inactive_key_ids(self, cutoff: float) -> list[int]:
-        """返回超过截止时间未通过鉴权使用的 Key；从未使用时按创建时间计算。"""
+        """Return inactive keys without falsifying their last-used timestamps."""
+        raw_grace = await self.get_setting("key_inactivity_grace_started_at", 0)
+        try:
+            grace_started_at = float(raw_grace)
+        except (TypeError, ValueError):
+            return []  # Malformed reset marker must never trigger mass deletion.
+        if not math.isfinite(grace_started_at) or grace_started_at < 0:
+            return []
         cur = await self._db.execute(
             """SELECT id FROM api_keys
-               WHERE is_admin=0 AND COALESCE(last_used_at, created_at) < ?
+               WHERE is_admin=0 AND MAX(COALESCE(last_used_at, created_at), ?) < ?
                ORDER BY id ASC""",
-            (cutoff,),
+            (grace_started_at, cutoff),
         )
         return [int(row["id"]) for row in await cur.fetchall()]
 
@@ -479,6 +510,15 @@ class Database:
             """INSERT INTO site_settings (key, value) VALUES (?,?)
                ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
             (key, str(value)),
+        )
+        await self._db.commit()
+
+    async def set_settings_bulk(self, values: dict[str, Any]) -> None:
+        """Persist a validated group of runtime controls in one transaction."""
+        await self._db.executemany(
+            """INSERT INTO site_settings (key, value) VALUES (?,?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+            [(key, str(value)) for key, value in values.items()],
         )
         await self._db.commit()
 

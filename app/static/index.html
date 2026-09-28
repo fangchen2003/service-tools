@@ -206,6 +206,17 @@ tr:hover td{background:#182230}
       <div class="muted" style="font-size:12px;margin-top:8px">低于此比例时持续告警；余量随 V5 生成按需查询。点击上方“保存”生效。</div>
     </div>
     <div class="panel">
+      <h2>图片排队与冷却</h2>
+      <div class="grid2">
+        <div><label>单阶段排队等待上限（秒，15～300）</label><input id="r_queue_timeout" type="number" min="15" max="300" step="1"></div>
+        <div><label>用户 Key 图片任务间隔（秒，15～120）</label><input id="r_key_image_min_interval" type="number" min="15" max="120" step="1"></div>
+        <div><label>每把上游 Key 图片请求间隔（秒，15～120）</label><input id="r_image_min_interval" type="number" min="15" max="120" step="1"></div>
+        <div><label>上游 429 最短冷却（秒，60～3600）</label><input id="r_image_429_cooldown_seconds" type="number" min="60" max="3600" step="1"></div>
+      </div>
+      <div class="muted" style="font-size:12px;margin:8px 0">保存后对新请求生效，重启后仍保留。已在等待中的请求可能沿用保存前的时间；不允许低于保护下限。</div>
+      <button class="btn primary" onclick="saveRuntimeLimits()">保存运行限制</button>
+    </div>
+    <div class="panel">
       <h2>站点公告（用户访问首页看到的内容，支持 HTML）</h2>
       <textarea id="announce" rows="10" placeholder="&lt;h2&gt;欢迎&lt;/h2&gt;&lt;p&gt;申请 Key 请联系……&lt;/p&gt;"></textarea>
       <div style="margin-top:10px;text-align:right">
@@ -440,6 +451,12 @@ async function loadOverview(){
             <button class="btn mini" onclick="saveUpstreamV5Limit('${p.token_id}')">保存</button>
             <span class="muted">0 = 不限；只限制这把上游 Token</span>
           </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px">
+            <span class="muted">图片并发</span>
+            <input id="token-concurrency-${p.token_id}" type="number" min="1" max="4" step="1" value="${p.image_concurrency}" style="width:70px" aria-label="第 ${p.position} 把上游 Token 的图片并发上限">
+            <button class="btn mini" onclick="saveUpstreamImageConcurrency('${p.token_id}')">保存</button>
+            <span class="muted">当前 ${p.image_active} / ${p.image_concurrency}；默认 1，调高会增加上游限流风险</span>
+          </div>
         </div>`).join('');
   }catch(e){ toast(e.message); }
 }
@@ -451,6 +468,16 @@ async function saveUpstreamV5Limit(tokenId){
     await api('/admin/api/upstream-tokens/' + tokenId + '/v5-limit', {
       method:'PUT', body:JSON.stringify({v5_daily_limit:limit})});
     toast('上游 V5 日限已保存');
+    loadOverview();
+  }catch(e){ toast(e.message); }
+}
+async function saveUpstreamImageConcurrency(tokenId){
+  const limit = Number($('#token-concurrency-' + tokenId).value);
+  if(!Number.isInteger(limit) || limit<1 || limit>4){ toast('请输入 1～4 的整数'); return; }
+  try{
+    await api('/admin/api/upstream-tokens/' + tokenId + '/image-concurrency', {
+      method:'PUT', body:JSON.stringify({image_concurrency:limit})});
+    toast('上游图片并发已保存');
     loadOverview();
   }catch(e){ toast(e.message); }
 }
@@ -644,17 +671,21 @@ function changeLogPage(delta){ logPage=Math.max(1,logPage+delta); loadLogs(); }
 /* ---------- settings ---------- */
 async function loadSettings(){
   try{
-    const [a, s, o] = await Promise.all([
-      api('/admin/api/announcement'), api('/admin/api/settings'), api('/admin/api/overview')]);
+    const [a, s, o, r] = await Promise.all([
+      api('/admin/api/announcement'), api('/admin/api/settings'),
+      api('/admin/api/overview'), api('/admin/api/runtime-limits')]);
     $('#announce').value = a.html || '';
     $('#s_budget').value = s.global_monthly_anlas;
     $('#s_v5').value = s.global_daily_v5;
     $('#s_v5_alert').value = s.v5_alert_threshold;
+    for(const name of ['queue_timeout','key_image_min_interval','image_min_interval','image_429_cooldown_seconds']){
+      $('#r_'+name).value = r[name];
+    }
     $('#cfgInfo').innerHTML =
       `上游令牌池：${o.pool_configured ? o.pool.map(p=>esc(p.token)).join(', ') : '未配置（设置 NAI_TOKENS）'}<br>` +
       `本月 Anlas：${o.month.anlas} / 预算 ${o.anlas_budget>0?o.anlas_budget:'∞'}<br>` +
       `今日请求：${o.today.requests} ｜ 图片 ${o.today.images} ｜ Anlas ${o.today.anlas}<br>` +
-      `更多配置项见项目 README（SAFE_CLAMP / GLOBAL_CONCURRENCY 等）`;
+      `敏感配置仍在 .env；更多说明见项目 README`;
   }catch(e){ toast(e.message); }
 }
 async function saveBudget(){
@@ -665,6 +696,22 @@ async function saveBudget(){
   })});
   toast('已保存：月预算 ' + d.global_monthly_anlas + 'A / V5 日限 ' + d.global_daily_v5);
   loadAllowance();
+}
+async function saveRuntimeLimits(){
+  const body = {};
+  const bounds = {queue_timeout:[15,300],key_image_min_interval:[15,120],
+    image_min_interval:[15,120],image_429_cooldown_seconds:[60,3600]};
+  for(const [name,[min,max]] of Object.entries(bounds)){
+    const value = Number($('#r_'+name).value);
+    if(!Number.isInteger(value) || value<min || value>max){
+      toast(`${name} 必须是 ${min}～${max} 的整数`); return;
+    }
+    body[name] = value;
+  }
+  try{
+    await api('/admin/api/runtime-limits', {method:'PUT',body:JSON.stringify(body)});
+    toast('运行限制已保存并生效');
+  }catch(e){ toast(e.message); }
 }
 async function saveAnnounce(){
   await api('/admin/api/announcement', {method:'PUT', body: JSON.stringify({html: $('#announce').value})});

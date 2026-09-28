@@ -21,8 +21,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import admin
-from .body import read_json_body
+from . import admin, registration_routes
+from .registration import configured_service
+from .body import read_bounded_body, read_json_body
 from .config import load_settings
 from .client_views import subscription_payload
 from .image_events import ImageEventTracker, ImageStreamProtocolError, STREAM_MEDIA_TYPES
@@ -108,6 +109,7 @@ async def lifespan(app: FastAPI):
     install_access_log_filter()
     STATE = GateState(SETTINGS)
     await STATE.db.connect()
+    await STATE.load_runtime_limits()
     await STATE.db.migrate_upstream_token_ids([token.token_id for token in STATE.nai.pool])
     await STATE.nai.load_saved_limits()
     await STATE.load_image_cooldown()
@@ -130,6 +132,8 @@ async def lifespan(app: FastAPI):
     if not SETTINGS.nai_tokens:
         print("[warn] 未设置 NAI_TOKENS，所有生成请求将返回 503")
     app.state.gate = STATE
+    registration_http = httpx.AsyncClient()
+    app.state.registrar = configured_service(STATE.db, registration_http)
     cleanup_task = asyncio.create_task(inactive_key_cleanup_loop())
     try:
         yield
@@ -139,6 +143,7 @@ async def lifespan(app: FastAPI):
             await cleanup_task
         except asyncio.CancelledError:
             pass
+        await registration_http.aclose()
         await STATE.nai.close()
         await STATE.db.close()
 
@@ -148,6 +153,7 @@ if SETTINGS.cors_origins:
     app.add_middleware(CORSMiddleware, allow_origins=SETTINGS.cors_origins,
                        allow_methods=["*"], allow_headers=["*"], allow_credentials=False)
 app.include_router(admin.router)
+app.include_router(registration_routes.router)
 
 
 @app.exception_handler(GateError)
@@ -225,18 +231,17 @@ async def read_image_payload(request: Request, limit_mb: float = 25) -> dict:
 
 @asynccontextmanager
 async def acquire_concurrency(key, *, image: bool = False):
-    """预算锁及两级并发共用排队期限；开始执行后不受该期限限制。"""
+    """Per-user admission; text also uses the legacy global request limit."""
     t = STATE.settings.queue_timeout
     ksem = None if key["is_admin"] else STATE.key_sem(key["id"], STATE.settings.key_concurrency)
     async with AsyncExitStack() as resources:
         STATE.global_waiting += 1
         try:
             async with asyncio.timeout(t):
-                if image:
-                    await resources.enter_async_context(STATE.image_budget_lock)
                 if ksem is not None:
                     await resources.enter_async_context(ksem)
-                await resources.enter_async_context(STATE.global_sem)
+                if not image:
+                    await resources.enter_async_context(STATE.global_sem)
         except TimeoutError:
             raise err(429, "当前排队人数过多，请稍后再试")
         finally:
@@ -248,38 +253,86 @@ async def acquire_concurrency(key, *, image: bool = False):
             STATE.global_active -= 1
 
 
-async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0) -> None:
+async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
+                            exclude_reservation=None) -> None:
     if key["is_admin"]:
         return
     c = await STATE.db.get_counter(key["id"], STATE.day())
+    pending = [r for r in getattr(STATE, "image_reservations", {}).values()
+               if r is not exclude_reservation]
+    own = [r for r in pending if r.key_id == key["id"]]
+    # A request started before midnight can settle after midnight; count every
+    # in-flight reservation conservatively against the current period.
+    own_day = own_month = own
+    global_day = global_month = pending
     if legacy_free_images and key["daily_images"] > 0:
-        if c["legacy_free_images"] + legacy_free_images > key["daily_images"]:
+        if c["legacy_free_images"] + sum(r.legacy for r in own_day) + legacy_free_images > key["daily_images"]:
             raise err(429, f"今日 V4.5 及以下免费图额度已用完（{key['daily_images']} 张/天），明日恢复")
     if est["v5"] > 0:
         # V5 周额度是账户级共享资源，用全站日计数镜像（恢复量 ~190 张/天）
-        if key["daily_v5"] > 0 and c["v5"] + est["v5"] > key["daily_v5"]:
+        if key["daily_v5"] > 0 and c["v5"] + sum(r.v5 for r in own_day) + est["v5"] > key["daily_v5"]:
             raise err(429, f"已达今日 V5 额度（{key['daily_v5']} 张/天），明天恢复后再用")
         g = float(await STATE.db.get_setting(
             "global_daily_v5", STATE.settings.global_daily_v5) or 0)
         if g > 0 and not key["exclude_global_v5"]:
             total = await STATE.db.day_v5_total(STATE.day())
-            if total + est["v5"] > g:
+            if total + sum(r.v5 for r in global_day if not r.exclude_global_v5) + est["v5"] > g:
                 raise err(402, f"全站今日 V5 额度已用完（{int(g)} 张/天），明天再来")
     if est["anlas"] > 0:
         if not key["allow_anlas"]:
             raise err(402, "该请求会消耗 Anlas，此 Key 未开通付费额度权限")
-        if key["daily_anlas"] > 0 and c["anlas"] + est["anlas"] > key["daily_anlas"]:
+        if key["daily_anlas"] > 0 and c["anlas"] + sum(r.anlas for r in own_day) + est["anlas"] > key["daily_anlas"]:
             raise err(402, f"今日 Anlas 额度不足（已用 {c['anlas']:.0f} / 上限 "
                            f"{key['daily_anlas']:.0f}），明日恢复")
         used = await STATE.db.month_anlas(key["id"], STATE.month())
-        if key["monthly_anlas"] > 0 and used + est["anlas"] > key["monthly_anlas"]:
+        if key["monthly_anlas"] > 0 and used + sum(r.anlas for r in own_month) + est["anlas"] > key["monthly_anlas"]:
             raise err(402, f"本月 Anlas 额度不足（已用 {used:.0f}/{key['monthly_anlas']:.0f}）")
         budget = float(await STATE.db.get_setting(
             "global_monthly_anlas", STATE.settings.global_monthly_anlas) or 0)
         if budget > 0:
             all_used = await STATE.db.month_anlas_all(STATE.month())
-            if all_used + est["anlas"] > budget:
+            if all_used + sum(r.anlas for r in global_month) + est["anlas"] > budget:
                 raise err(402, f"全站本月 Anlas 预算已耗尽（{budget:.0f}），请联系站长")
+
+
+class ImageReservation:
+    def __init__(self, key, est, legacy):
+        self.key_id = key["id"]
+        self.exclude_global_v5 = bool(key["exclude_global_v5"])
+        self.anlas = est["anlas"]
+        self.v5 = est["v5"]
+        self.legacy = legacy
+
+    async def update(self, key, est, legacy=0):
+        async with STATE.image_budget_lock:
+            await quota_image_check(key, est, legacy_free_images=legacy,
+                                    exclude_reservation=self)
+            self.anlas, self.v5, self.legacy = est["anlas"], est["v5"], legacy
+
+
+@asynccontextmanager
+async def reserve_image_budget(key, est, *, legacy_free_images=0):
+    reservation = ImageReservation(key, est, legacy_free_images)
+    try:
+        async with asyncio.timeout(STATE.settings.queue_timeout):
+            async with STATE.image_budget_lock:
+                await quota_image_check(key, est, legacy_free_images=legacy_free_images)
+                reservations = getattr(STATE, "image_reservations", None)
+                if reservations is None:
+                    reservations = STATE.image_reservations = {}
+                reservations[id(reservation)] = reservation
+                if hasattr(STATE, "image_budget_idle"):
+                    STATE.image_budget_idle.clear()
+    except TimeoutError:
+        raise err(429, "图片预算核对排队超时，请稍后再试") from None
+    try:
+        yield reservation
+    finally:
+        with anyio.CancelScope(shield=True):
+            async with STATE.image_budget_lock:
+                STATE.image_reservations.pop(id(reservation), None)
+                if not STATE.image_reservations and hasattr(STATE, "image_budget_idle"):
+                    STATE.image_budget_idle.set()
 
 
 def record(key, kind: str, model: str, status: str, *, images: int = 0,
@@ -355,6 +408,8 @@ async def upstream_call(url: str, payload: dict, accept: str = "*/*", *,
             "POST", url, payload, accept=accept, on_rate_limited=on_rate_limited,
             requires_anlas=requires_anlas, v5_free=v5_free, image_count=image_count,
             image_lane=image_lane,
+            **({"queue_timeout": STATE.settings.queue_timeout,
+                "before_dispatch": check_image_cooldown} if image_lane else {}),
             **({"max_response_bytes": max_response_bytes} if max_response_bytes else {}),
             **({"resolve_v5_cost": resolve_v5_cost} if resolve_v5_cost is not None else {}),
         )
@@ -378,6 +433,15 @@ async def _text_quota_check(key, payload: dict) -> None:
 
 # ============================================================== 图片生成 =====
 
+async def wait_for_user_image_slot(key) -> None:
+    if key["is_admin"]:
+        return
+    try:
+        await STATE.wait_for_key_image_slot(key["id"])
+    except TimeoutError:
+        raise err(429, "图片任务排队超时，请稍后再试") from None
+
+
 async def image_tool(request: Request, operation: str):
     key = await authenticate(request)
     check_image_cooldown()
@@ -385,8 +449,7 @@ async def image_tool(request: Request, operation: str):
     if not key["is_admin"] and not (key["allow_img2img"] and STATE.settings.allow_img2img):
         raise err(403, "此 Key 或本站未开放图片处理权限（img2img）")
     body = await read_image_payload(request)
-    if not key["is_admin"]:
-        await STATE.wait_for_key_image_slot(key["id"])
+    await wait_for_user_image_slot(key)
     async with acquire_concurrency(key, image=True):
         check_image_cooldown()
         try:
@@ -394,7 +457,7 @@ async def image_tool(request: Request, operation: str):
         except ValueError as exc:
             raise err(400, str(exc)) from None
         model = payload.get("model", payload.get("req_type"))
-        await quota_image_check(key, {"anlas": cost, "v5": 0})
+        estimate = {"anlas": cost, "v5": 0}
 
         async def limited(retry_after):
             await STATE.block_image_generation(max(
@@ -426,7 +489,8 @@ async def image_tool(request: Request, operation: str):
                                 detail=f"图片工具 {cost} Anlas；返回 {count} 张")
             return Response(resp.content, media_type=media, headers={"Cache-Control": "no-store"})
 
-        return await complete_image_operation(perform())
+        async with reserve_image_budget(key, estimate):
+            return await complete_image_operation(perform())
 
 
 async def upscale_image(request: Request):
@@ -493,12 +557,11 @@ async def encode_vibe(request: Request):
         return Response(resp.content, media_type="application/octet-stream",
                         headers={"Cache-Control": "no-store"})
 
-    if not key["is_admin"]:
-        await STATE.wait_for_key_image_slot(key["id"])
+    await wait_for_user_image_slot(key)
     async with acquire_concurrency(key, image=True):
         check_image_cooldown()
-        await quota_image_check(key, estimate)
-        return await complete_image_operation(perform_encoding())
+        async with reserve_image_budget(key, estimate):
+            return await complete_image_operation(perform_encoding())
 
 
 async def generate_image(request: Request):
@@ -580,10 +643,13 @@ async def _generate_image(request: Request, *, streaming: bool):
     detail = "; ".join(notes) if notes else (
         f"{p.get('width')}x{p.get('height')}/{p.get('steps')}step {cost}")
 
+    reservation = None
+
     async def resolve_v5_cost(exhausted: bool):
         nonlocal est, detail
-        est = estimate_image_cost(body, is_opus=True, v5_allowance_available=not exhausted)
-        await quota_image_check(key, est)
+        updated = estimate_image_cost(body, is_opus=True, v5_allowance_available=not exhausted)
+        await reservation.update(key, updated, legacy_free_images)
+        est = updated
         if exhausted:
             detail = "; ".join(notes + [
                 f"{p.get('width')}x{p.get('height')}/{p.get('steps')}step est={est['anlas']}A",
@@ -646,6 +712,8 @@ async def _generate_image(request: Request, *, streaming: bool):
                         requires_anlas=est["anlas"] > 0, v5_free=est["v5"] > 0,
                         on_rate_limited=record_image_429,
                         on_dispatch=on_dispatch,
+                        queue_timeout=STATE.settings.queue_timeout,
+                        before_dispatch=check_image_cooldown,
                         resolve_v5_cost=resolve_v5_cost if est["v5"] else None,
                     ) as handle:
                         billing_uncertain = True
@@ -708,41 +776,43 @@ async def _generate_image(request: Request, *, streaming: bool):
 
         async def run_stream(response):
             try:
-                if not key["is_admin"]:
-                    await STATE.wait_for_key_image_slot(key["id"])
+                await wait_for_user_image_slot(key)
                 async with acquire_concurrency(key, image=True):
                     check_image_cooldown()
-                    if not est["v5"]:
-                        await quota_image_check(key, est, legacy_free_images=legacy_free_images)
-                    await complete_image_operation(perform_stream(response), can_cancel=lambda: not dispatched)
+                    async with reserve_image_budget(key, est, legacy_free_images=legacy_free_images) as reserved:
+                        nonlocal reservation
+                        reservation = reserved
+                        await complete_image_operation(perform_stream(response), can_cancel=lambda: not dispatched)
             except GateError as exc:
                 await response.error(exc.status, exc.message)
 
         return ImageStreamResponse(run_stream, wire_format)
 
-    if not key["is_admin"]:
-        await STATE.wait_for_key_image_slot(key["id"])
+    await wait_for_user_image_slot(key)
     async with acquire_concurrency(key, image=True):
         # Recheck both cooldown and quota after any queue/budget wait.
         check_image_cooldown()
-        if not est["v5"]:
-            await quota_image_check(key, est, legacy_free_images=legacy_free_images)
-        return await complete_image_operation(perform_generation())
+        async with reserve_image_budget(key, est, legacy_free_images=legacy_free_images) as reservation:
+            return await complete_image_operation(perform_generation())
 
 
 async def suggest_tags(request: Request):
     key = await authenticate(request)
     check_image_cooldown()
-    if not STATE.try_tag_request(key["id"]):
-        raise err(429, "补全查询过于频繁或服务繁忙，请稍后再试")
+    admitted = False
     try:
         # Bound body reads, semaphore waiting and the optional upstream lookup.
-        async with asyncio.timeout(min(15.0, STATE.settings.queue_timeout)):
+        async with asyncio.timeout(STATE.settings.queue_timeout):
+            admitted = await STATE.wait_for_tag_request(key["id"])
+            if not admitted:
+                raise err(429, "补全查询排队人数过多，请稍后再试")
             return await _suggest_tags(request, key)
     except TimeoutError:
+        record(key, "tags", "", "error", detail="补全查询排队或请求超时")
         raise err(429, "补全查询等待超时，请稍后再试") from None
     finally:
-        STATE.finish_tag_request(key["id"])
+        if admitted:
+            await STATE.finish_tag_request(key["id"])
 
 
 async def _suggest_tags(request: Request, key):
@@ -778,9 +848,11 @@ async def _suggest_tags(request: Request, key):
                 accept="application/json", on_rate_limited=record_tag_429,
                 image_lane=True, wait_for_image_slot=False)
         except UpstreamError as exc:
-            record(key, "tags", "", "error", detail=f"upstream {exc.status}")
+            if exc.status != 429:  # 真实上游 429 已由 record_tag_429 记录。
+                record(key, "tags", "", "error", detail=exc.message)
             raise err(exc.status if exc.status in (429, 503) else 502, exc.message)
     if resp.status_code != 200:
+        record(key, "tags", "", "error", detail=f"上游标签接口返回 HTTP {resp.status_code}")
         raise err(resp.status_code, upstream_error_message(resp.status_code))
     record(key, "tags", "", "ok")
     return Response(resp.content, media_type="application/json")

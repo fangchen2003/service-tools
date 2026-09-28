@@ -54,9 +54,9 @@ class Settings:
     )  # 老模型(Sigurd/Clio等)走这里
 
     # ---- 并发 / 限流 ----
-    global_concurrency: int = _int("GLOBAL_CONCURRENCY", 1)  # 单上游 Token 时保持单请求
+    global_concurrency: int = _int("GLOBAL_CONCURRENCY", 1)  # 文本等非图片请求的全站并发
     key_concurrency: int = _int("KEY_CONCURRENCY", 1)  # 每把虚拟 key 同时可进行的请求数
-    queue_timeout: int = _int("QUEUE_TIMEOUT", 90)  # 排队等待信号量的最长时间(秒)
+    queue_timeout: int = _int("QUEUE_TIMEOUT", 90)  # 排队等待的最长时间(秒)；面板可覆盖
     key_image_min_interval: float = _float("KEY_IMAGE_MIN_INTERVAL", 15)
     image_min_interval: float = _float("IMAGE_MIN_INTERVAL", 15)  # 每把上游 Token 的图片请求间隔
     image_429_cooldown_seconds: float = _float("IMAGE_429_COOLDOWN_SECONDS", 60)

@@ -118,7 +118,7 @@ class FakeNai:
 
 
 class FakeState:
-    try_tag_request = GateState.try_tag_request
+    wait_for_tag_request = GateState.wait_for_tag_request
     finish_tag_request = GateState.finish_tag_request
 
     def __init__(self):
@@ -138,6 +138,8 @@ class FakeState:
         self.cooldowns = []
         self._tag_active = set()
         self._tag_next_at = {}
+        self._tag_condition = asyncio.Condition()
+        self._tag_waiting = 0
 
     def key_sem(self, key_id, capacity):
         return self.semaphores.setdefault(key_id, asyncio.Semaphore(capacity))
@@ -235,7 +237,7 @@ async def test_disconnect_during_unknown_result_records_pending_once(state):
     await state.nai.entered.wait()
     task.cancel()
     await asyncio.sleep(0)
-    assert state.image_budget_lock.locked()
+    assert len(state.image_reservations) == 1
     state.nai.release.set()
     # The shielded upstream failure completes its error response and ledger,
     # even though the downstream caller has already cancelled.
@@ -368,7 +370,10 @@ async def test_precise_generation_settles_and_uses_paid_token_policy(state, stat
     assert state.db.charges[0][1]["anlas"] == 10
     assert state.db.logs[-1][1]['unconfirmed_anlas'] == 0
     assert state.nai.calls[0][2] == body
-    assert state.nai.calls[0][3] | {"on_rate_limited": None} == {
+    forwarded = state.nai.calls[0][3].copy()
+    assert forwarded.pop("queue_timeout") == state.settings.queue_timeout
+    assert callable(forwarded.pop("before_dispatch"))
+    assert forwarded | {"on_rate_limited": None} == {
         "accept": "*/*", "on_rate_limited": None, "requires_anlas": True,
         "v5_free": False, "image_count": 1, "image_lane": True,
         "max_response_bytes": 64 * 1024 * 1024}
@@ -462,7 +467,8 @@ async def test_parallel_requests_recheck_ledger_inside_global_budget_lock(state,
         if state.global_waiting == 1:
             break
         await asyncio.sleep(0)
-    assert state.global_active == 1 and state.global_waiting == 1 and len(state.nai.calls) == 1
+    assert state.global_active == 1 and len(state.nai.calls) == 1
+    assert second.done() and (await second).status_code == 402
     state.nai.release.set()
     responses = await asyncio.gather(first, second)
     assert [item.status_code for item in responses] == [200, 402]
@@ -487,7 +493,7 @@ async def test_cancellation_during_success_ledger_keeps_locks_until_accounted(st
     else:
         scope.cancel()
     await asyncio.sleep(0)
-    assert state.image_budget_lock.locked() and state.global_active == 1
+    assert len(state.image_reservations) == 1 and state.global_active == 1
     assert not state.db.charges
     state.db.accounting_release.set()
     if cancel_kind == "asyncio":
@@ -547,7 +553,7 @@ async def test_cancel_after_dispatch_finishes_response_and_user_charge(state, ki
     else:
         scope.cancel()
     await asyncio.sleep(0)
-    assert state.image_budget_lock.locked() and state.global_active == 1
+    assert len(state.image_reservations) == 1 and state.global_active == 1
     assert not task.done() and not state.db.charges
     state.nai.release.set()
     if cancel_kind == "asyncio":

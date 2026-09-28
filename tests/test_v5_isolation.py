@@ -30,6 +30,10 @@ class State:
     def day():
         return "2026-09-03"
 
+    @staticmethod
+    def month():
+        return "2026-09"
+
 
 def test_v5_exempt_key_does_not_consume_or_block_on_global_v5():
     """独立 V5 Key 仅受其自己的 daily_v5 限制，不受全站日额度影响。"""

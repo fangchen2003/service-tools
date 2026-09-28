@@ -70,6 +70,29 @@ async def next_run(e):
 
 
 @pytest.mark.asyncio
+async def test_reconciliation_waits_for_inflight_reservations_and_blocks_new_admission(env):
+    env.release = asyncio.Event()
+    async with main.reserve_image_budget(env.key, {"anlas": 0, "v5": 0}):
+        run = asyncio.create_task(env.rec.run())
+        await asyncio.sleep(.02)
+        assert not env.queries and not run.done()
+    await asyncio.wait_for(env.entered.wait(), 1)
+    admitted = asyncio.Event()
+
+    async def another_image():
+        async with main.reserve_image_budget(env.key, {"anlas": 0, "v5": 0}):
+            admitted.set()
+
+    next_image = asyncio.create_task(another_image())
+    await asyncio.sleep(.02)
+    assert not admitted.is_set()
+    env.release.set()
+    await asyncio.wait_for(run, 1)
+    await asyncio.wait_for(next_image, 1)
+    assert admitted.is_set() and not env.st.image_reservations
+
+
+@pytest.mark.asyncio
 async def test_balances_compare_persist_without_rebilling_across_months_and_deleted_keys(env):
     db = env.st.db
     await db.bump_counters(env.key["id"], "2026-09-30", anlas=20)

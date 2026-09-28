@@ -15,6 +15,7 @@ from .policy import gen_key
 from .body import read_json_body
 from .allowance import SETTING, read_alert_threshold
 from .reconciliation import ReconciliationError
+from .state import RUNTIME_LIMIT_BOUNDS
 
 router = APIRouter(prefix="/admin/api")
 
@@ -343,6 +344,25 @@ async def get_settings(request: Request):
             SETTING: await read_alert_threshold(st.db)}
 
 
+@router.get("/runtime-limits")
+async def get_runtime_limits(request: Request):
+    require_admin(request)
+    return request.app.state.gate.runtime_limits_snapshot()
+
+
+@router.put("/runtime-limits")
+async def put_runtime_limits(request: Request):
+    require_admin(request)
+    body = await read_json_body(request)
+    if not body or set(body) - set(RUNTIME_LIMIT_BOUNDS):
+        raise HTTPException(422, "包含未知或空的运行限制设置")
+    for name, value in body.items():
+        minimum, maximum = RUNTIME_LIMIT_BOUNDS[name]
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise HTTPException(422, f"{name} 必须是 {minimum}～{maximum} 的整数")
+    return await request.app.state.gate.update_runtime_limits(body)
+
+
 @router.get("/allowance")
 async def allowance(request: Request):
     require_admin(request)
@@ -359,6 +379,18 @@ async def set_upstream_v5_limit(request: Request, token_id: str):
     if not await request.app.state.gate.nai.set_v5_daily_limit(token_id, limit):
         raise HTTPException(404, "上游 Token 不存在")
     return {"ok": True, "v5_daily_limit": limit}
+
+
+@router.put("/upstream-tokens/{token_id}/image-concurrency")
+async def set_upstream_image_concurrency(request: Request, token_id: str):
+    require_admin(request)
+    body = await read_json_body(request)
+    limit = body.get("image_concurrency")
+    if type(limit) is not int or not 1 <= limit <= 4:
+        raise HTTPException(422, "上游图片并发必须是 1～4 的整数")
+    if not await request.app.state.gate.nai.set_image_concurrency(token_id, limit):
+        raise HTTPException(404, "上游 Token 不存在")
+    return {"ok": True, "image_concurrency": limit}
 
 
 @router.put("/upstream-tokens/{token_id}/enabled")

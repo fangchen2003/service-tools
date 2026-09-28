@@ -63,8 +63,10 @@ class ManualReconciliation:
     wait_timeout = 30
     query_timeout = 30
 
-    def __init__(self, db, nai, image_lock):
+    def __init__(self, db, nai, image_lock, image_reservations=None, image_idle=None):
         self.db, self.nai, self.image_lock = db, nai, image_lock
+        self.image_reservations = image_reservations
+        self.image_idle = image_idle
         self.lock = asyncio.Lock()
 
     async def retry_after(self):
@@ -122,9 +124,23 @@ class ManualReconciliation:
             retry = await self.retry_after()
             if retry:
                 raise ReconciliationError(f"请在 {retry} 秒后重试", 429, retry)
-            # Wait for dispatched image work and its accounting to finish.
+            # Reserve the image-admission lock only once all in-flight work and
+            # its accounting have finished. Keep it through the balance read.
+            deadline = asyncio.get_running_loop().time() + self.wait_timeout
             try:
-                await asyncio.wait_for(self.image_lock.acquire(), self.wait_timeout)
+                while True:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        raise TimeoutError
+                    await asyncio.wait_for(self.image_lock.acquire(), remaining)
+                    if not self.image_reservations:
+                        break
+                    self.image_lock.release()
+                    if self.image_idle is not None:
+                        remaining = deadline - asyncio.get_running_loop().time()
+                        if remaining <= 0:
+                            raise TimeoutError
+                        await asyncio.wait_for(self.image_idle.wait(), remaining)
             except TimeoutError:
                 raise ReconciliationError("图片任务仍在处理，请稍后核对；尚未查询官方", 409) from None
             try:

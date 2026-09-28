@@ -252,7 +252,7 @@ async def test_disconnect_does_not_release_budget_or_skip_final_settlement(state
     else:
         disconnected.set()
     await asyncio.sleep(0.01)
-    assert not task.done() and state.image_budget_lock.locked() and state.global_active == 1
+    assert not task.done() and len(state.image_reservations) == 1 and state.global_active == 1
     assert not state.db.charges
     release.set()
     if state.db.accounting_release:
@@ -291,7 +291,7 @@ async def test_cancel_anyio_scope_drains_upstream_and_settles(state):
     await state.nai.entered.wait()
     scope.cancel()
     await asyncio.sleep(0.01)
-    assert state.image_budget_lock.locked() and not task.done()
+    assert len(state.image_reservations) == 1 and not task.done()
     release.set()
     await task
     assert state.nai.counts == [1] and len(state.db.charges) == 1
@@ -300,14 +300,16 @@ async def test_cancel_anyio_scope_drains_upstream_and_settles(state):
 
 @pytest.mark.asyncio
 async def test_disconnect_while_queued_never_dispatches(state):
-    state.global_sem = asyncio.Semaphore(0)
+    state.settings.key_concurrency = 1
+    await state.key_sem(1, 1).acquire()
     task, disconnected, _ = await start_asgi(state)
     await asyncio.sleep(0.01)
     assert state.global_waiting == 1
     disconnected.set()
     await task
     assert not state.nai.calls and state.global_waiting == 0
-    assert state.semaphores[1]._value == state.settings.key_concurrency
+    assert state.semaphores[1]._value == 0
+    state.semaphores[1].release()
 
 
 @pytest.mark.asyncio
@@ -359,7 +361,7 @@ async def test_real_http_delivers_preview_before_final_without_buffering(state):
                 chunks = response.aiter_bytes()
                 first = await asyncio.wait_for(anext(chunks), 2)
                 assert response.status_code == 200 and b"intermediate" in first
-                assert not state.db.charges and state.image_budget_lock.locked()
+                assert not state.db.charges and len(state.image_reservations) == 1
                 release.set()
                 remaining = b"".join([chunk async for chunk in chunks])
                 assert b'"event_type": "final"' in remaining

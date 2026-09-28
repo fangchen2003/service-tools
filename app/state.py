@@ -15,6 +15,14 @@ from .nai import NaiClient
 from .reconciliation import ManualReconciliation
 
 
+RUNTIME_LIMIT_BOUNDS = {
+    "queue_timeout": (15, 300),
+    "key_image_min_interval": (15, 120),
+    "image_min_interval": (15, 120),
+    "image_429_cooldown_seconds": (60, 3600),
+}
+
+
 class GateState:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -37,15 +45,63 @@ class GateState:
         self._rpm: dict[int, deque[float]] = {}
         self._tag_active: set[int] = set()
         self._tag_next_at: dict[int, float] = {}
+        self._tag_condition = asyncio.Condition()
+        self._tag_waiting = 0
         self._login_attempts: dict[str, deque[float]] = {}
         self._lock = asyncio.Lock()
         self._image_blocked_until = 0.0
-        # Keep quota check, dispatch and successful accounting in one boundary.
+        # Protect only quota reservation mutations; never hold this across HTTP.
         self.image_budget_lock = asyncio.Lock()
-        self.reconciliation = ManualReconciliation(self.db, self.nai, self.image_budget_lock)
+        self.image_reservations: dict[int, object] = {}
+        self.image_budget_idle = asyncio.Event()
+        self.image_budget_idle.set()
+        self.reconciliation = ManualReconciliation(
+            self.db, self.nai, self.image_budget_lock,
+            self.image_reservations, self.image_budget_idle)
         self.global_waiting = 0
         self.global_active = 0
         self._image_pacing_waiting = 0
+        self._runtime_limits_lock = asyncio.Lock()
+
+    def runtime_limits_snapshot(self) -> dict[str, int]:
+        return {name: int(getattr(self.settings, name)) for name in RUNTIME_LIMIT_BOUNDS}
+
+    async def load_runtime_limits(self) -> None:
+        """Persisted panel overrides win over .env after each restart."""
+        values = {}
+        for name, (minimum, maximum) in RUNTIME_LIMIT_BOUNDS.items():
+            raw = await self.db.get_setting("runtime_" + name, None)
+            try:
+                value = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if minimum <= value <= maximum:
+                values[name] = value
+        await self._apply_runtime_limits(values)
+
+    async def update_runtime_limits(self, values: dict[str, int]) -> dict[str, int]:
+        async with self._runtime_limits_lock:
+            await self.db.set_settings_bulk({"runtime_" + k: v for k, v in values.items()})
+            await self._apply_runtime_limits(values)
+            return self.runtime_limits_snapshot()
+
+    async def _apply_runtime_limits(self, values: dict[str, int]) -> None:
+        if "key_image_min_interval" in values:
+            new = values["key_image_min_interval"]
+            old = self.settings.key_image_min_interval
+            async with self._lock:
+                if new > old:
+                    now = time.monotonic()
+                    for key_id, next_at in self._key_image_next_at.items():
+                        if next_at > now:
+                            self._key_image_next_at[key_id] = max(next_at, now + new)
+                self.settings.key_image_min_interval = new
+        if "image_min_interval" in values:
+            await self.nai.set_image_min_interval(values["image_min_interval"])
+            self.settings.image_min_interval = values["image_min_interval"]
+        for name in ("queue_timeout", "image_429_cooldown_seconds"):
+            if name in values:
+                setattr(self.settings, name, values[name])
 
     # ---------- time ----------
     def day(self, ts: Optional[float] = None) -> str:
@@ -72,20 +128,20 @@ class GateState:
 
     async def wait_for_key_image_slot(self, key_id: int) -> None:
         """普通用户 Key 的图片任务独立冷却，不占用全站并发槽。"""
-        interval = max(0.0, self.settings.key_image_min_interval)
-        if not interval:
-            return
-        async with self._lock:
-            now = time.monotonic()
-            next_at = self._key_image_next_at.get(key_id, 0.0)
-            wait = max(0.0, next_at - now)
-            self._key_image_next_at[key_id] = max(now, next_at) + interval
-        if wait:
-            self._image_pacing_waiting += 1
-            try:
-                await asyncio.sleep(wait)
-            finally:
-                self._image_pacing_waiting -= 1
+        async with asyncio.timeout(self.settings.queue_timeout):
+            while True:
+                async with self._lock:
+                    now = time.monotonic()
+                    wait = max(0.0, self._key_image_next_at.get(key_id, 0.0) - now)
+                    if not wait:
+                        self._key_image_next_at[key_id] = now + max(
+                            0.0, self.settings.key_image_min_interval)
+                        return
+                self._image_pacing_waiting += 1
+                try:
+                    await asyncio.sleep(wait)
+                finally:
+                    self._image_pacing_waiting -= 1
 
     def queue_snapshot(self) -> dict:
         """Aggregate visibility only; no identities, requests or token values."""
@@ -96,7 +152,7 @@ class GateState:
             "global": {
                 "active": self.global_active,
                 "waiting": self.global_waiting + self._image_pacing_waiting,
-                "concurrency": self.settings.global_concurrency,
+                "concurrency": sum(t.image_slots.limit for t in self.nai.pool if t.usable),
             },
             "image_next_slot_in": round(min(slots, default=0.0), 1),
             "image_cooldown_remaining": self.image_cooldown_remaining(),
@@ -104,19 +160,37 @@ class GateState:
             "image_min_interval": self.settings.image_min_interval,
         }
 
-    def try_tag_request(self, key_id: int) -> bool:
-        """Fail-fast autocomplete admission; no awaits, no future image slots."""
-        now = time.monotonic()
-        if (key_id in self._tag_active
-                or len(self._tag_active) >= min(8, max(1, self.settings.global_concurrency))
-                or self._tag_next_at.get(key_id, 0) > now):
-            return False
-        self._tag_active.add(key_id)
-        self._tag_next_at[key_id] = now + max(1.0, self.settings.key_image_min_interval)
-        return True
+    async def wait_for_tag_request(self, key_id: int) -> bool:
+        """Queue autocomplete without reserving future image slots or buffering bodies."""
+        async with self._tag_condition:
+            # Bound idle requests independently of the outer queue timeout.
+            if self._tag_waiting >= max(16, self.settings.global_concurrency * 16):
+                return False
+            self._tag_waiting += 1
+            try:
+                while True:
+                    now = time.monotonic()
+                    delay = max(0.0, self._tag_next_at.get(key_id, 0) - now)
+                    capacity = min(8, max(1, self.settings.global_concurrency))
+                    if key_id not in self._tag_active and len(self._tag_active) < capacity:
+                        if not delay:
+                            self._tag_active.add(key_id)
+                            self._tag_next_at[key_id] = now + max(
+                                1.0, self.settings.key_image_min_interval)
+                            return True
+                        try:
+                            await asyncio.wait_for(self._tag_condition.wait(), delay)
+                        except TimeoutError:
+                            pass
+                    else:
+                        await self._tag_condition.wait()
+            finally:
+                self._tag_waiting -= 1
 
-    def finish_tag_request(self, key_id: int) -> None:
-        self._tag_active.discard(key_id)
+    async def finish_tag_request(self, key_id: int) -> None:
+        async with self._tag_condition:
+            self._tag_active.discard(key_id)
+            self._tag_condition.notify_all()
 
     # ---------- rpm ----------
     async def hit_rpm(self, key_id: int, rpm: int) -> bool:

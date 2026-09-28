@@ -12,6 +12,40 @@ import pytest
 from app.nai import NaiClient, UpstreamError
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [1, 2])
+async def test_per_upstream_image_concurrency_caps_inflight_requests(limit):
+    entered = 0
+    peak = 0
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def operation():
+        nonlocal entered, peak
+        entered += 1
+        peak = max(peak, entered)
+        if entered == limit:
+            started.set()
+        try:
+            await release.wait()
+            return httpx.Response(200, content=PNG)
+        finally:
+            entered -= 1
+
+    client, _ = make_client(http=FakeHTTP(operation=operation))
+    client.pool[0].image_slots.resize(limit)
+    tasks = [asyncio.create_task(client.request(
+        'POST', 'https://offline.invalid', image_lane=True)) for _ in range(limit + 1)]
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        await asyncio.sleep(.01)
+        assert peak == limit
+    finally:
+        release.set()
+        await asyncio.gather(*tasks)
+    assert client.pool[0].image_slots.active == 0
+
+
 PNG = base64.b64decode(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/'
     'iZk9HQAAAABJRU5ErkJggg=='

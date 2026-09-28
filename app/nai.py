@@ -14,6 +14,7 @@ import httpx
 
 from .policy import mask_token
 from .allowance import AllowanceCache, AllowanceUnavailable
+from .concurrency import AdjustableLimiter
 from .image_tools import validate_result
 
 
@@ -35,7 +36,7 @@ class TokenState:
     __slots__ = (
         "token", "token_id", "position", "v5_daily_limit", "allow_anlas", "pending_v5",
         "admin_enabled",
-        "dispatch_lock",
+        "dispatch_lock", "image_slots",
         "fails", "blocked_until", "disabled", "last_ok", "image_next_at",
     )
 
@@ -49,6 +50,7 @@ class TokenState:
         self.allow_anlas = allow_anlas
         self.admin_enabled = True
         self.dispatch_lock = asyncio.Lock()
+        self.image_slots = AdjustableLimiter(1)
         self.pending_v5 = 0
         self.fails = 0
         self.blocked_until = 0.0
@@ -119,11 +121,15 @@ class NaiClient:
     async def load_saved_limits(self) -> None:
         saved = await self._db.get_upstream_token_limits()
         enabled = await self._db.get_upstream_token_enabled()
+        image_concurrency = (await self._db.get_upstream_token_image_concurrency()
+                             if hasattr(self._db, "get_upstream_token_image_concurrency") else {})
         for token in self.pool:
             if token.token_id in saved:
                 token.v5_daily_limit = saved[token.token_id]
             if token.token_id in enabled:
                 token.admin_enabled = enabled[token.token_id]
+            if token.token_id in image_concurrency:
+                token.image_slots.resize(min(4, max(1, image_concurrency[token.token_id])))
 
     async def set_v5_daily_limit(self, token_id: str, limit: int) -> bool:
         async with self._lock:
@@ -144,7 +150,18 @@ class NaiClient:
             async with self._lock:
                 await self._db.set_upstream_token_enabled(token_id, enabled)
                 token.admin_enabled = enabled
+        if not enabled:
+            await token.image_slots.wait_idle()
         return True
+
+    async def set_image_concurrency(self, token_id: str, limit: int) -> bool:
+        async with self._lock:
+            token = next((item for item in self.pool if item.token_id == token_id), None)
+            if token is None:
+                return False
+            await self._db.set_upstream_token_image_concurrency(token_id, limit)
+            token.image_slots.resize(limit)
+            return True
 
     async def pick_token(self, *, requires_anlas: bool = False,
                          v5_free: bool = False) -> Optional[TokenState]:
@@ -197,14 +214,28 @@ class NaiClient:
 
     async def wait_for_token_image_slot(self, ts: TokenState) -> None:
         """每把上游 Token 各自保持图片请求间隔，不与其他 Token 共享计时。"""
-        if not self._image_min_interval:
-            return
+        await self.wait_for_available_token_image_slot(ts)
+
+    async def wait_for_available_token_image_slot(self, ts: TokenState) -> None:
+        """补全查询等到当前空档才占位，取消等待不会挤占后续生图。"""
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                wait = max(0.0, ts.image_next_at - now)
+                if not wait:
+                    ts.image_next_at = now + self._image_min_interval
+                    return
+            await asyncio.sleep(wait)
+
+    async def set_image_min_interval(self, seconds: float) -> None:
+        """Apply a safer increased interval to already cooling tokens too."""
         async with self._lock:
             now = time.monotonic()
-            wait = max(0.0, ts.image_next_at - now)
-            ts.image_next_at = max(now, ts.image_next_at) + self._image_min_interval
-        if wait:
-            await asyncio.sleep(wait)
+            if seconds > self._image_min_interval:
+                for token in self.pool:
+                    if token.image_next_at > now:
+                        token.image_next_at = max(token.image_next_at, now + seconds)
+            self._image_min_interval = seconds
 
     def mark_rate_limited(self, ts: TokenState, retry_after: float = 20.0) -> None:
         ts.blocked_until = time.time() + max(5.0, retry_after)
@@ -237,6 +268,8 @@ class NaiClient:
                 "blocked_for": max(0, int(t.blocked_until - now)),
                 "last_ok": t.last_ok,
                 "allow_anlas": t.allow_anlas,
+                "image_concurrency": t.image_slots.limit,
+                "image_active": t.image_slots.active,
                 "v5_daily_limit": t.v5_daily_limit,
                 "v5_used": counter["v5"],
                 "images_today": counter["images"],
@@ -282,6 +315,8 @@ class NaiClient:
         image_count: int = 0, image_lane: bool = False, wait_for_image_slot: bool = True,
         resolve_v5_cost: Optional[Callable[[bool], Awaitable[None]]] = None,
         max_response_bytes: int | None = None,
+        queue_timeout: float = 90,
+        before_dispatch: Optional[Callable[[], None]] = None,
     ) -> httpx.Response:
         """图片请求不自动重试；普通请求只对明确的 429 换 token 一次。"""
         if self._client is None:
@@ -295,25 +330,30 @@ class NaiClient:
             succeeded = False
             send_started = False
             response_status = None
+            slot_acquired = False
             try:
                 if image_lane:
-                    if wait_for_image_slot:
-                        await self.wait_for_token_image_slot(ts)
-                    else:
-                        async with self._lock:
-                            now = time.monotonic()
-                            if ts.image_next_at > now:
-                                raise UpstreamError(503, "上游正在处理图片请求，补全建议暂不可用")
-                            ts.image_next_at = now + self._image_min_interval
+                    try:
+                        async with asyncio.timeout(queue_timeout):
+                            await ts.image_slots.acquire()
+                            slot_acquired = True
+                            if wait_for_image_slot:
+                                await self.wait_for_token_image_slot(ts)
+                            else:
+                                await self.wait_for_available_token_image_slot(ts)
+                    except TimeoutError:
+                        raise UpstreamError(429, "上游图片任务排队超时，请稍后再试") from None
                 if v5_free and resolve_v5_cost is not None:
                     exhausted = await self._resolve_v5_cost(ts, resolve_v5_cost)
                     if exhausted:
                         await self.finish_v5_reservation(ts, succeeded=False, v5_free=True)
                         v5_free = False
                         requires_anlas = True
-                async with ts.dispatch_lock:
+                async with self._dispatch_guard(ts, image_lane):
                     if not ts.admin_enabled:
-                        continue  # 停用发生在排队期间；改选其他上游，且不发出此请求。
+                        continue
+                    if before_dispatch is not None:
+                        before_dispatch()
                     send_started = True
                     if max_response_bytes is None:
                         resp = await self._client.request(
@@ -369,9 +409,13 @@ class NaiClient:
                 raise UpstreamError(502, "上游图片请求连接中断或超时，未记费；请勿自动重试",
                                     billing_uncertain=uncertain) from None
             finally:
-                await _wait_cleanup(asyncio.create_task(self._settle(
-                    ts, succeeded=succeeded, v5_free=v5_free, image_count=image_count
-                )))
+                try:
+                    await _wait_cleanup(asyncio.create_task(self._settle(
+                        ts, succeeded=succeeded, v5_free=v5_free, image_count=image_count
+                    )))
+                finally:
+                    if slot_acquired:
+                        ts.image_slots.release()
         raise UpstreamError(429, "上游限流(429)，请降低频率后重试")
 
     async def _resolve_v5_cost(self, ts, callback):
@@ -389,12 +433,28 @@ class NaiClient:
         return exhausted
 
     @asynccontextmanager
+    async def _dispatch_guard(self, ts: TokenState, image_lane: bool):
+        if image_lane:
+            # Admin disable observes this check, then waits for the image slot
+            # before returning. The HTTP operation itself may overlap peers.
+            async with ts.dispatch_lock:
+                if not ts.admin_enabled:
+                    yield
+                    return
+            yield
+        else:
+            async with ts.dispatch_lock:
+                yield
+
+    @asynccontextmanager
     async def image_stream(
         self, url: str, json_body: Any, *, requires_anlas: bool = False,
         v5_free: bool = False,
         on_rate_limited: Optional[Callable[[float], Awaitable[None]]] = None,
         on_dispatch: Optional[Callable[[], None]] = None,
         resolve_v5_cost: Optional[Callable[[bool], Awaitable[None]]] = None,
+        queue_timeout: float = 90,
+        before_dispatch: Optional[Callable[[], None]] = None,
     ) -> AsyncIterator[ImageStreamHandle]:
         """图片流不重试；调用方只在确认完整最终图片后增加 completed_images。"""
         if self._client is None:
@@ -405,6 +465,7 @@ class NaiClient:
         resp: Optional[httpx.Response] = None
         handle: Optional[ImageStreamHandle] = None
         send_started = False
+        slot_acquired = False
 
         async def cleanup() -> None:
             close_failed = False
@@ -424,7 +485,13 @@ class NaiClient:
                 raise UpstreamError(502, "上游图片流连接关闭失败")
 
         try:
-            await self.wait_for_token_image_slot(ts)
+            try:
+                async with asyncio.timeout(queue_timeout):
+                    await ts.image_slots.acquire()
+                    slot_acquired = True
+                    await self.wait_for_token_image_slot(ts)
+            except TimeoutError:
+                raise UpstreamError(429, "上游图片任务排队超时，请稍后再试") from None
             if v5_free and resolve_v5_cost is not None:
                 exhausted = await self._resolve_v5_cost(ts, resolve_v5_cost)
                 if exhausted:
@@ -436,9 +503,11 @@ class NaiClient:
                                       json_body.get("parameters", {}).get("stream") == "msgpack"
                                       else "text/event-stream"),
             )
-            async with ts.dispatch_lock:
+            async with self._dispatch_guard(ts, True):
                 if not ts.admin_enabled:
                     raise UpstreamError(503, "上游令牌已停用，未发送生图")
+                if before_dispatch is not None:
+                    before_dispatch()
                 if on_dispatch is not None:
                     on_dispatch()
                 send_started = True
@@ -464,7 +533,11 @@ class NaiClient:
             raise UpstreamError(502, "上游图片流连接中断，请检查任务结果后再决定是否重试",
                                 billing_uncertain=uncertain) from None
         finally:
-            await _wait_cleanup(asyncio.create_task(cleanup()))
+            try:
+                await _wait_cleanup(asyncio.create_task(cleanup()))
+            finally:
+                if slot_acquired:
+                    ts.image_slots.release()
 
     async def stream(
         self, url: str, json_body: Any,

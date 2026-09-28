@@ -90,6 +90,27 @@ async def test_automatic_inactivity_cleanup_preserves_ledger(db):
 
 
 @pytest.mark.asyncio
+async def test_inactivity_reset_starts_new_grace_without_faking_last_use(db):
+    row = await key(db)
+    old_created = time.time() - 10 * 86400
+    await db._db.execute("UPDATE api_keys SET created_at=? WHERE id=?", (old_created, row["id"]))
+    await db._db.commit()
+    state = GateState(Settings(key_inactivity_delete_days=3))
+    state.db = db
+    assert await db.inactive_key_ids(time.time() - 3 * 86400) == [row["id"]]
+
+    grace_started_at = time.time()
+    await db.set_setting("key_inactivity_grace_started_at", grace_started_at)
+    assert await state.delete_inactive_keys() == 0
+    preserved = await db.get_key(row["id"])
+    assert preserved["created_at"] == old_created and preserved["last_used_at"] is None
+    assert await db.inactive_key_ids(grace_started_at + 1) == [row["id"]]
+
+    await db.set_setting("key_inactivity_grace_started_at", "invalid")
+    assert await db.inactive_key_ids(grace_started_at + 1) == []
+
+
+@pytest.mark.asyncio
 async def test_delete_is_atomic_if_offset_cleanup_fails(db):
     row = await key(db)
     await db.bump_counters(row["id"], DAY, anlas=9, v5=1)
