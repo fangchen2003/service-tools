@@ -995,9 +995,11 @@ async def v1_models(request: Request):
 async def v1_me(request: Request):
     key = await authenticate(request)
     c = await STATE.db.get_counter(key["id"], STATE.day())
+    generated_images = await STATE.db.generated_image_totals(key["id"])
     return {
         "name": key["name"],
         "is_admin": bool(key["is_admin"]),
+        "generated_images_total": generated_images.get(key["id"], 0),
         "today": {
             "images": c["images"], "daily_images": key["daily_images"],
             "legacy_free_images_today": c["legacy_free_images"],

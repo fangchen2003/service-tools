@@ -53,6 +53,25 @@ async def snapshot(db):
 
 
 @pytest.mark.asyncio
+async def test_lifetime_image_count_is_visible_to_admin_and_key_owner(env):
+    state, client, key = env
+    day = state.day()
+    await state.db.bump_counters(key['id'], day, images=3)
+    await state.db.add_log(key['id'], key['name'], 'image', 'model', 'ok', images=2)
+    await state.db.add_log(key['id'], key['name'], 'image_stream', 'model', 'ok', images=1)
+    await state.db.add_log(key['id'], key['name'], 'image', 'model', 'error', images=5)
+    await state.db.add_log(key['id'], key['name'], 'augment-image', 'model', 'ok', images=1)
+    await login(client)
+
+    keys = (await client.get('/admin/api/keys')).json()['keys']
+    assert keys[0]['used']['images'] == 3
+    assert keys[0]['used']['generated_images_total'] == 3
+    me = (await client.get('/v1/me', headers=auth(key['token']))).json()
+    assert me['generated_images_total'] == 3
+    assert me['today']['images'] == 3
+
+
+@pytest.mark.asyncio
 async def test_admin_only_missing_and_get_cannot_rotate(env):
     state, client, key = env
     path = f"/admin/api/keys/{key['id']}/regenerate"

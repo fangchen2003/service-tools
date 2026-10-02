@@ -584,6 +584,20 @@ class Database:
         row = await cur.fetchone()
         return int(row["c"])
 
+    async def generated_image_totals(self, key_id: Optional[int] = None) -> dict[int, int]:
+        """Count successful generations (including completed stream images) per Key."""
+        sql = """SELECT key_id, COALESCE(SUM(images), 0) AS images
+                 FROM usage_log
+                 WHERE key_id IS NOT NULL AND kind IN ('image', 'image_stream')
+                   AND status='ok'"""
+        args: tuple = ()
+        if key_id is not None:
+            sql += " AND key_id=?"
+            args = (key_id,)
+        sql += " GROUP BY key_id"
+        rows = await (await self._db.execute(sql, args)).fetchall()
+        return {int(row["key_id"]): int(row["images"]) for row in rows}
+
     # ---------- overview ----------
     async def overview(self, today: str, week_days: list[str]) -> dict[str, Any]:
         from datetime import datetime, timedelta

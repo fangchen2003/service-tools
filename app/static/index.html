@@ -509,7 +509,8 @@ async function loadKeys(){
             ${k.is_admin?'<span class="tag on">站长</span>':''}
             <span class="tag ${k.image_model_scope==='all'?'on':'off'}">${k.image_model_scope==='all'?'含 V5':'仅 V4.5↓'}</span>
             ${k.allow_img2img?'<span class="tag warn">img2img</span>':''}</td>
-        <td class="key-summary">总图 ${k.used.images} · 免费 ${k.used.legacy_free_images||0} · V5 ${k.used.v5||0}<br>
+        <td class="key-summary">累计生成 ${k.used.generated_images_total||0} · 今日图片 ${k.used.images}<br>
+          <span class="muted">今日免费 ${k.used.legacy_free_images||0} · 今日 V5 ${k.used.v5||0}</span><br>
           <span class="muted">Anlas ${k.used.anlas} · 文本 ${fmt(k.used.text_tokens)}</span></td>
         <td class="key-summary">${k.is_admin ? '单 Key 不限<br><span class="muted">仍受全站保护</span>' : `
           免费图 ${k.daily_images>0?k.daily_images:'∞'}/日${k.image_model_scope==='all' ? ` · V5 ${k.daily_v5>0?k.daily_v5:'∞'}/日` : ''}<br>

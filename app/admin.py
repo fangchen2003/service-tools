@@ -141,7 +141,7 @@ async def reconcile_anlas(request: Request, response: Response):
         raise HTTPException(exc.status, str(exc), headers=headers) from None
 
 
-def _key_json(row, counter) -> dict[str, Any]:
+def _key_json(row, counter, generated_images_total: int = 0) -> dict[str, Any]:
     return {
         "id": row["id"],
         "name": row["name"],
@@ -163,6 +163,7 @@ def _key_json(row, counter) -> dict[str, Any]:
         "last_used_at": row["last_used_at"],
         "used": {
             "images": counter["images"],
+            "generated_images_total": generated_images_total,
             "legacy_free_images": counter["legacy_free_images"],
             "anlas": round(float(counter["anlas"]), 2),
             "v5": counter["v5"],
@@ -178,10 +179,11 @@ async def list_keys(request: Request):
     st = request.app.state.gate
     rows = await st.db.list_keys()
     today = st.day()
+    totals = await st.db.generated_image_totals()
     out = []
     for r in rows:
         c = await st.db.get_counter(r["id"], today)
-        out.append(_key_json(r, c))
+        out.append(_key_json(r, c, totals.get(r["id"], 0)))
     return {"keys": out}
 
 
@@ -226,7 +228,7 @@ async def create_key(request: Request):
         "expires_at": expires_at,
     })
     c = await st.db.get_counter(row["id"], st.day())
-    return {"key": _key_json(row, c)}
+    return {"key": _key_json(row, c, 0)}
 
 
 @router.post("/keys/{key_id}/regenerate")
@@ -277,7 +279,8 @@ async def patch_key(request: Request, key_id: int):
     await st.db.update_key(key_id, fields)
     row = await st.db.get_key(key_id)
     c = await st.db.get_counter(key_id, st.day())
-    return {"key": _key_json(row, c)}
+    totals = await st.db.generated_image_totals(key_id)
+    return {"key": _key_json(row, c, totals.get(key_id, 0))}
 
 
 @router.post("/keys/{key_id}/reset-daily-image-quota")
@@ -290,7 +293,8 @@ async def reset_daily_image_quota(request: Request, key_id: int):
         raise HTTPException(404, "key 不存在")
     await st.db.reset_daily_image_quota(key_id, st.day())
     counter = await st.db.get_counter(key_id, st.day())
-    return {"ok": True, "key": _key_json(row, counter)}
+    totals = await st.db.generated_image_totals(key_id)
+    return {"ok": True, "key": _key_json(row, counter, totals.get(key_id, 0))}
 
 
 @router.delete("/keys/{key_id}")
