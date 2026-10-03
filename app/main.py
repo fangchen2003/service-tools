@@ -30,6 +30,7 @@ from .image_events import ImageEventTracker, ImageStreamProtocolError, STREAM_ME
 from .image_streaming import ImageStreamResponse
 from .image_tools import prepare_tool, validate_result, MAX_RESPONSE_BYTES
 from .image_payload import read_image_body
+from .image_compat import normalize_image_references
 from .nai import NaiClient, UpstreamError, _wait_cleanup
 from .policy import (
     clamp_image_params,
@@ -589,6 +590,11 @@ async def _generate_image(request: Request, *, streaming: bool):
     # 图生图功能权限与费用分开判断；免费规格也沿用 Anlas 权限要求。
     if body.get("image") or body.get("mask"):
         raise err(400, "生图请求的 image 和 mask 请放在 parameters 中")
+    try:
+        body = await anyio.to_thread.run_sync(
+            normalize_image_references, body, request.headers.get("authorization", "")[7:].strip())
+    except ValueError as exc:
+        raise err(400, str(exc)) from None
     problem = validate_image_references(body)
     if problem:
         raise err(400, problem)

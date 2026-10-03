@@ -46,6 +46,8 @@ curl http://127.0.0.1:3003/healthz
 
 图片生成、放大、导演工具和 Vibe 编码支持 JSON 或 multipart（`request` JSON 加图片附件）。两种格式使用相同的权限与额度检查。
 
+图片参考兼容 st-chatu8 的 UUID 缓存标识、JPEG/WebP 精确参考，以及 Aaalice NAI Launcher 的 `director_reference_images` 原始数组。非 PNG 精确参考会在内存中转换为 PNG；适配后的缓存标识绑定当前虚拟 Key 和完整图片数据，仍不接受仅有缓存标识、没有图片数据的请求。JSON 与 multipart 均沿用原有模型限制、权限、Anlas 计费和额度检查。
+
 图片流通过 `parameters.stream` 选择 `sse` 或 `msgpack`，默认 `sse`。MessagePack 每帧由 4 字节大端长度和对应的消息体组成。
 
 图片生成示例（返回与官方接口一致的图片结果）：

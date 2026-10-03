@@ -47,7 +47,7 @@ VIBE_ENCODING_ANLAS = 2
 REFERENCE_FIELDS = (
     "reference_image_multiple", "reference_image_multiple_cached",
     "reference_information_extracted_multiple", "reference_strength_multiple",
-    "director_reference_images_cached", "director_reference_descriptions",
+    "director_reference_images", "director_reference_images_cached", "director_reference_descriptions",
     "director_reference_information_extracted", "director_reference_strength_values",
     "director_reference_secondary_strength_values",
 )
@@ -104,15 +104,18 @@ def validate_image_references(payload: dict) -> Optional[str]:
         groups = {name: _reference_list(p, name) for name in REFERENCE_FIELDS}
     except ValueError as exc:
         return str(exc)
-    if any(p.get(name) for name in ("director_reference_images", "characterReferences", "reference_image")):
+    if any(p.get(name) for name in ("characterReferences", "reference_image")):
         return "请使用完整的 reference_image_multiple 或 director_reference_images_cached 参考参数"
     vibes = groups["reference_image_multiple"]
     cached_vibes = groups["reference_image_multiple_cached"]
+    precise_raw = groups["director_reference_images"]
     precise = groups["director_reference_images_cached"]
+    if precise_raw and precise:
+        return "精确参考原始数组与缓存数组不能同时提交"
     if vibes and cached_vibes:
         return "Vibe 原始数组与缓存数组不能同时提交"
     vibe_count = len(vibes or cached_vibes)
-    precise_count = len(precise)
+    precise_count = len(precise_raw or precise)
     if vibe_count > REFERENCE_LIMIT or precise_count > REFERENCE_LIMIT:
         return "每次最多使用 16 张参考图"
     if vibe_count and precise_count:
@@ -148,6 +151,9 @@ def validate_image_references(payload: dict) -> Optional[str]:
         if (not _base64_data(item, source_image=model in VIBE_RAW_MODELS)
                 or (model in VIBE_ENCODED_MODELS and _base64_data(item, source_image=True))):
             return "Vibe 须为有效 base64；V3 必须传原图而不是 V4 编码"
+    for item in precise_raw:
+        if not _base64_data(item, png=True):
+            return "精确参考原始数组必须包含完整 PNG base64"
     for item in cached_vibes + precise:
         is_precise = any(item is entry for entry in precise)
         if (not isinstance(item, dict)
@@ -164,7 +170,7 @@ def validate_image_references(payload: dict) -> Optional[str]:
 def reference_surcharge(payload: dict) -> int:
     """单张参考附加费，批次减免在总价中处理；编码另行收费。"""
     p = payload.get("parameters", payload)
-    precise = len(p.get("director_reference_images_cached") or [])
+    precise = len(p.get("director_reference_images") or p.get("director_reference_images_cached") or [])
     vibes = len(p.get("reference_image_multiple") or p.get("reference_image_multiple_cached") or [])
     model = str(payload.get("model", "")).strip().lower()
     return precise * 5 + (max(0, vibes - 4) * 2 if model in VIBE_ENCODED_MODELS else 0)
