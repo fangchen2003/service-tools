@@ -403,8 +403,6 @@ details.fold[open]>summary{margin-bottom:14px}
 tr.mx>td{background:var(--surface-2);padding:16px 18px 18px;cursor:default}
 .mtable tbody tr.mx:hover td{background:var(--surface-2)}
 tr.mr.open>td{background:var(--surface-2);border-bottom-color:transparent}
-.mx-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr) minmax(0,1fr);gap:16px 28px}
-.mx-g h4{font-size:12px;font-weight:600;color:var(--muted);margin:0 0 10px;letter-spacing:.02em}
 .mod.off{opacity:.65}.mod-checks{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}.bad-text{color:var(--bad)}
 .mod .kv{margin-bottom:6px}
 .share-ev h5{font-size:12px;font-weight:600;color:var(--muted);margin:4px 0 8px}.share-ev .table-wrap{max-height:280px;overflow:auto;margin-bottom:12px}
@@ -414,9 +412,6 @@ tr.mr.open>td{background:var(--surface-2);border-bottom-color:transparent}
 .keyline{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:10px}
 .keyline .mono{background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:3px 8px;white-space:nowrap}
 .mx-perm{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
-.mx-acts{display:flex;flex-wrap:wrap;gap:6px}
-.mx-acts .btn{text-decoration:none}
-@media (max-width:1000px){.mx-grid{grid-template-columns:1fr 1fr}.mx-g.ops{grid-column:1/-1}}
 .mtools{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px}
 .mtools .search{flex:0 1 260px}
 .mtools .chips-filter{margin:0}
@@ -721,7 +716,6 @@ td.note{min-width:220px}
   table.mtable tr.mx{padding:0;border-top-left-radius:0;border-top-right-radius:0;border-top:1px dashed var(--border-strong)}
   table.mtable tr.mx>td{padding:12px 14px 14px;background:none}
   tr.mr.open>td{background:none}
-  .mx-grid{grid-template-columns:1fr;gap:16px}
   .mx-perm{grid-template-columns:1fr}
 }
 
@@ -1990,21 +1984,20 @@ const activityAt = m => m.last_used_at || m.registered_at || m.created_at || 0;
 const isManual = m => !m.is_admin && !m.is_test && !m.discord && !m.discord_id;
 /* 标签：手动（站长 / 运维打的，带备注）+ 自动（近 24 小时因成员自己能改的原因被拒）；都只在后台显示 */
 const tagNames = m => [...(m.tags||[]).map(t => t.tag), ...(m.auto_tags||[]).map(t => t.tag)];
-const hasTags = m => tagNames(m).length > 0;
 function ago(sec){ return sec < H ? Math.max(1, Math.round(sec/60)) + ' 分钟' : sec < D ? Math.round(sec/H) + ' 小时' : Math.round(sec/D) + ' 天'; }
 /* 快捷权限：额度方式、Anlas 方式。改动立即生效，并由机器人私信成员 */
 const ANLAS_PRESETS = [30, 90, 150];
-const V5_PIN_PRESETS = [18, 30, 50, 80];      // 手动 V5 基础值（28 步计）；节约模式下实际 ×2          // 一张 V5 续杯 30 Anlas（anlas_pool.V5_PAID_PRICE）
+const V5_PIN_PRESETS = [18, 30, 50, 80];      // 手动 V5 基础值（28 步计）
 function permControls(m){
   const scope = m.image_model_scope === 'all' ? 'all' : 'legacy';
   const mode = m.anlas_mode || 'auto', daily = Math.round(m.daily_anlas || 0);
   const manual = ANLAS_PRESETS.includes(daily) ? ANLAS_PRESETS : [...ANLAS_PRESETS, daily].filter(Boolean).sort((a,b)=>a-b);
   const autoLabel = m.anlas_auto ? `算法 · 今日 ${daily}` : '交给算法';
   const qa = m.quota_auto !== false, pin = Number(m.v5_pinned) || 0;
-  // 手动 V5 选的是「基础值」：实际 = max(基础值 × 节约倍数, 普通成员的值)，括号里是现在实际生效的张数
+  // 手动 V5 选的是「基础值」：实际 = max(基础值, 普通成员的值)，括号里是现在实际生效的张数
   const pins = [...new Set([...V5_PIN_PRESETS, pin].filter(Boolean))].sort((a,b)=>a-b);
   const legacyManualAll = !qa && scope==='all' && !pin;     // 老数据：手动但没定基础值
-  return `<select class="psel" data-perm="scope" data-id="${m.id}" aria-label="额度" title="额度：改动立即生效并私信通知。手动 V5 不会低于普通成员，节约模式同样翻倍">
+  return `<select class="psel" data-perm="scope" data-id="${m.id}" aria-label="额度" title="额度：改动立即生效并私信通知。手动 V5 不会低于普通成员">
       <option value="auto"${qa?' selected':''}>额度：算法 · ${m.daily_images}${m.daily_v5?' + V5 '+m.daily_v5:''}</option>
       <option value="legacy"${!qa&&scope==='legacy'?' selected':''}>额度：手动 · 仅 V4.5</option>
       ${legacyManualAll?`<option value="all" selected>额度：手动 · V5 ${m.daily_v5}/天（未定基础值）</option>`:''}
@@ -3097,7 +3090,6 @@ document.addEventListener('click', ev=>{
     case 'tok-close': closeTokModal(); break;
     case 'tok-submit': submitTok(); break;
     case 'toggle-pw': { const i = document.getElementById(el.dataset.for); const show = i.type === 'password'; i.type = show ? 'text' : 'password'; el.textContent = show ? '隐藏' : '显示'; break; }
-    case 'copy-code': { const t = el.parentElement.querySelector('pre').textContent; copyText(t, '已复制').then(ok=>{ if(!ok) toast('复制失败，请手动选择文本', 'err'); }); break; }
     case 'copy-dc': copyText(el.dataset.dcid, 'Discord ID 已复制').then(ok=>{ if(!ok) toast('复制失败，请手动选择文本', 'err'); }); break;
     case 'member-toggle': el.closest('details')?.removeAttribute('open'); memberToggle(id, el.dataset.on==='1'); break;
     case 'member-del': el.closest('details')?.removeAttribute('open'); memberDelete(id, false); break;

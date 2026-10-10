@@ -32,15 +32,23 @@ def test_index_dead_code_and_icons_removed():
     icons_block = icons_match.group(1)
     assert "more:" not in icons_block, "Unused icon 'more' should be removed from const ICONS in index.html"
 
-    # 2. Dead CSS classes from old member table columns
-    dead_classes = [".mbar{", ".mflags{", ".mq{", ".mtable td.mweek", ".mx-wide{", ".danger-row{"]
+    # 2. Dead CSS classes from old member table columns and legacy member details grid
+    dead_classes = [".mbar{", ".mflags{", ".mq{", ".mtable td.mweek", ".mx-wide{", ".danger-row{",
+                    ".mx-grid{", ".mx-g h4{", ".mx-acts{"]
     for dc in dead_classes:
         assert dc not in content, f"Dead CSS {dc} should be removed from index.html"
+
+    # 3. Dead JS functions and unused switch cases
+    assert "hasTags =" not in content, "Unused helper hasTags should be removed from index.html"
+    assert "case 'copy-code':" not in content, "Unused switch case copy-code should be removed from index.html"
 
 
 def test_index_outdated_version_copy_removed():
     content = INDEX_HTML.read_text(encoding="utf-8")
     assert "2.15.32" not in content, "Outdated version reference 2.15.32 should be removed from index.html"
+    assert "节约模式同样翻倍" not in content, (
+        "Outdated tooltip claiming V5 doubles in economy mode should be removed (economy_multiplier is fixed to 1.0)"
+    )
 
 
 def test_index_member_table_mobile_responsive_layout():
