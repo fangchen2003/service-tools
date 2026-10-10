@@ -30,6 +30,9 @@ class DB(FakeDB):
     async def set_setting(self, name, value):
         self.settings[name] = value
 
+    async def set_settings_bulk(self, values):
+        self.settings.update(values)
+
     async def get_upstream_v5_counter(self, token_id, day):
         return self.v5.get(token_id, 0)
 
@@ -163,20 +166,20 @@ async def test_failed_generation_does_not_charge_or_consume_reservation(env):
 @pytest.mark.asyncio
 async def test_legacy_and_already_paid_v5_make_no_subscription_query(env):
     await post('/ai/generate-image',image_body())
-    await post('/ai/generate-image',{**body(),'parameters':{**body()['parameters'],'steps':29}})
+    await post('/ai/generate-image',{**body(),'parameters':{**body()['parameters'],'width':1152,'steps':23}})
     assert not env.queries and len(env.generations)==2
 
 
 @pytest.mark.asyncio
 async def test_paid_v5_inpainting_preserves_strength_without_cost_discount(env):
     masked = {**body(), 'model': 'nai-diffusion-5-full-inpainting', 'action': 'infill',
-              'parameters': {**body()['parameters'], 'width': 512, 'height': 512,
-              'steps': 29, 'image': 'fixture', 'mask': 'fixture', 'strength': .6,
+              'parameters': {**body()['parameters'], 'width': 1152, 'height': 1024,
+              'steps': 23, 'image': 'fixture', 'mask': 'fixture', 'strength': .6,
               'img2img': {'strength': .6, 'color_correct': True}}}
     response = await post('/ai/generate-image', masked)
     assert response.status_code == 200
     charge, = env.st.db.charges
-    assert (charge[1]['anlas'], charge[1]['v5']) == (9, 0)
+    assert (charge[1]['anlas'], charge[1]['v5']) == (estimate_image_cost(masked)['anlas'], 0)
     assert not env.queries and len(env.generations) == 1
     assert json.loads(env.generations[0].content)['parameters']['img2img'] == masked['parameters']['img2img']
 

@@ -45,6 +45,7 @@ from .policy import (
     text_model_host,
 )
 from .state import GateState
+from .v5_effort import MEDIUM_MODEL, MEDIUM_MODELS, normalize_medium, settings as effort_settings, units
 from .upstream_errors import upstream_error_message, text_stream_events
 from .sse import encode_sse
 
@@ -270,14 +271,14 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
             raise err(429, f"今日 V4.5 及以下免费图额度已用完（{key['daily_images']} 张/天），明日恢复")
     if est["v5"] > 0:
         # V5 周额度是账户级共享资源，用全站日计数镜像（恢复量 ~190 张/天）
-        if key["daily_v5"] > 0 and c["v5"] + sum(r.v5 for r in own_day) + est["v5"] > key["daily_v5"]:
-            raise err(429, f"已达今日 V5 额度（{key['daily_v5']} 张/天），明天恢复后再用")
+        if key["daily_v5"] > 0 and units(c["v5"]) + sum(units(r.v5) for r in own_day) + units(est["v5"]) > units(key["daily_v5"]):
+            raise err(429, f"已达今日 V5 额度（{key['daily_v5']} 单位/天），明天恢复后再用")
         g = float(await STATE.db.get_setting(
             "global_daily_v5", STATE.settings.global_daily_v5) or 0)
         if g > 0 and not key["exclude_global_v5"]:
             total = await STATE.db.day_v5_total(STATE.day())
-            if total + sum(r.v5 for r in global_day if not r.exclude_global_v5) + est["v5"] > g:
-                raise err(402, f"全站今日 V5 额度已用完（{int(g)} 张/天），明天再来")
+            if units(total) + sum(units(r.v5) for r in global_day if not r.exclude_global_v5) + units(est["v5"]) > units(g):
+                raise err(402, f"全站今日 V5 额度已用完（{int(g)} 单位/天），明天再来")
     if est["anlas"] > 0:
         if not key["allow_anlas"]:
             raise err(402, "该请求会消耗 Anlas，此 Key 未开通付费额度权限")
@@ -311,11 +312,13 @@ class ImageReservation:
 
 
 @asynccontextmanager
-async def reserve_image_budget(key, est, *, legacy_free_images=0):
-    reservation = ImageReservation(key, est, legacy_free_images)
+async def reserve_image_budget(key, est, *, legacy_free_images=0, prepare=None):
     try:
         async with asyncio.timeout(STATE.settings.queue_timeout):
             async with STATE.image_budget_lock:
+                if prepare is not None:
+                    await prepare(False)
+                reservation = ImageReservation(key, est, legacy_free_images)
                 await quota_image_check(key, est, legacy_free_images=legacy_free_images)
                 reservations = getattr(STATE, "image_reservations", None)
                 if reservations is None:
@@ -401,12 +404,14 @@ async def complete_image_operation(operation, *, can_cancel=None):
 async def upstream_call(url: str, payload: dict, accept: str = "*/*", *,
                         on_rate_limited=None, requires_anlas: bool = False,
                         v5_free: bool = False, image_count: int = 0,
+                        v5_usage: float = 1,
                         image_lane: bool = False, resolve_v5_cost=None,
                         max_response_bytes: int | None = None) -> httpx.Response:
     try:
         return await STATE.nai.request(
             "POST", url, payload, accept=accept, on_rate_limited=on_rate_limited,
             requires_anlas=requires_anlas, v5_free=v5_free, image_count=image_count,
+            **({"v5_usage": v5_usage} if v5_usage != 1 else {}),
             image_lane=image_lane,
             **({"queue_timeout": STATE.settings.queue_timeout,
                 "before_dispatch": check_image_cooldown} if image_lane else {}),
@@ -593,6 +598,25 @@ async def _generate_image(request: Request, *, streaming: bool):
     if problem:
         raise err(400, problem)
     p0 = body.get("parameters", {}) or {}
+    if not isinstance(p0, dict):
+        raise err(400, "parameters 必须是 JSON 对象")
+    # The ordinary-user step limit also covers paid keys and SAFE_CLAMP=0.
+    step_notes = []
+    if not key["is_admin"]:
+        value = p0.get("steps", 23)
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            raise err(400, "steps 必须是正整数")
+        try:
+            steps = int(value)
+            if steps < 1 or float(value) != steps:
+                raise ValueError
+        except (TypeError, ValueError, OverflowError):
+            raise err(400, "steps 必须是正整数") from None
+        limit = min(23, max(1, STATE.settings.max_steps))
+        p0["steps"] = min(steps, limit)
+        body["parameters"] = p0
+        if steps > limit:
+            step_notes.append(f"步数已钳制为 {limit}")
     if (p0.get("image") or p0.get("mask")) and not key["is_admin"]:
         if not (key["allow_img2img"] and STATE.settings.allow_img2img):
             record(key, "image", model, "rejected", detail="img2img 未开放")
@@ -618,6 +642,13 @@ async def _generate_image(request: Request, *, streaming: bool):
     else:
         notes = []
 
+    notes = step_notes + notes
+    if body.get("model") in MEDIUM_MODELS:
+        try:
+            body = normalize_medium(body)
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise err(400, "Medium 图片参数格式无效") from exc
+
     p = body.get("parameters", {})
     try:
         image_count = int(p.get("n_samples", 1) or 1)
@@ -633,7 +664,7 @@ async def _generate_image(request: Request, *, streaming: bool):
     legacy_free_images = (
         1 if model_tier == "legacy" and legacy_normal_free_eligible(body) else 0
     )
-    if not est["v5"]:
+    if model_tier != "v5":
         await quota_image_check(key, est, legacy_free_images=legacy_free_images)
 
     cost = "; ".join(part for part in (
@@ -645,15 +676,51 @@ async def _generate_image(request: Request, *, streaming: bool):
 
     reservation = None
 
-    async def resolve_v5_cost(exhausted: bool):
-        nonlocal est, detail
-        updated = estimate_image_cost(body, is_opus=True, v5_allowance_available=not exhausted)
-        await reservation.update(key, updated, legacy_free_images)
-        est = updated
+    async def prepare_v5_cost(exhausted: bool):
+        """Called under the budget lock both at admission and after upstream queueing."""
+        nonlocal body, p, detail, model
+        config = await effort_settings(STATE.db)
+        auto = False
+        if (config["v5_auto_medium"] and not key["is_admin"]
+                and body.get("model") == "nai-diffusion-5-full"
+                and body.get("action", "generate") == "generate"
+                and not (p.get("image") or p.get("mask"))):
+            cap = units(await STATE.db.get_setting("global_daily_v5", STATE.settings.global_daily_v5) or 0)
+            used = units(await STATE.db.day_v5_total(STATE.day()))
+            pending = sum(units(r.v5) for r in STATE.image_reservations.values()
+                          if r is not reservation and not r.exclude_global_v5)
+            auto = cap > 0 and (cap - used - pending) * 100 <= cap * config["v5_medium_threshold"]
+        if auto:
+            body["model"] = MEDIUM_MODEL
+        if body.get("model") in MEDIUM_MODELS:
+            try:
+                updated_body = normalize_medium(body)
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise err(400, "Medium 图片参数格式无效") from exc
+            body.clear()
+            body.update(updated_body)
+            p = body["parameters"]
+            model = body["model"]
+        est.update(estimate_image_cost(body, is_opus=True, v5_allowance_available=not exhausted,
+                                       medium_multiplier=config["v5_medium_multiplier"]))
+        summary = f"{p.get('width')}x{p.get('height')}/{p.get('steps')}step "
+        summary += f"V5额度+{est['v5']}单位" if est["v5"] else f"est={est['anlas']}A"
+        changes = list(notes)
+        if body.get("model") in MEDIUM_MODELS:
+            changes.append("Medium：14步/Euler Ancestral/固定Heavy负面预设；自定义负面词和Rescale未生效")
+        if auto:
+            changes.append("全站余量低，自动切换Medium")
         if exhausted:
-            detail = "; ".join(notes + [
-                f"{p.get('width')}x{p.get('height')}/{p.get('steps')}step est={est['anlas']}A",
-                "官方确认 V5 额度不可用，按 Anlas 估算记账"])
+            changes.append("官方确认 V5 额度不可用，按 Anlas 估算记账")
+        detail = "; ".join(changes + [summary])
+
+    async def resolve_v5_cost(exhausted: bool):
+        async with STATE.image_budget_lock:
+            await prepare_v5_cost(exhausted)
+            await quota_image_check(key, est, legacy_free_images=legacy_free_images,
+                                    exclude_reservation=reservation)
+            reservation.anlas, reservation.v5 = est["anlas"], est["v5"]
+        return est["v5"]
 
     async def record_image_429(retry_after: float) -> None:
         # 两种响应均在收尾时记日志，回调只更新冷却。
@@ -668,6 +735,7 @@ async def _generate_image(request: Request, *, streaming: bool):
                 on_rate_limited=record_image_429,
                 requires_anlas=est["anlas"] > 0,
                 v5_free=est["v5"] > 0,
+                v5_usage=est["v5"] or 1,
                 image_count=image_count,
                 # Retain the status to distinguish rejected requests from uncertain charges.
                 image_lane=True, max_response_bytes=MAX_RESPONSE_BYTES,
@@ -710,6 +778,7 @@ async def _generate_image(request: Request, *, streaming: bool):
                     async with STATE.nai.image_stream(
                         f"{STATE.nai.image_host}/ai/generate-image-stream", body,
                         requires_anlas=est["anlas"] > 0, v5_free=est["v5"] > 0,
+                        v5_usage=est["v5"] or 1,
                         on_rate_limited=record_image_429,
                         on_dispatch=on_dispatch,
                         queue_timeout=STATE.settings.queue_timeout,
@@ -759,7 +828,8 @@ async def _generate_image(request: Request, *, streaming: bool):
                     # 按完整结果重算首张减免，沿用派发前确认的 V5 额度状态。
                     completed_body = {**body, "parameters": {**p, "n_samples": completed}}
                     settled = estimate_image_cost(
-                        completed_body, v5_allowance_available=bool(est["v5"]))
+                            completed_body, v5_allowance_available=bool(est["v5"]),
+                            medium_multiplier=est["v5"] or 1)
                     settled_anlas = settled["anlas"]
                     await settle_record(
                         key, "image_stream", model, "ok", images=completed,
@@ -779,7 +849,8 @@ async def _generate_image(request: Request, *, streaming: bool):
                 await wait_for_user_image_slot(key)
                 async with acquire_concurrency(key, image=True):
                     check_image_cooldown()
-                    async with reserve_image_budget(key, est, legacy_free_images=legacy_free_images) as reserved:
+                    async with reserve_image_budget(key, est, legacy_free_images=legacy_free_images,
+                                                    prepare=prepare_v5_cost if model_tier == "v5" else None) as reserved:
                         nonlocal reservation
                         reservation = reserved
                         await complete_image_operation(perform_stream(response), can_cancel=lambda: not dispatched)
@@ -792,7 +863,8 @@ async def _generate_image(request: Request, *, streaming: bool):
     async with acquire_concurrency(key, image=True):
         # Recheck both cooldown and quota after any queue/budget wait.
         check_image_cooldown()
-        async with reserve_image_budget(key, est, legacy_free_images=legacy_free_images) as reservation:
+        async with reserve_image_budget(key, est, legacy_free_images=legacy_free_images,
+                                        prepare=prepare_v5_cost if model_tier == "v5" else None) as reservation:
             return await complete_image_operation(perform_generation())
 
 
@@ -1000,6 +1072,13 @@ async def v1_me(request: Request):
         "name": key["name"],
         "is_admin": bool(key["is_admin"]),
         "generated_images_total": generated_images.get(key["id"], 0),
+        "image_policy": {
+            "max_steps": None if key["is_admin"] else min(23, STATE.settings.max_steps),
+            "v5_quota_unit": "High 等效用量",
+            **await effort_settings(STATE.db),
+            "medium_settings": {"steps": 14, "sampler": "k_euler_ancestral",
+                                "custom_negative_prompt": False, "cfg_rescale": False},
+        },
         "today": {
             "images": c["images"], "daily_images": key["daily_images"],
             "legacy_free_images_today": c["legacy_free_images"],

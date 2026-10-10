@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from .policy import gen_key
 from .body import read_json_body
 from .allowance import SETTING, read_alert_threshold
+from .v5_effort import settings as effort_settings
 from .reconciliation import ReconciliationError
 from .state import RUNTIME_LIMIT_BOUNDS
 
@@ -345,7 +346,7 @@ async def get_settings(request: Request):
     v = await st.db.get_setting("global_monthly_anlas", st.settings.global_monthly_anlas)
     v5 = await st.db.get_setting("global_daily_v5", st.settings.global_daily_v5)
     return {"global_monthly_anlas": float(v or 0), "global_daily_v5": int(float(v5 or 0)),
-            SETTING: await read_alert_threshold(st.db)}
+            SETTING: await read_alert_threshold(st.db), **await effort_settings(st.db)}
 
 
 @router.get("/runtime-limits")
@@ -414,17 +415,32 @@ async def put_settings(request: Request):
     require_admin(request)
     st = request.app.state.gate
     body = await read_json_body(request)
+    effort = await effort_settings(st.db)
+    for name in effort:
+        if name in body:
+            effort[name] = body[name]
+    if type(effort["v5_auto_medium"]) is not bool:
+        raise HTTPException(422, "自动节省开关必须是布尔值")
+    threshold_medium = effort["v5_medium_threshold"]
+    if type(threshold_medium) not in (int, float) or not 0 <= threshold_medium <= 100:
+        raise HTTPException(422, "Medium 切换阈值必须为 0～100 的百分比")
+    multiplier = effort["v5_medium_multiplier"]
+    if (type(multiplier) not in (int, float) or not 0.01 <= multiplier <= 1
+            or round(multiplier, 2) != multiplier):
+        raise HTTPException(422, "Medium 倍率必须为 0.01～1，最多两位小数")
     threshold = body.get(SETTING, await read_alert_threshold(st.db))
     if type(threshold) is not int or not 1 <= threshold <= 100:
         raise HTTPException(422, "V5 告警阈值必须为 1～100 的整数百分比")
-    v = float(body.get("global_monthly_anlas", 0) or 0)
+    v = float(body.get("global_monthly_anlas", await st.db.get_setting(
+        "global_monthly_anlas", st.settings.global_monthly_anlas)) or 0)
     v = max(0.0, min(v, 1000000.0))
-    await st.db.set_setting("global_monthly_anlas", v)
-    g5 = int(body.get("global_daily_v5", 0) or 0)
+    g5 = int(body.get("global_daily_v5", await st.db.get_setting(
+        "global_daily_v5", st.settings.global_daily_v5)) or 0)
     g5 = max(0, min(g5, 100000))
-    await st.db.set_setting("global_daily_v5", g5)
-    await st.db.set_setting(SETTING, threshold)
-    return {"ok": True, "global_monthly_anlas": v, "global_daily_v5": g5, SETTING: threshold}
+    async with st.image_budget_lock:
+        await st.db.set_settings_bulk({"global_monthly_anlas": v, "global_daily_v5": g5,
+                                       SETTING: threshold, **effort})
+    return {"ok": True, "global_monthly_anlas": v, "global_daily_v5": g5, SETTING: threshold, **effort}
 
 
 @router.get("/announcement")

@@ -67,7 +67,7 @@ class Settings:
     # ---- 图片安全钳制（默认强制贴合 Opus 免费档）----
     safe_clamp: bool = _bool("SAFE_CLAMP", True)
     max_pixels: int = _int("MAX_PIXELS", 1024 * 1024)
-    max_steps: int = _int("MAX_STEPS", 28)
+    max_steps: int = min(23, max(1, _int("MAX_STEPS", 23)))
     allow_img2img: bool = _bool("ALLOW_IMG2IMG", False)  # 独立功能权限；费用由图片参数决定
 
     # ---- 全站月度 Anlas 预算（所有 Key 共享的总闸，后台可改）----

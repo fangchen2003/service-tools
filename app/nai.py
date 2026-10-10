@@ -16,6 +16,7 @@ from .policy import mask_token
 from .allowance import AllowanceCache, AllowanceUnavailable
 from .concurrency import AdjustableLimiter
 from .image_tools import validate_result
+from .v5_effort import SCALE, units
 
 
 class UpstreamError(Exception):
@@ -34,7 +35,7 @@ class ImageStreamHandle:
 
 class TokenState:
     __slots__ = (
-        "token", "token_id", "position", "v5_daily_limit", "allow_anlas", "pending_v5",
+        "token", "token_id", "position", "v5_daily_limit", "allow_anlas", "pending_v5_units",
         "admin_enabled",
         "dispatch_lock", "image_slots",
         "fails", "blocked_until", "disabled", "last_ok", "image_next_at",
@@ -51,7 +52,7 @@ class TokenState:
         self.admin_enabled = True
         self.dispatch_lock = asyncio.Lock()
         self.image_slots = AdjustableLimiter(1)
-        self.pending_v5 = 0
+        self.pending_v5_units = 0
         self.fails = 0
         self.blocked_until = 0.0
         self.disabled = False
@@ -61,6 +62,10 @@ class TokenState:
     @property
     def usable(self) -> bool:
         return self.admin_enabled and not self.disabled and time.time() >= self.blocked_until
+
+    @property
+    def pending_v5(self) -> float:
+        return self.pending_v5_units / SCALE
 
 
 async def _wait_cleanup(task: asyncio.Task) -> Any:
@@ -164,7 +169,7 @@ class NaiClient:
             return True
 
     async def pick_token(self, *, requires_anlas: bool = False,
-                         v5_free: bool = False) -> Optional[TokenState]:
+                         v5_free: bool = False, v5_usage: float = 1) -> Optional[TokenState]:
         """选取符合该图片费用策略的令牌；V5 限额在这里原子预留。"""
         async with self._lock:
             usable = [t for t in self.pool if t.usable and
@@ -181,7 +186,7 @@ class NaiClient:
                     used = await self._db.get_upstream_v5_counter(
                         candidate.token_id, self._day_fn()
                     )
-                    if used + candidate.pending_v5 >= candidate.v5_daily_limit:
+                    if units(used) + candidate.pending_v5_units + units(v5_usage) > units(candidate.v5_daily_limit):
                         continue
                 chosen = candidate
                 break
@@ -190,20 +195,31 @@ class NaiClient:
 
             self._rr = usable.index(chosen)
             if v5_free:
-                chosen.pending_v5 += 1
+                chosen.pending_v5_units += units(v5_usage)
             return chosen
 
     async def finish_v5_reservation(self, ts: TokenState, *, succeeded: bool,
-                                    v5_free: bool) -> None:
+                                    v5_free: bool, v5_usage: float = 1) -> None:
         """只把成功完成的免费 V5 图计入特定上游令牌的日额度。"""
         if not v5_free:
             return
         async with self._lock:
             try:
                 if succeeded:
-                    await self._db.bump_upstream_v5_counter(ts.token_id, self._day_fn())
+                    if v5_usage == 1:
+                        await self._db.bump_upstream_v5_counter(ts.token_id, self._day_fn())
+                    else:
+                        await self._db.bump_upstream_v5_counter(ts.token_id, self._day_fn(), v5_usage)
             finally:
-                ts.pending_v5 = max(0, ts.pending_v5 - 1)
+                ts.pending_v5_units = max(0, ts.pending_v5_units - units(v5_usage))
+
+    async def adjust_v5_reservation(self, ts, old, new):
+        async with self._lock:
+            used = await self._db.get_upstream_v5_counter(ts.token_id, self._day_fn())
+            pending = ts.pending_v5_units - units(old) + units(new)
+            if ts.v5_daily_limit and units(used) + pending > units(ts.v5_daily_limit):
+                raise UpstreamError(503, "该上游账号今日 V5 用量额度不足，未发送生图")
+            ts.pending_v5_units = pending
 
     async def record_successful_images(self, ts: TokenState, image_count: int) -> None:
         """按上游实际成功响应记录生成张数；失败、拒绝和限流不计入。"""
@@ -288,12 +304,12 @@ class NaiClient:
         if requires_anlas:
             return UpstreamError(503, "没有允许使用 Anlas 的上游令牌，无法生成此图片")
         if v5_free:
-            return UpstreamError(429, "可用上游令牌的今日 V5 免费图片额度已用完")
+            return UpstreamError(429, "可用上游令牌的今日 V5 用量额度不足")
         return UpstreamError(503, "上游令牌全部被限流或不可用，请稍后再试")
 
     async def _settle(self, ts: TokenState, *, succeeded: bool,
-                      v5_free: bool, image_count: int) -> None:
-        await self.finish_v5_reservation(ts, succeeded=succeeded, v5_free=v5_free)
+                      v5_free: bool, image_count: int, v5_usage: float = 1) -> None:
+        await self.finish_v5_reservation(ts, succeeded=succeeded, v5_free=v5_free, v5_usage=v5_usage)
         if succeeded:
             await self.record_successful_images(ts, image_count)
 
@@ -312,6 +328,7 @@ class NaiClient:
         accept: str = "*/*",
         on_rate_limited: Optional[Callable[[float], Awaitable[None]]] = None,
         *, requires_anlas: bool = False, v5_free: bool = False,
+        v5_usage: float = 1,
         image_count: int = 0, image_lane: bool = False, wait_for_image_slot: bool = True,
         resolve_v5_cost: Optional[Callable[[bool], Awaitable[None]]] = None,
         max_response_bytes: int | None = None,
@@ -324,7 +341,7 @@ class NaiClient:
         attempts = 0
         while attempts < 2:
             attempts += 1
-            ts = await self.pick_token(requires_anlas=requires_anlas, v5_free=v5_free)
+            ts = await self.pick_token(requires_anlas=requires_anlas, v5_free=v5_free, v5_usage=v5_usage)
             if ts is None:
                 raise self._unavailable(requires_anlas, v5_free)
             succeeded = False
@@ -344,11 +361,14 @@ class NaiClient:
                     except TimeoutError:
                         raise UpstreamError(429, "上游图片任务排队超时，请稍后再试") from None
                 if v5_free and resolve_v5_cost is not None:
-                    exhausted = await self._resolve_v5_cost(ts, resolve_v5_cost)
+                    exhausted, updated_usage = await self._resolve_v5_cost(ts, resolve_v5_cost)
                     if exhausted:
-                        await self.finish_v5_reservation(ts, succeeded=False, v5_free=True)
+                        await self.finish_v5_reservation(ts, succeeded=False, v5_free=True, v5_usage=v5_usage)
                         v5_free = False
                         requires_anlas = True
+                    elif updated_usage is not None:
+                        await self.adjust_v5_reservation(ts, v5_usage, updated_usage)
+                        v5_usage = updated_usage
                 async with self._dispatch_guard(ts, image_lane):
                     if not ts.admin_enabled:
                         continue
@@ -411,7 +431,7 @@ class NaiClient:
             finally:
                 try:
                     await _wait_cleanup(asyncio.create_task(self._settle(
-                        ts, succeeded=succeeded, v5_free=v5_free, image_count=image_count
+                        ts, succeeded=succeeded, v5_free=v5_free, image_count=image_count, v5_usage=v5_usage
                     )))
                 finally:
                     if slot_acquired:
@@ -429,8 +449,8 @@ class NaiClient:
             raise UpstreamError(503, str(exc)) from None
         if exhausted and not ts.allow_anlas:
             raise UpstreamError(503, "该上游账号 V5 额度已耗尽，且未允许使用 Anlas；未发送生图")
-        await callback(exhausted)
-        return exhausted
+        usage = await callback(exhausted)
+        return exhausted, usage
 
     @asynccontextmanager
     async def _dispatch_guard(self, ts: TokenState, image_lane: bool):
@@ -450,6 +470,7 @@ class NaiClient:
     async def image_stream(
         self, url: str, json_body: Any, *, requires_anlas: bool = False,
         v5_free: bool = False,
+        v5_usage: float = 1,
         on_rate_limited: Optional[Callable[[float], Awaitable[None]]] = None,
         on_dispatch: Optional[Callable[[], None]] = None,
         resolve_v5_cost: Optional[Callable[[bool], Awaitable[None]]] = None,
@@ -459,7 +480,7 @@ class NaiClient:
         """图片流不重试；调用方只在确认完整最终图片后增加 completed_images。"""
         if self._client is None:
             raise RuntimeError("client not started")
-        ts = await self.pick_token(requires_anlas=requires_anlas, v5_free=v5_free)
+        ts = await self.pick_token(requires_anlas=requires_anlas, v5_free=v5_free, v5_usage=v5_usage)
         if ts is None:
             raise self._unavailable(requires_anlas, v5_free)
         resp: Optional[httpx.Response] = None
@@ -478,7 +499,7 @@ class NaiClient:
             finally:
                 count = max(0, handle.completed_images) if handle is not None else 0
                 await self._settle(ts, succeeded=count > 0, v5_free=v5_free,
-                                   image_count=count)
+                                   image_count=count, v5_usage=v5_usage)
                 if count > 0:
                     self.mark_ok(ts)
             if close_failed:
@@ -493,10 +514,13 @@ class NaiClient:
             except TimeoutError:
                 raise UpstreamError(429, "上游图片任务排队超时，请稍后再试") from None
             if v5_free and resolve_v5_cost is not None:
-                exhausted = await self._resolve_v5_cost(ts, resolve_v5_cost)
+                exhausted, updated_usage = await self._resolve_v5_cost(ts, resolve_v5_cost)
                 if exhausted:
-                    await self.finish_v5_reservation(ts, succeeded=False, v5_free=True)
+                    await self.finish_v5_reservation(ts, succeeded=False, v5_free=True, v5_usage=v5_usage)
                     v5_free = False
+                elif updated_usage is not None:
+                    await self.adjust_v5_reservation(ts, v5_usage, updated_usage)
+                    v5_usage = updated_usage
             req = self._client.build_request(
                 "POST", url, json=json_body,
                 headers=self._headers(ts, "application/x-msgpack" if

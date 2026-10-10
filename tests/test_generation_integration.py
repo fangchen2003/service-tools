@@ -21,7 +21,7 @@ PNG = base64.b64encode(PNG_BYTES).decode()
 
 
 def image_body(*, precise=0, **parameters):
-    params = dict(width=1024, height=1024, steps=28, n_samples=1,
+    params = dict(width=1024, height=1024, steps=23, n_samples=1,
                   sm=False, sm_dyn=False)
     if precise:
         params.update(
@@ -233,7 +233,7 @@ async def test_failed_legacy_generation_does_not_use_free_daily_quota(state):
 async def test_disconnect_during_unknown_result_records_pending_once(state):
     state.nai.release = asyncio.Event()
     state.nai.error = UpstreamError(502, '上游响应中断', billing_uncertain=True)
-    task = asyncio.create_task(post('/ai/generate-image', image_body(width=256, height=256, steps=29)))
+    task = asyncio.create_task(post('/ai/generate-image', image_body(width=256, height=256, steps=23, controlnet_model='fixture')))
     await state.nai.entered.wait()
     task.cancel()
     await asyncio.sleep(0)
@@ -355,7 +355,7 @@ async def test_invalid_free_clamp_parameters_rejected_before_dispatch(state, str
     state.db.keys["fixture-1"]["allow_anlas"] = False
     response = await post("/ai/generate-image" + ("-stream" if streaming else ""), image_body(**{field: value}))
     assert response.status_code == 400
-    assert response.json()["error"]["message"] == "图片参数无效"
+    assert response.json()["error"]["message"] == ("steps 必须是正整数" if field == "steps" else "图片参数无效")
     assert not state.nai.calls and not state.db.charges
     assert state.global_active == 0 and not state.image_budget_lock.locked()
 

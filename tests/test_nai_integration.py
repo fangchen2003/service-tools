@@ -342,7 +342,7 @@ async def test_nonstream_anomaly_reaches_ledger_without_charging_or_retrying(
     from test_generation_integration import FakeState, image_body, encoding_body, post
     from test_image_tools import body as tool_body
 
-    payload = (image_body(width=256, height=256, steps=29) if operation == 'generate-image'
+    payload = (image_body(width=256, height=256, steps=23, controlnet_model='fixture') if operation == 'generate-image'
                else encoding_body() if operation == 'encode-vibe'
                else tool_body('bg-removal' if operation == 'augment-image' else None))
     calls = []

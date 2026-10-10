@@ -160,7 +160,8 @@ async def test_stream_anomaly_is_estimated_separately_from_user_charge(
         state, paid, finals, expected_charge, expected_uncertain):
     state.nai.frames = Frames([event('intermediate'), *(event(index=i) for i in finals),
                               httpx.ReadError('private failure')])
-    await post('/ai/generate-image-stream', image_body(width=256, height=256, steps=29 if paid else 28))
+    await post('/ai/generate-image-stream', image_body(width=256, height=256, steps=23,
+               **({'controlnet_model': 'fixture'} if paid else {})))
     assert sum(row['anlas'] for _, row in state.db.charges) == expected_charge
     assert sum(row.get('unconfirmed_anlas', 0) for _, row in state.db.logs) == expected_uncertain
     assert sum(row.get('unconfirmed_anlas', 0) > 0 for _, row in state.db.logs) == bool(expected_uncertain)
@@ -181,7 +182,7 @@ async def test_partial_reference_batch_records_only_unsettled_difference_once(st
 @pytest.mark.parametrize('uncertain', [False, True])
 async def test_stream_before_headers_preserves_upstream_outcome_flag(state, uncertain):
     state.nai.error = UpstreamError(502, 'fixture', billing_uncertain=uncertain)
-    await post('/ai/generate-image-stream', image_body(width=256, height=256, steps=29))
+    await post('/ai/generate-image-stream', image_body(width=256, height=256, steps=23, controlnet_model='fixture'))
     assert not state.db.charges
     assert sum(row.get('unconfirmed_anlas', 0) for _, row in state.db.logs) == (2 if uncertain else 0)
 

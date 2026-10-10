@@ -54,7 +54,7 @@ curl http://127.0.0.1:3003/healthz
 curl 'https://你的域名/ai/generate-image' \
   -H 'Authorization: Bearer nai-你的虚拟Key' \
   -H 'Content-Type: application/json' \
-  -d '{"input":"1girl, best quality","model":"nai-diffusion-4-5-full","action":"generate","parameters":{"width":832,"height":1216,"steps":28,"n_samples":1}}'
+  -d '{"input":"1girl, best quality","model":"nai-diffusion-4-5-full","action":"generate","parameters":{"width":832,"height":1216,"steps":23,"n_samples":1}}'
 ```
 
 第三方 NovelAI 客户端需要支持自定义站点地址和 Bearer Key；本站提供 `/user/subscription` 等兼容接口，但并不保证兼容所有客户端。
@@ -66,10 +66,14 @@ curl 'https://你的域名/ai/generate-image' \
 | 项目 | 默认值 |
 | --- | ---: |
 | V4.5 及以下免费生图 | 每 Key 每天 100 张 |
-| 免费 V5 | 每 Key 每天 50 张；全站每天 150 张 |
+| 免费 V5 | 每 Key 每天 50 单位；全站每天 150 单位 |
 | Anlas（须单独授权） | 每 Key 每天 100、每月 2500 |
 | 文本输出 | 每 Key 每天 150,000 tokens |
 | 请求频率 | 每 Key 每分钟 10 次 |
+
+普通用户所有图片模型最多 23 步（付费 Key、关闭 `SAFE_CLAMP` 也适用），管理员 Key 保留豁免。V5 High 首张占 1 单位；Medium 默认占 0.60 单位，累计图片数仍按实际张数统计。同批其他图片仍按 Anlas 计费。
+
+“设置”中可调整 V5 自动节省开关、剩余额度阈值（默认 20%）和 Medium 倍率（默认 0.60）。普通 Key 的 V5 Full 纯文生图在全站今日剩余额度不高于阈值时自动切到 `nai-diffusion-5-full-medium`；进行中的额度预留也参与判断。Curated 与管理员 Key 不自动切换。Medium 固定 14 步、Euler Ancestral、Heavy 负面预设，自定义负面词和 CFG Rescale 不生效，日志记录最终模型、参数调整和扣除额度。用户、全站、每把上游的 V5 日额度采用相同折算；它是本站预算估算，不是官方精确计费。历史 V5 使用按每次 1 单位迁移，图片张数不变；上游实际额度、Anlas 权限和 429 保护继续生效。
 
 图片任务在同一用户 Key 与同一上游 Token 上默认各至少间隔 15 秒，等待时会自动排队；每个排队阶段默认最多等待 90 秒。每把上游 Token 的图片并发默认 1，可在面板单独调整；提高并发会增加上游限流风险。上游图片请求触发 429 后，全站图片生成默认至少冷却 60 秒；若上游要求更长时间，则以更长者为准。以上时间可在面板调整并持久保存。免费图与付费图分开计数；流式部分成功按已完成张数结算。完整规则见[用户限制说明.md](用户限制说明.md)。
 

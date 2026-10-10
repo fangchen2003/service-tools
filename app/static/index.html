@@ -195,12 +195,18 @@ tr:hover td{background:#182230}
       <div style="display:flex;gap:8px">
         <input id="s_budget" type="number" value="10000">
       </div>
-      <label>全站每日 V5 张数（0 = 不限。V5 周额度由 NovelAI 服务端按 ~190 张/天恢复，账户内所有人共享；此处镜像限制，默认 150 留安全边际）</label>
+      <label>全站每日 V5 用量额度（0 = 不限；High 每张 1 单位，Medium 按设置倍率折算）</label>
       <div style="display:flex;gap:8px">
         <input id="s_v5" type="number" value="150">
         <button class="btn primary" style="white-space:nowrap" onclick="saveBudget()">保存</button>
       </div>
-      <div class="muted" style="font-size:12px;margin-top:8px">V5 在官方额度可用、≤1024² 像素且≤28步时，首张走额度；同批其余图片按 Anlas 计费。额度耗尽后的付费请求仍受 Key 权限和预算限制。</div>
+      <div class="muted" style="font-size:12px;margin-top:8px">普通用户所有图片模型最多 23 步。V5 符合免费条件且官方余量可用时不扣 Anlas；图片张数与用量额度分别统计。</div>
+      <div class="check"><input id="s_auto_medium" type="checkbox" checked><span>V5 Full 自动节省模式（管理员 Key 保留档位选择）</span></div>
+      <div class="grid2">
+        <div><label>今日剩余额度 ≤ 此比例时切换 Medium（%）</label><input id="s_medium_threshold" type="number" min="0" max="100" value="20"></div>
+        <div><label>Medium 每张扣除额度（0.01～1）</label><input id="s_medium_multiplier" type="number" min="0.01" max="1" step="0.01" value="0.60"></div>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:8px">自动切换仅适用于 V5 Full 纯文生图；发送前按剩余共享额度（包含进行中的预留）判断。Medium 固定 14 步 / Euler Ancestral / Heavy 负面预设，自定义负面词和 Rescale 不生效。倍率是本站折算，并非官方精确计费。点击“保存”生效。</div>
       <label>V5 官方余量告警阈值（%，低于此值持续提醒）</label>
       <input id="s_v5_alert" type="number" min="1" max="100" step="1" value="20">
       <div class="muted" style="font-size:12px;margin-top:8px">低于此比例时持续告警；余量随 V5 生成按需查询。点击上方“保存”生效。</div>
@@ -243,7 +249,7 @@ tr:hover td{background:#182230}
       <div><label>每日 V4.5 及以下免费图张数（0=不限）</label><input id="f_daily_images" type="number" value="100"></div>
       <div><label>每日 Anlas 上限（0=不限）</label><input id="f_daily_anlas" type="number" value="100"></div>
       <div><label>每月 Anlas 上限</label><input id="f_monthly_anlas" type="number" value="2500"></div>
-      <div><label>每日 V5 张数（走官方周额度，0=不限）</label><input id="f_daily_v5" type="number" value="50"></div>
+      <div><label>每日 V5 用量额度（High=1，Medium 按倍率，0=不限）</label><input id="f_daily_v5" type="number" value="50"></div>
       <div><label>每日文本 tokens</label><input id="f_daily_text" type="number" value="150000"></div>
       <div><label>每分钟请求数 (RPM)</label><input id="f_rpm" type="number" value="10"></div>
       <div><label>有效天数（0=永久）</label><input id="f_expires" type="number" value="30"></div>
@@ -419,7 +425,7 @@ async function loadOverview(){
     $('#ovCards').innerHTML = `
       <div class="card"><div class="k">今日生成图片</div><div class="v">${t.images} <small>张</small></div></div>
       <div class="card"><div class="k">今日消耗 Anlas（估算）</div><div class="v">${t.anlas}</div></div>
-      <div class="card"><div class="k">今日 V5 张数 / 全站日限</div><div class="v">${t.v5||0} <small>/ ${d.v5_limit>0?d.v5_limit:'∞'}</small></div></div>
+      <div class="card"><div class="k">今日 V5 用量 / 全站日额度</div><div class="v">${t.v5||0} <small>/ ${d.v5_limit>0?d.v5_limit:'∞'}</small></div></div>
       <div class="card"><div class="k">本月 Anlas / 全站预算</div><div class="v">${d.month.anlas} <small>/ ${d.anlas_budget>0?d.anlas_budget:'∞'}</small></div></div>
       <div class="card" title="按今日、本月累计；查询官方余额不会清空这些记录"><div class="k">失败请求可能产生的费用</div><div class="v">${t.unconfirmed_anlas||0} <small>Anlas</small></div><div class="muted">今日预估 · ${t.unconfirmed_requests||0} 笔</div><div class="muted">本月预估 ${d.month.unconfirmed_anlas||0} Anlas · ${d.month.unconfirmed_requests||0} 笔</div><div class="muted" style="margin-top:8px">仅为估算，实际扣款尚未确认。</div></div>
       <div class="card"><div class="k">今日文本 tokens</div><div class="v">${fmt(t.text_tokens)}</div></div>
@@ -444,12 +450,12 @@ async function loadOverview(){
             : '<span class="tag on">正常</span>'}
           ${!p.admin_enabled && p.disabled ? '<span class="tag warn">401 失效</span>' : ''}
           <button class="btn mini ${p.admin_enabled?'danger':''}" onclick="setUpstreamEnabled('${p.token_id}',${!p.admin_enabled})">${p.admin_enabled?'停用':'启用'}</button>
-          <span class="muted" style="margin-left:12px;font-size:12px">今日生成 ${p.images_today||0} 张 · 失败 ${p.fails} · Anlas ${p.allow_anlas?'允许':'禁止'} · 免费 V5 ${p.v5_used}/${p.v5_daily_limit||'∞'}</span>
+          <span class="muted" style="margin-left:12px;font-size:12px">今日生成 ${p.images_today||0} 张 · 失败 ${p.fails} · Anlas ${p.allow_anlas?'允许':'禁止'} · V5 用量 ${p.v5_used}/${p.v5_daily_limit||'∞'}</span>
           <div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px">
-            <span class="muted">V5 日限</span>
+            <span class="muted">V5 日额度</span>
             <input id="token-limit-${p.token_id}" type="number" min="0" max="100000" step="1" value="${p.v5_daily_limit}" style="width:100px" aria-label="第 ${p.position} 把上游 Token 的免费 V5 每日上限">
             <button class="btn mini" onclick="saveUpstreamV5Limit('${p.token_id}')">保存</button>
-            <span class="muted">0 = 不限；只限制这把上游 Token</span>
+            <span class="muted">0 = 不限；High=1，Medium 按倍率</span>
           </div>
           <div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px">
             <span class="muted">图片并发</span>
@@ -510,7 +516,7 @@ async function loadKeys(){
             <span class="tag ${k.image_model_scope==='all'?'on':'off'}">${k.image_model_scope==='all'?'含 V5':'仅 V4.5↓'}</span>
             ${k.allow_img2img?'<span class="tag warn">img2img</span>':''}</td>
         <td class="key-summary">累计生成 ${k.used.generated_images_total||0} · 今日图片 ${k.used.images}<br>
-          <span class="muted">今日免费 ${k.used.legacy_free_images||0} · 今日 V5 ${k.used.v5||0}</span><br>
+          <span class="muted">今日免费 ${k.used.legacy_free_images||0} · V5 用量 ${k.used.v5||0}</span><br>
           <span class="muted">Anlas ${k.used.anlas} · 文本 ${fmt(k.used.text_tokens)}</span></td>
         <td class="key-summary">${k.is_admin ? '单 Key 不限<br><span class="muted">仍受全站保护</span>' : `
           免费图 ${k.daily_images>0?k.daily_images:'∞'}/日${k.image_model_scope==='all' ? ` · V5 ${k.daily_v5>0?k.daily_v5:'∞'}/日` : ''}<br>
@@ -679,6 +685,9 @@ async function loadSettings(){
     $('#s_budget').value = s.global_monthly_anlas;
     $('#s_v5').value = s.global_daily_v5;
     $('#s_v5_alert').value = s.v5_alert_threshold;
+    $('#s_auto_medium').checked = s.v5_auto_medium;
+    $('#s_medium_threshold').value = s.v5_medium_threshold;
+    $('#s_medium_multiplier').value = s.v5_medium_multiplier;
     for(const name of ['queue_timeout','key_image_min_interval','image_min_interval','image_429_cooldown_seconds']){
       $('#r_'+name).value = r[name];
     }
@@ -694,6 +703,9 @@ async function saveBudget(){
     global_monthly_anlas: +$('#s_budget').value,
     global_daily_v5: +$('#s_v5').value,
     v5_alert_threshold: +$('#s_v5_alert').value,
+    v5_auto_medium: $('#s_auto_medium').checked,
+    v5_medium_threshold: +$('#s_medium_threshold').value,
+    v5_medium_multiplier: +$('#s_medium_multiplier').value,
   })});
   toast('已保存：月预算 ' + d.global_monthly_anlas + 'A / V5 日限 ' + d.global_daily_v5);
   loadAllowance();

@@ -11,6 +11,8 @@ from uuid import uuid4
 
 import aiosqlite
 
+from .v5_effort import SCALE, units
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS api_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,14 +124,15 @@ _INSERT_LOG = """INSERT INTO usage_log (ts, key_id, key_name, kind, model, statu
                                       images, anlas, tokens, detail, unconfirmed_anlas)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?)"""
 _UPSERT_COUNTERS = """INSERT INTO counters
-                     (key_id, day, images, anlas, text_tokens, requests, v5, legacy_free_images)
-                     VALUES (?,?,?,?,?,?,?,?)
+                     (key_id, day, images, anlas, text_tokens, requests, v5, legacy_free_images, v5_units)
+                     VALUES (?,?,?,?,?,?,?,?,?)
                      ON CONFLICT(key_id, day) DO UPDATE SET
                        images = images + excluded.images,
                        anlas = anlas + excluded.anlas,
                        text_tokens = text_tokens + excluded.text_tokens,
                        requests = requests + excluded.requests,
                        v5 = v5 + excluded.v5,
+                       v5_units = v5_units + excluded.v5_units,
                        legacy_free_images = legacy_free_images + excluded.legacy_free_images"""
 
 
@@ -166,6 +169,20 @@ class Database:
                 await self._db.commit()
             except aiosqlite.OperationalError:
                 pass  # 列已存在
+        # Keep historical image counts intact. Quotas use integer hundredths;
+        # old V5 requests are conservatively one High unit each. Each ALTER and
+        # backfill commits together, so reconnecting never scales a row twice.
+        for table in ("counters", "upstream_token_counters", "daily_quota_offsets"):
+            cols = await (await self._db.execute(f"PRAGMA table_info({table})")).fetchall()
+            if "v5_units" not in {row["name"] for row in cols}:
+                await self._db.execute("BEGIN")
+                try:
+                    await self._db.execute(f"ALTER TABLE {table} ADD COLUMN v5_units INTEGER NOT NULL DEFAULT 0")
+                    await self._db.execute(f"UPDATE {table} SET v5_units=v5*100")
+                    await self._db.commit()
+                except BaseException:
+                    await self._db.rollback()
+                    raise
         log_columns = await (await self._db.execute("PRAGMA table_info(usage_log)")).fetchall()
         if "unconfirmed_anlas" not in {row["name"] for row in log_columns}:
             # 旧日志缺少报价，待核对金额初始为 0。
@@ -236,28 +253,29 @@ class Database:
     # ---------- upstream token counters ----------
     async def get_upstream_counter(self, token_id: str, day: str) -> dict[str, int]:
         cur = await self._db.execute(
-            "SELECT images, v5 FROM upstream_token_counters WHERE token_id=? AND day=?",
+            "SELECT images, v5, v5_units FROM upstream_token_counters WHERE token_id=? AND day=?",
             (token_id, day),
         )
         row = await cur.fetchone()
         if not row:
             return {"images": 0, "v5": 0}
-        return {"images": int(row["images"]), "v5": int(row["v5"])}
+        return {"images": int(row["images"]), "v5": row["v5_units"] / SCALE}
 
     async def migrate_upstream_token_ids(self, token_ids: list[str]) -> None:
         """Merge old position-based counters into stable hashed token identities."""
         for token_id in set(token_ids):
             suffix = token_id.removeprefix("token-")
             rows = await (await self._db.execute(
-                "SELECT token_id, day, images, v5 FROM upstream_token_counters WHERE token_id LIKE ?",
+                "SELECT token_id, day, images, v5, v5_units FROM upstream_token_counters WHERE token_id LIKE ?",
                 (f"token-%-{suffix}",),
             )).fetchall()
             for row in rows:
                 await self._db.execute(
-                    """INSERT INTO upstream_token_counters(token_id, day, images, v5)
-                       VALUES(?,?,?,?) ON CONFLICT(token_id,day) DO UPDATE SET
-                       images=images+excluded.images, v5=v5+excluded.v5""",
-                    (token_id, row["day"], row["images"], row["v5"]),
+                    """INSERT INTO upstream_token_counters(token_id, day, images, v5, v5_units)
+                       VALUES(?,?,?,?,?) ON CONFLICT(token_id,day) DO UPDATE SET
+                       images=images+excluded.images, v5=v5+excluded.v5,
+                       v5_units=v5_units+excluded.v5_units""",
+                    (token_id, row["day"], row["images"], row["v5"], row["v5_units"]),
                 )
                 await self._db.execute(
                     "DELETE FROM upstream_token_counters WHERE token_id=? AND day=?",
@@ -307,7 +325,7 @@ class Database:
         )
         await self._db.commit()
 
-    async def get_upstream_v5_counter(self, token_id: str, day: str) -> int:
+    async def get_upstream_v5_counter(self, token_id: str, day: str) -> float:
         return (await self.get_upstream_counter(token_id, day))["v5"]
 
     async def bump_upstream_image_counter(self, token_id: str, day: str,
@@ -321,11 +339,11 @@ class Database:
         )
         await self._db.commit()
 
-    async def bump_upstream_v5_counter(self, token_id: str, day: str) -> None:
+    async def bump_upstream_v5_counter(self, token_id: str, day: str, usage: float = 1) -> None:
         await self._db.execute(
-            """INSERT INTO upstream_token_counters(token_id, day, v5) VALUES (?,?,1)
-               ON CONFLICT(token_id, day) DO UPDATE SET v5=v5+1""",
-            (token_id, day),
+            """INSERT INTO upstream_token_counters(token_id, day, v5, v5_units) VALUES (?,?,1,?)
+               ON CONFLICT(token_id, day) DO UPDATE SET v5=v5+1, v5_units=v5_units+excluded.v5_units""",
+            (token_id, day, units(usage)),
         )
         await self._db.commit()
 
@@ -431,18 +449,18 @@ class Database:
     async def bump_counters(
         self, key_id: int, day: str,
         images: int = 0, anlas: float = 0.0, text_tokens: int = 0, requests: int = 1,
-        v5: int = 0, legacy_free_images: int = 0,
+        v5: float = 0, legacy_free_images: int = 0,
     ) -> None:
         await self._db.execute(
             _UPSERT_COUNTERS,
-            (key_id, day, images, anlas, text_tokens, requests, v5, legacy_free_images),
+            (key_id, day, images, anlas, text_tokens, requests, math.ceil(v5), legacy_free_images, units(v5)),
         )
         await self._db.commit()
 
     async def get_counter(self, key_id: int, day: str) -> dict[str, Any]:
         cur = await self._db.execute(
             """SELECT c.*, COALESCE(o.anlas, 0) AS _quota_offset_anlas,
-                      COALESCE(o.v5, 0) AS _quota_offset_v5
+                      COALESCE(o.v5_units, 0) AS _quota_offset_v5
                FROM counters AS c
                LEFT JOIN daily_quota_offsets AS o ON o.key_id=c.key_id AND o.day=c.day
                WHERE c.key_id=? AND c.day=?""", (key_id, day)
@@ -451,7 +469,7 @@ class Database:
         if row:
             result = dict(row)
             result["anlas"] = max(0, result["anlas"] - result.pop("_quota_offset_anlas"))
-            result["v5"] = max(0, result["v5"] - result.pop("_quota_offset_v5"))
+            result["v5"] = max(0, result.pop("v5_units") - result.pop("_quota_offset_v5")) / SCALE
             return result
         return {"images": 0, "legacy_free_images": 0, "anlas": 0.0, "text_tokens": 0, "requests": 0, "v5": 0}
 
@@ -461,9 +479,10 @@ class Database:
         保留原始记账用量，以重置时的累计量更新基线。
         """
         await self._db.execute(
-            """INSERT INTO daily_quota_offsets (key_id, day, anlas, v5)
-               SELECT key_id, day, anlas, v5 FROM counters WHERE key_id=? AND day=?
-               ON CONFLICT(key_id, day) DO UPDATE SET anlas=excluded.anlas, v5=excluded.v5""",
+            """INSERT INTO daily_quota_offsets (key_id, day, anlas, v5, v5_units)
+               SELECT key_id, day, anlas, v5, v5_units FROM counters WHERE key_id=? AND day=?
+               ON CONFLICT(key_id, day) DO UPDATE SET anlas=excluded.anlas, v5=excluded.v5,
+                   v5_units=excluded.v5_units""",
             (key_id, day),
         )
         await self._db.commit()
@@ -476,10 +495,10 @@ class Database:
         row = await cur.fetchone()
         return float(row["a"] or 0)
 
-    async def day_v5_total(self, day: str) -> int:
+    async def day_v5_total(self, day: str) -> float:
         """全站当日 V5 消耗，不包含明确配置为独立额度的 Key。"""
         cur = await self._db.execute(
-            """SELECT COALESCE(SUM(c.v5),0) AS c
+            """SELECT COALESCE(SUM(c.v5_units),0) AS c
                FROM counters AS c
                LEFT JOIN api_keys AS k ON k.id = c.key_id
                LEFT JOIN deleted_key_usage_flags AS d ON d.key_id = c.key_id
@@ -487,7 +506,7 @@ class Database:
             (day,),
         )
         row = await cur.fetchone()
-        return int(row["c"] or 0)
+        return (row["c"] or 0) / SCALE
 
     async def month_anlas_all(self, month: str) -> float:
         """全站所有 Key 本月的 Anlas 消耗（用于全站预算总闸）。"""
@@ -525,7 +544,7 @@ class Database:
     # ---------- logs ----------
     async def record_success(
         self, key_id: int, key_name: str, kind: str, model: str, day: str, *,
-        images: int = 0, anlas: float = 0.0, tokens: int = 0, v5: int = 0,
+        images: int = 0, anlas: float = 0.0, tokens: int = 0, v5: float = 0,
         legacy_free_images: int = 0, detail: str = "", unconfirmed_anlas: float = 0.0,
     ) -> None:
         """成功日志、额度与使用时间一起提交；写入失败时整笔回退。"""
@@ -539,7 +558,7 @@ class Database:
                     tokens, detail[:500], unconfirmed_anlas,
                 ))
                 await db.execute(_UPSERT_COUNTERS, (
-                    key_id, day, images, anlas, tokens, 1, v5, legacy_free_images,
+                    key_id, day, images, anlas, tokens, 1, math.ceil(v5), legacy_free_images, units(v5),
                 ))
                 await db.execute("UPDATE api_keys SET last_used_at=? WHERE id=?", (now, key_id))
                 await db.commit()
@@ -621,7 +640,7 @@ class Database:
             "SELECT COALESCE(SUM(requests),0) FROM counters WHERE day=?", (today,)
         )
         today_v5 = await one(
-            """SELECT COALESCE(SUM(c.v5),0)
+            """SELECT COALESCE(SUM(c.v5_units),0)
                FROM counters AS c
                LEFT JOIN api_keys AS k ON k.id = c.key_id
                LEFT JOIN deleted_key_usage_flags AS d ON d.key_id = c.key_id
@@ -669,7 +688,7 @@ class Database:
                 "anlas": round(float(today_anlas), 2),
                 "text_tokens": int(today_tokens),
                 "requests": int(today_requests),
-                "v5": int(today_v5),
+                "v5": today_v5 / SCALE,
                 **anomaly["today"],
             },
             "keys_total": int(keys_total),

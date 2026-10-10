@@ -11,6 +11,7 @@ import binascii
 import math
 import re
 from typing import Any, Optional, Tuple
+from .v5_effort import MEDIUM_MODELS
 
 V5_COST_MULTIPLIER = 1.5
 
@@ -262,7 +263,8 @@ def snap_v5_preset(width: int, height: int) -> Tuple[int, int]:
 
 
 def estimate_image_cost(params: dict, is_opus: bool = True, *,
-                        v5_allowance_available: bool = True) -> dict[str, int]:
+                        v5_allowance_available: bool = True,
+                        medium_multiplier: float = 0.60) -> dict[str, float]:
     """估算一次 /ai/generate-image 的消耗。
 
     返回 {"anlas": 扣多少 Anlas, "v5": 占多少个 V5 额度单位}。
@@ -310,7 +312,8 @@ def estimate_image_cost(params: dict, is_opus: bool = True, *,
 
     if is_v5:
         free_first = bool(is_opus and v5_allowance_available and v5_allowance_eligible(params))
-        return {"anlas": per * (n - int(free_first)), "v5": int(free_first)}
+        return {"anlas": per * (n - int(free_first)), "v5":
+                (medium_multiplier if params.get("model") in MEDIUM_MODELS else 1) if free_first else 0}
 
     paid_outputs = n - int(is_opus and shaped)
     # 官方余额实测：符合条件的多图首张参考费减免，单张照收。
