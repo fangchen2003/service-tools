@@ -151,14 +151,21 @@ def validate_image_references(payload: dict) -> Optional[str]:
             return "Vibe 须为有效 base64；V3 必须传原图而不是 V4 编码"
     for item in cached_vibes + precise:
         is_precise = any(item is entry for entry in precise)
+        cache_key = item.get("cache_secret_key") if isinstance(item, dict) else None
+        # BaiBai uses UUIDv4 for Vibe cache identifiers. Gate does not look up
+        # these keys locally; complete reference data is still required below.
+        valid_key = isinstance(cache_key, str) and (
+            re.fullmatch(r"[0-9a-f]{64}", cache_key)
+            or (not is_precise and re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", cache_key))
+        )
         if (not isinstance(item, dict)
-                or not isinstance(item.get("cache_secret_key"), str)
-                or not re.fullmatch(r"[0-9a-f]{64}", item["cache_secret_key"])
+                or not valid_key
                 or not _base64_data(item.get("data"), png=is_precise,
                                     source_image=not is_precise and model in VIBE_RAW_MODELS)
                 or (not is_precise and model in VIBE_ENCODED_MODELS
                     and _base64_data(item.get("data"), source_image=True))):
-            return "缓存参考必须包含 64 位小写十六进制 cache_secret_key 和完整 base64 data；精确参考须为 PNG"
+            return "缓存参考必须包含 64 位小写十六进制 cache_secret_key（Vibe 也支持小写 UUIDv4）和完整 base64 data；精确参考须为 PNG"
     return None
 
 
