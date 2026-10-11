@@ -72,3 +72,10 @@ def test_incident_at_rejects_out_of_range():
         with pytest.raises(HTTPException):
             _at({"at": bad})
     assert _stamp(1e300) == "时间无效"
+
+
+def test_empty_body_uses_standard_wording():
+    # 10-11 站长：事件正文照 status.claude.com 的标准句式，留空就用标准句
+    assert sp._check({"status": "investigating", "title": "t"}, True) == ("investigating", "我们正在调查此问题。")
+    assert sp._check({"status": "resolved", "body": "  "}, False)[1] == "此事件已解决。"
+    assert sp._check({"status": "monitoring", "body": "自定义"}, False)[1] == "自定义"
