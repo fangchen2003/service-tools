@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable, Optional
 
+from . import site_flags
+
 FEATURES: dict[str, str] = {
     "image": "文生图",
     "upscale": "放大",
@@ -73,7 +75,7 @@ def key_features(key) -> Optional[list[str]]:
         return None
 
 
-async def check(db, key, name: str) -> Optional[str]:
+async def check(db, key, name: str, settings=None) -> Optional[str]:
     """允许则返回 None，否则返回面向用户的拒绝原因。"""
     try:
         if key["is_admin"]:
@@ -89,6 +91,10 @@ async def check(db, key, name: str) -> Optional[str]:
         has_anlas = False
     if name in ANLAS_FEATURES and has_anlas:
         return None          # 2026-10-10 放开 Anlas：有 Anlas 权限（含自动分配）的成员可以用付费功能，费用按每日 Anlas 上限扣
+    if name == "vibe":
+        vibe_daily_cap = await site_flags.get(db, site_flags.GLOBAL_DAILY_ANLAS, settings)
+        if vibe_daily_cap > 0:
+            return None      # 针对 Vibe 开放全站每日 Anlas PVP 抢额度（由 quota_image_check 统一校验全站池）
     if allowed is not None and name not in allowed:
         if name in ANLAS_FEATURES:
             return (f"{FEATURES[name]}会消耗 Anlas（{ANLAS_FEATURES[name]}），本站只提供免费出图，暂不开放。"

@@ -100,6 +100,8 @@ class Settings:
     global_monthly_anlas: float = _float("GLOBAL_MONTHLY_ANLAS", 10000)
     # 全站每日 V5 张数（镜像 NovelAI 服务端 V5 周额度 ~190 张/天的恢复速率）
     global_daily_v5: int = _int("GLOBAL_DAILY_V5", 150)
+    # 全站每日 Anlas 额度（Vibe PVP 抢额度；0 = 不限）
+    global_daily_anlas: int = _int("GLOBAL_DAILY_ANLAS", 200)
 
     # ---- 新 key 的默认配额（管理员可在后台逐 key 修改）----
     default_daily_images: int = _int("DEFAULT_DAILY_IMAGES", 100)  # 每 Key 免费旧模型日限；0=不限

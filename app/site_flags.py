@@ -37,6 +37,8 @@ ISSUE_HOURLY_CAP = Spec("issue_hourly_cap", "int", 12, "registration", "每小�
 REGISTER_OPEN = Spec("register_open", "flag", False, "modules / registration", "开放 /register 领取")
 GLOBAL_DAILY_V5 = Spec("global_daily_v5", "int", None, "额度 / 首页 / 客户端", "全站每日 V5 张数（0 = 不限）",
                        0, 100000, env="global_daily_v5")
+GLOBAL_DAILY_ANLAS = Spec("global_daily_anlas", "int", None, "额度 / Vibe PVP", "全站每日 Anlas 额度（0 = 不限，Vibe PVP 抢额度）",
+                          0, 100000, env="global_daily_anlas")
 GLOBAL_MONTHLY_ANLAS = Spec("global_monthly_anlas", "float", None, "额度 / Anlas 池", "全站每月 Anlas 预算（0 = 不限）",
                             0, 1_000_000, env="global_monthly_anlas")
 from .guard import FIELDS as _GUARD  # noqa: E402  保底张数的默认值和范围以 guard 为准，这里只是登记出来给别的模块读
@@ -55,7 +57,7 @@ WAITLIST = Spec("waitlist_enabled", "flag", False, "registration",
 MEMBER_SWEEP = Spec("member_sweep", "flag", True, "registration", "退群回收：每人每天核对一次是否还在服务器，不在就删 Key")
 
 ALL = (WAITLIST, MEMBER_SWEEP, WEB_LOGIN_PAUSED, DM_ENABLED, WAITLIST_DM, ISSUE_HOURLY_CAP, REGISTER_OPEN,
-       GLOBAL_DAILY_V5, GLOBAL_MONTHLY_ANLAS, GUARD_BASE, ALGO_NOTICE, IMAGE_RETENTION, IMAGE_CAP_MB, IMAGE_KEEP_HOURS, MEMBER_DOWNLOAD, SHARE_MODE)
+       GLOBAL_DAILY_V5, GLOBAL_DAILY_ANLAS, GLOBAL_MONTHLY_ANLAS, GUARD_BASE, ALGO_NOTICE, IMAGE_RETENTION, IMAGE_CAP_MB, IMAGE_KEEP_HOURS, MEMBER_DOWNLOAD, SHARE_MODE)
 
 
 def default_of(spec: Spec, settings=None) -> Any:

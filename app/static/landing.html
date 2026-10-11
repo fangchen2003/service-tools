@@ -522,11 +522,11 @@ function renderStatus(d){
   setSite(d.site);
   var reg = d.registration || {};
   var pills = $('pills'); pills.textContent = ''; pills.removeAttribute('aria-busy');
-  if(reg.open){
+  if(reg.open && (!ME || !ME.has_key)){
     var full = reg.slots_left === 0, rp = pill(full ? 'warn' : 'info', full ? '已满员' : '可领取', false);
     rp.title = full ? '名额已满，在 Discord 用 /register 可排候补' : '在 Discord 用 /register 领 Key' + (reg.slots_left != null ? '，剩余名额 ' + reg.slots_left : '');
     pills.appendChild(rp);
-  } else pills.appendChild(pill('', '未开放', false));
+  }
   var idle = Number(d.key_inactivity_delete_days) || 0;
   $('ruleIdle').hidden = !(idle > 0);
   if(idle > 0) $('idleDays').textContent = String(idle);
@@ -588,6 +588,7 @@ function renderMe(d){
   document.body.classList.toggle('haskey', !!(authed && d && d.has_key));
   renderChip(d);
   $('liveTitle').innerHTML = icon('key') + (authed ? '我的额度' : '查额度');
+  if(authed && d && d.has_key){ var pills = $('pills'); if(pills) pills.textContent = ''; }
   var hk = $('headKey');
   if(hk){ hk.hidden = true; hk.innerHTML = ''; }
   if(!authed){ me.hidden = true; lr.hidden = false; return; }

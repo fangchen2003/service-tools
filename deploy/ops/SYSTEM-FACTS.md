@@ -117,6 +117,7 @@
 | `issue_hourly_cap` | int | 12 | 0–500 | registration | 每小时最多发放的新 Key |
 | `register_open` | flag | False |  | modules / registration | 开放 /register 领取 |
 | `global_daily_v5` | int | `.env global_daily_v5` | 0–100000 | 额度 / 首页 / 客户端 | 全站每日 V5 张数（0 = 不限） |
+| `global_daily_anlas` | int | `.env global_daily_anlas` | 0–100000 | 额度 / Vibe PVP | 全站每日 Anlas 额度（0 = 不限，Vibe PVP 抢额度） |
 | `global_monthly_anlas` | float | `.env global_monthly_anlas` | 0–1e+06 | 额度 / Anlas 池 | 全站每月 Anlas 预算（0 = 不限） |
 | `guard_base_daily_images` | int | 100 | 0–100000 | guard（注册私信也读） | V4.5 每人每天保底张数 |
 | `algo_notice` | str | '' |  | quota_algo → 首页 | 首页显示的今日额度说明 |
