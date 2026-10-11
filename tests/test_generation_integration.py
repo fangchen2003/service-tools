@@ -189,6 +189,37 @@ async def post(path, body, token="fixture-1"):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("count,anlas", [(1, 0), (5, 2)])
+async def test_baibai_vibe_uuid_is_forwarded_with_data_and_billed(state, count, anlas):
+    cached = [{"cache_secret_key": "1e6714a5-571c-4ec2-b34a-27f263bef0e2",
+               "data": base64.b64encode(b"mock-vibe-vector").decode()} for _ in range(count)]
+    body = image_body(reference_image_multiple_cached=cached, reference_strength_multiple=[0.6] * count)
+    response = await post("/ai/generate-image", body)
+    assert response.status_code == 200
+    assert len(state.nai.calls) == 1
+    sent = state.nai.calls[0][2]["parameters"]
+    assert sent["reference_image_multiple_cached"] == cached
+    assert "reference_information_extracted_multiple" not in sent
+    assert state.db.charges[-1][1]["anlas"] == anlas
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["missing_data", "empty_strength", "empty_extraction"])
+async def test_invalid_baibai_vibe_is_rejected_before_dispatch(state, invalid):
+    cached = [{"cache_secret_key": "1e6714a5-571c-4ec2-b34a-27f263bef0e2",
+               "data": base64.b64encode(b"mock-vibe-vector").decode()}]
+    body = image_body(reference_image_multiple_cached=cached, reference_strength_multiple=[0.6])
+    if invalid == "missing_data":
+        del cached[0]["data"]
+    elif invalid == "empty_strength":
+        body["parameters"]["reference_strength_multiple"] = []
+    else:
+        body["parameters"]["reference_information_extracted_multiple"] = []
+    assert (await post("/ai/generate-image", body)).status_code == 400
+    assert not state.nai.calls and not state.db.charges
+
+
+@pytest.mark.asyncio
 async def test_free_legacy_daily_quota_is_per_key_and_counts_success_only(state):
     key = state.db.keys["fixture-1"]
     key["daily_images"] = 1
