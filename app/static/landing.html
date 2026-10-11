@@ -146,7 +146,6 @@ section{margin-top:40px}
 .pill.info{color:var(--accent-text);background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 25%,transparent)}
 .pill.bad{color:var(--bad);background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 25%,transparent)}
 @keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 50%,transparent)}70%,100%{box-shadow:0 0 0 7px transparent}}
-.cooldown{margin:12px auto 0;max-width:420px;display:flex;gap:8px;align-items:center;justify-content:center;color:var(--warn);font-size:13.5px}
 .cta-note{color:var(--muted);font-size:13.5px;align-self:center}
 .skel{display:inline-block;height:32px;width:120px;border-radius:999px;background:linear-gradient(90deg,var(--surface-3),var(--surface-2),var(--surface-3));background-size:200% 100%;animation:sh 1.4s infinite linear}
 @keyframes sh{to{background-position:-200% 0}}
@@ -192,9 +191,7 @@ section{margin-top:40px}
 .drow{display:flex;justify-content:space-between;font-size:13px;font-variant-numeric:tabular-nums}
 @media (prefers-reduced-motion: reduce){.dash *{transition:none!important}}
 /* 运行情况：一句结论 + 4 个关键数字 */
-.verdict{display:flex;flex-direction:column;gap:10px;padding-bottom:14px;border-bottom:1px solid var(--border)}
-.v-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
-.v-title{font-size:clamp(18px,4.6vw,22px);line-height:1.3;letter-spacing:-.01em;display:flex;align-items:center;gap:10px;text-wrap:balance;margin:0}
+.v-title{font-size:16px;line-height:1.35;font-weight:600;letter-spacing:-.01em;display:flex;align-items:center;gap:10px;text-wrap:balance;margin:0}
 .v-title i{width:11px;height:11px;border-radius:50%;background:var(--muted);flex:none}
 .verdict[data-tone=ok] .v-title i{background:var(--ok);animation:pulse 2.4s infinite}
 .verdict[data-tone=busy] .v-title i{background:var(--accent)}
@@ -202,16 +199,6 @@ section{margin-top:40px}
 .verdict[data-tone=bad] .v-title i{background:var(--bad)}
 .verdict[data-tone=warn] .v-title{color:var(--warn)}
 .verdict[data-tone=bad] .v-title{color:var(--bad)}
-.v-econ{font-size:12px;padding:4px 10px;border-radius:999px;background:var(--accent-soft);color:var(--accent-text)}
-.v-sub{margin:0;font-size:13.5px;color:var(--text-2)}
-.v-sub:empty{display:none}
-.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:0}
-@media (max-width:520px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
-.kpis div{background:var(--surface-2);border-radius:var(--radius-sm);padding:10px 12px;min-width:0}
-.kpis dt{font-size:12px;color:var(--muted)}
-.kpis dd{margin:2px 0 0;display:flex;align-items:baseline;gap:4px;font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
-.kpis dd b{font-size:22px;line-height:1.2;color:var(--text);font-weight:700}
-.kpis dd b.hot{color:var(--warn)}
 #board{margin-top:16px}
 .algo-note{margin:0 0 10px;font-size:12.5px;color:var(--muted)}
 /* steps */
@@ -370,34 +357,23 @@ body.authed #board{margin-top:22px}
         </form>
         <p class="muted sm" id="loginPaused" hidden>用 <code>/register</code> 领到的 Key 登录，就能看自己的额度、打包下载作品。还没有 Key？在 Discord 里输入 <code>/register</code>。</p>
       </div>
-      <p class="cooldown" id="cooldown" hidden><span data-ic="clock"></span><span id="cooldownTxt"></span></p>
     </div>
   </section>
 
   <section id="board" aria-labelledby="boardTitle">
     <div class="card">
       <div class="dash" id="dash" style="margin-top:0">
-        <div class="verdict" id="verdict" data-tone="idle">
-          <div class="v-head"><h2 class="v-title" id="boardTitle"><i aria-hidden="true"></i><span id="vText">正在读取运行情况…</span></h2><span class="v-econ" id="vEcon" hidden>节约模式</span></div>
-          <p class="v-sub" id="vSub" aria-live="polite"></p>
-          <dl class="kpis">
-            <div><dt>成员</dt><dd><b id="kMem">—</b><span id="kMemC"></span></dd></div>
-            <div><dt>今日出图</dt><dd><b id="kDay">—</b><span>张</span></dd></div>
-            <div><dt>近 60 分钟</dt><dd><b id="kHour">—</b><span id="kHourC"></span></dd></div>
-            <div><dt>排队</dt><dd><b id="kQ">—</b><span>张</span></dd></div>
-          </dl>
-        </div>
         <ol class="dstrip" aria-label="出图流程">
           <li data-step="client"><span>客户端</span></li><li data-step="auth"><span>验 Key</span></li><li data-step="quota"><span>查额度</span></li><li data-step="queue"><span>排队</span></li><li data-step="pace"><span>控速</span></li><li data-step="nai"><span>NovelAI</span></li>
         </ol>
         <div class="dgrid">
-          <div class="dtile dme" id="dMe"><div class="dk" id="dMeK">现在</div><div class="dbig" id="dMeV">—</div><div class="dsub" id="dMeS"></div></div>
+          <div class="dtile dme verdict" id="dMe" data-tone="idle"><h2 class="v-title" id="boardTitle"><i aria-hidden="true"></i><span id="vText">正在读取运行情况…</span></h2><div class="dbig" id="dMeV">—</div><div class="dsub" id="dMeS" aria-live="polite"></div></div>
           <div class="dtile"><div class="dk">排队</div><div class="dnum"><b id="dQ">0</b><span id="dQs"></span></div><div class="dseg" id="dQbar"></div><div class="dnote" id="dQn"></div></div>
           <div class="dtile"><div class="dk">近 60 分钟出图</div><div class="dnum"><b id="dP">0</b><span id="dPs"></span></div><div class="dbar" role="progressbar" aria-label="近 60 分钟出图占上限的比例" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="dPbar"></i></div><div class="dnote" id="dPn"></div></div>
           <div class="dtile"><div class="dk">全站今日额度</div>
             <div class="drow"><span>全部出图</span><span><b id="d45">0</b> / <span id="d45c">0</span></span></div><div class="dbar" role="progressbar" aria-label="全部出图占今日额度的比例" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="d45bar"></i></div>
             <div class="drow"><span>V5</span><span><b id="d5">0</b> / <span id="d5c">0</span></span></div><div class="dbar v5" role="progressbar" aria-label="V5 出图占今日额度的比例" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="d5bar"></i></div>
-            <div class="dnote" id="dAn"></div></div>
+            </div>
         </div>
       </div>
     </div>
@@ -554,35 +530,15 @@ function renderAnnouncement(has){
   }
 }
 /* 实时数据说全站被站点规则拦下时（按时段放行 / 每日上限 / 熔断），顶部胶囊跟着改，不再显示「空闲」 */
-var siteBlocked = null;
-var BLOCK_TITLE = {paced: '暂停出图 · 按时段放行', daily_cap: '今日出图已满', breaker: '暂停出图 · 上游出错',
-  hourly_cap: '本小时出图已满', quiet_cap: '安静时段 · 出图已满', cap_3h: '近 3 小时出图已满'};
-function applyBlockedPill(){
-  var p = document.getElementById('upPill'); if(!p) return;
-  var base = (p.dataset.base || '').split('|');
-  var cls = siteBlocked ? 'pill warn' : base[0], txt = siteBlocked ? (BLOCK_TITLE[siteBlocked.code] || '暂停出图') : base[1];
-  if(p.className === cls && p.textContent === txt) return;
-  p.className = cls; p.textContent = ''; p.appendChild(el('span', 'dot')); p.appendChild(el('span', '', txt));
-  p.title = siteBlocked ? siteBlocked.text : '';
-}
-document.addEventListener('owl-live', function(e){ siteBlocked = ((e.detail || {}).guard || {}).blocked || null; applyBlockedPill(); });
-window.OWL_BLOCK_TITLE = BLOCK_TITLE;     /* 下面的实时面板在另一个作用域里，共用同一套标题 */
 function renderStatus(d){
   setSite(d.site);
-  var up = d.upstream || {}, reg = d.registration || {};
+  var reg = d.registration || {};
   var pills = $('pills'); pills.textContent = ''; pills.removeAttribute('aria-busy');
-  var st = up.status;
-  var up0 = st === 'ok' ? pill('ok', '服务正常', true) : st === 'degraded' ? pill('warn', '服务不稳定', true) : pill('ok', '服务正常 · 空闲', true);
-  up0.id = 'upPill'; up0.dataset.base = up0.className + '|' + up0.textContent;
-  pills.appendChild(up0); applyBlockedPill();
   if(reg.open){
     var full = reg.slots_left === 0, rp = pill(full ? 'warn' : 'info', full ? '已满员' : '可领取', false);
     rp.title = full ? '名额已满，在 Discord 用 /register 可排候补' : '在 Discord 用 /register 领 Key' + (reg.slots_left != null ? '，剩余名额 ' + reg.slots_left : '');
     pills.appendChild(rp);
   } else pills.appendChild(pill('', '未开放', false));
-  var cd = Number(up.image_cooldown_seconds) || 0;
-  $('cooldown').hidden = !(cd > 0);
-  if(cd > 0) $('cooldownTxt').textContent = '上游限流冷却中，约 ' + cd + ' 秒';
   var idle = Number(d.key_inactivity_delete_days) || 0;
   $('ruleIdle').hidden = !(idle > 0);
   if(idle > 0) $('idleDays').textContent = String(idle);
@@ -596,13 +552,11 @@ function renderStatus(d){
   if($('loginBtn')) $('loginBtn').hidden = paused;
   if($('loginPaused')) $('loginPaused').hidden = !paused;
   if($('econNote')) $('econNote').hidden = !d.economy;
-  if($('vEcon')) $('vEcon').hidden = !d.economy;
   try{ document.dispatchEvent(new CustomEvent('owl-status', {detail: d})); }catch(_){}
 }
 function statusFailed(){
   var pills = $('pills'); pills.textContent = ''; pills.removeAttribute('aria-busy');
   pills.appendChild(pill('bad', '状态暂时无法读取', true));
-  $('cooldown').hidden = true;
   if(!$('discordSlot').firstChild) renderDiscord('');
 }
 var loading = false;
@@ -806,29 +760,31 @@ function fmtDate(sec){
   function pct(a, b){ return b > 0 ? Math.min(100, Math.round(a / b * 100)) : 0; }
   function setBar(id, a, b){ var e = $id(id), p = pct(a, b); e.style.width = p + '%'; if(e.parentNode) e.parentNode.setAttribute('aria-valuenow', String(p)); }
   function mark(k){ Array.prototype.forEach.call(steps, function(s){ var on = s.dataset.step === k; s.classList.toggle('on', on); if(on) s.setAttribute('aria-current', 'step'); else s.removeAttribute('aria-current'); }); }
+  var BLOCK_TITLE = {paced: '暂停出图 · 按时段放行', daily_cap: '今日出图已满', breaker: '暂停出图 · 上游出错',
+    hourly_cap: '本小时出图已满', quiet_cap: '安静时段 · 出图已满', cap_3h: '近 3 小时出图已满'};
   function render(d, me){
     var q = d.quota || {}, g = d.guard || {}, r = d.rules || {};
     var qu = me || d.queue || {}, w = qu.waiting || 0, run = qu.running || 0;   /* 有 Key 时用不带缓存的数字，和「排第几」一致 */
     var mine = me && me.mine || null, iv = Number(d.interval) || 15;
     var myRun = !!(mine && mine.some(function(x){ return x.state === 'running'; }));
     var myPos = mine && mine.filter(function(x){ return x.state === 'waiting'; })[0];
-    /* 你的图 / 现在 */
+    /* 第一格：一句结论（按严重程度取第一条）+ 现在发一张图要等多久；有自己的图时显示自己的进度 */
+    var hour = g.hour || 0, hcap = g.hour_cap || 0, qcap = r.queue_cap || 0, bk = g.blocked, bw = bk && /约 (\d+) 分钟/.exec(bk.text);
+    var tone, txt, val, sub = '';
+    if(g.cooldown){ tone = 'bad'; txt = '上游限流，全站暂停出图'; val = '约 ' + g.cooldown + ' 秒后'; sub = '期间发的图会被拒绝，不用重试'; }
+    else if(bk){ tone = bk.code === 'breaker' ? 'bad' : 'warn'; txt = BLOCK_TITLE[bk.code] || '暂时不能出图';
+      val = bk.code === 'daily_cap' ? '明天 0 点恢复' : bw ? '约 ' + bw[1] + ' 分钟后' : '稍后再试'; sub = bk.text; }
+    else if(qcap && w >= qcap){ tone = 'warn'; txt = '排队已满'; val = '稍后再发'; sub = '队伍最多 ' + qcap + ' 张，新请求会被拒绝'; }
+    else if(w + run > 0){ tone = 'busy'; txt = '运行正常'; val = '约 ' + Math.round((w + run) * iv) + ' 秒后开始'; sub = '前面有 ' + (w + run) + ' 张，每张约 ' + iv + ' 秒'; }
+    else { tone = 'ok'; txt = '运行正常'; val = '马上开始'; }
+    if(!g.cooldown && !bk && hcap && hour >= hcap * 0.95){ tone = 'warn'; txt = '本小时出图快满了'; }
     var tile = $id('dMe');
+    tile.dataset.tone = tone; $id('vText').textContent = txt;
     tile.classList.toggle('mine', !!(myRun || myPos));
-    if(myRun){ $id('dMeK').textContent = '你的图'; $id('dMeV').textContent = '正在生成'; $id('dMeS').textContent = '通常十几秒，画好直接回到客户端'; mark('nai'); }
-    else if(myPos){ $id('dMeK').textContent = '你的图'; $id('dMeV').textContent = '排第 ' + myPos.position + ' 位'; $id('dMeS').textContent = '约 ' + Math.max(5, myPos.eta) + ' 秒后开始画，画好直接回到客户端'; mark('queue'); }
-    else {
-      $id('dMeK').textContent = '现在发一张图';
-      var bk = g.blocked, bw = bk && /约 (\d+) 分钟/.exec(bk.text);
-      if(g.cooldown){ $id('dMeV').textContent = '暂停 ' + g.cooldown + ' 秒'; $id('dMeS').textContent = 'NovelAI 限流，全站出图暂停，稍后自动恢复'; }
-      else if(bk){ $id('dMeV').textContent = bk.code === 'daily_cap' ? '明天 0 点恢复' : bw ? '约 ' + bw[1] + ' 分钟后' : '暂时不能出图'; $id('dMeS').textContent = bk.text; }
-      else if(!w && !run){ $id('dMeV').textContent = '马上开始'; $id('dMeS').textContent = '没人在排队，发了就画'; }
-      else {
-        $id('dMeV').textContent = '约 ' + Math.round((w + run) * iv) + ' 秒后开始';
-        $id('dMeS').textContent = '前面有 ' + (w + run) + ' 张（' + run + ' 张在画、' + w + ' 张在排），每张约 ' + iv + ' 秒';
-      }
-      mark(g.cooldown || bk ? 'pace' : '');
-    }
+    if(myRun){ val = '你的图正在生成'; sub = '通常十几秒，画好直接回到客户端'; mark('nai'); }
+    else if(myPos){ val = '你的图排第 ' + myPos.position + ' 位'; sub = '约 ' + Math.max(5, myPos.eta) + ' 秒后开始画'; mark('queue'); }
+    else mark(g.cooldown || bk ? 'pace' : '');
+    $id('dMeV').textContent = val; $id('dMeS').textContent = sub;
     /* 排队 */
     $id('dQ').textContent = w;
     $id('dQs').textContent = '张在等 · ' + run + ' 张在画';
@@ -841,32 +797,13 @@ function fmtDate(sec){
     $id('dPs').textContent = '/ ' + (g.hour_cap || 0) + ' 张';
     setBar('dPbar', g.hour || 0, g.hour_cap || 0);
     var nx = Number(g.next_in) || 0;
-    $id('dPn').textContent = g.hour_cap && (g.hour || 0) >= g.hour_cap ? '近 60 分钟已满，最早那张满 60 分钟后就有空位' : (nx > 0 ? '下一张约 ' + Math.ceil(nx) + ' 秒后可以发' : '上游空着，随时可以发');
+    $id('dPn').textContent = g.hour_cap && (g.hour || 0) >= g.hour_cap ? '近 60 分钟已满，最早那张满 60 分钟后就有空位' : (nx > 0 ? '下一张约 ' + Math.ceil(nx) + ' 秒后可以发' : '');
     /* 额度 */
     // 每日上限按张数计（10-11 起不再折算半张）
     const used45 = q.units_today ?? q.images_today ?? 0;
     $id('d45').textContent = Math.round(used45); $id('d45').title = `今天全站出图 ${q.images_today || 0} 张`;
     $id('d45c').textContent = q.images_cap || 0; setBar('d45bar', used45, q.images_cap || 0);
     $id('d5').textContent = q.v5_today || 0; $id('d5c').textContent = q.v5_cap || 0; setBar('d5bar', q.v5_today || 0, q.v5_cap || 0);
-    $id('dAn').textContent = '每人每天同样的张数，全站按时段放行';
-    /* 运行情况：一句结论（按严重程度取第一条）+ 4 个关键数字 */
-    var m = d.members || {}, hour = g.hour || 0, hcap = g.hour_cap || 0, qcap = r.queue_cap || 0, tone, txt, sub;
-    if(g.cooldown){ tone = 'bad'; txt = '上游限流，全站暂停出图'; sub = '约 ' + g.cooldown + ' 秒后自动恢复，期间发的图会被拒绝，不用重试'; }
-    else if(g.blocked && g.blocked.code !== 'hourly_cap' && g.blocked.code !== 'quiet_cap'){ tone = g.blocked.code === 'breaker' ? 'bad' : 'warn'; txt = (window.OWL_BLOCK_TITLE || {})[g.blocked.code] || '暂时不能出图'; sub = g.blocked.text; }
-    else if(hcap && hour >= hcap){ tone = 'warn'; txt = '本小时出图已满'; sub = '为了保护上游账号，每小时最多 ' + hcap + ' 张；最早那张满 60 分钟后就有空位，通常几分钟'; }
-    else if(hcap && hour >= hcap * 0.95){ tone = 'warn'; txt = '本小时出图快满了'; sub = '每小时最多 ' + hcap + ' 张，已出 ' + hour + ' 张；满了要等几分钟才有空位'; }
-    else if(qcap && w >= qcap){ tone = 'warn'; txt = '排队已满，请稍后再发'; sub = '队伍最多 ' + qcap + ' 张，新请求会被拒绝，过一会儿再试'; }
-    else if(w + run > 0){ tone = 'busy'; txt = '正常出图 · 有人在排队'; sub = '现在发一张约 ' + Math.round((w + run) * iv) + ' 秒后开始画'; }
-    else { tone = 'ok'; txt = '运行正常 · 发了就画'; sub = '没人在排队'; }
-    if(tone !== 'bad' && tone !== 'warn' && hcap && hour >= hcap * 0.85) sub += '；本小时已出 ' + hour + ' / ' + hcap + ' 张，快到上限';
-    var vd = $id('verdict'); vd.dataset.tone = tone;
-    $id('vText').textContent = txt; $id('vSub').textContent = sub;
-    $id('kMem').textContent = m.active != null ? m.active : '—';
-    $id('kMemC').textContent = m.max ? '/ ' + m.max + (m.active >= m.max ? ' 已满' : '') : '';
-    $id('kDay').textContent = q.images_today || 0;
-    $id('kHour').textContent = hour; $id('kHour').classList.toggle('hot', !!(hcap && hour >= hcap * 0.85));
-    $id('kHourC').textContent = '/ ' + hcap;
-    $id('kQ').textContent = w;
   }
   /* 只用查询成功过的 Key，避免输错的 Key 每秒请求一次触发防暴力破解 */
   function poll(){

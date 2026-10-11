@@ -49,7 +49,7 @@ async def test_incident_lifecycle_banner_bars_and_history(tmp_path):
         snap = await sp.snapshot(db, now)
         up = snap["components"][0]
         assert up["days"][-1]["level"] == 2 and up["status"] == "部分中断"
-        assert "NovelAI 官方：图片生成 Operational" in sp.render(snap)
+        assert "NovelAI 官方" not in sp.render(snap)                    # 判断依据不在页面上展示（10-11 站长）
     finally:
         await db.close()
 

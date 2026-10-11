@@ -48,8 +48,9 @@ def test_landing_html_clean_and_valid():
     assert "lim5" in content
     assert 'title="个人不限额度，仍受全站日上限约束"' in content
 
-    # 名额上限为 0（不限名额）时仍正常展示当前活跃成员数，不回退为破折号
-    assert "m.active != null ? m.active : '—'" in content
+    # 10-11 站长：运行情况不再单独列「成员数」等 4 个数字，和下面的卡片重复；结论并进第一张卡
+    assert 'id="kMem"' not in content and 'class="kpis"' not in content
+    assert 'class="dtile dme verdict"' in content
 
     # 提取脚本并通过 node 语法校验
     scripts = re.findall(r"<script>(.*?)</script>", content, re.DOTALL)
