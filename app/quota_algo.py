@@ -203,7 +203,15 @@ def water_fill(usage: list[int], budget: float) -> int:
     return us[-1]
 
 
-async def fair_base(db, day: str, cap: int, *, lo: int, hi: int) -> Optional[int]:
+async def member_usage(db, day: str) -> list[int]:
+    """前一天每个算法管理成员的 V4.5 用量（不含测试 / 站长 / 手动 Key）。"""
+    rows = await db._db.execute_fetchall(
+        "SELECT c.legacy_free_images FROM counters c JOIN api_keys k ON k.id=c.key_id "
+        "WHERE c.day=? AND k.is_test=0 AND k.is_admin=0 AND k.quota_auto=1 AND c.legacy_free_images>0", (day,))
+    return [int(r[0]) for r in rows]
+
+
+async def fair_base(db, day: str, cap: int, *, lo: int, hi: int, share: float = FAIR_SHARE) -> Optional[int]:
     """按前一天每个成员的 V4.5 用量算保底（只看算法管理的成员，不含测试 / 站长 Key）。"""
     rows = await db._db.execute_fetchall(
         "SELECT c.legacy_free_images FROM counters c JOIN api_keys k ON k.id=c.key_id "
@@ -211,7 +219,7 @@ async def fair_base(db, day: str, cap: int, *, lo: int, hi: int) -> Optional[int
     usage = [int(r[0]) for r in rows]
     if not usage:
         return None
-    return max(lo, min(hi, water_fill(usage, cap * FAIR_SHARE)))
+    return max(lo, min(hi, water_fill(usage, cap * share)))
 
 
 async def _cfg(db) -> dict[str, int]:
@@ -384,7 +392,8 @@ async def run(state, now: Optional[float] = None) -> dict[str, Any]:
     if not cfg["quota_auto_enabled"]:
         return {"enabled": False}
     guard = getattr(state, "guard", None)
-    accounts = max(1, sum(1 for t in getattr(getattr(state, "nai", None), "pool", []) if t.usable)) if getattr(state, "nai", None) else 1
+    # 按账号总数算（不看此刻是否可用）：0 点恰好有账号在冷却时，不能把一整天的额度减半（Sonnet 审查 P2）
+    accounts = max(1, len(getattr(getattr(state, "nai", None), "pool", []) or [])) if getattr(state, "nai", None) else 1
     cap = (guard.values["account_daily_cap"] if guard else 1000) * accounts
     a = int(float(await db.get_setting("quota_ceiling", cfg["quota_target_avg"])))
     b = int(float(await db.get_setting("quota_base_now", cfg["quota_base"])))
@@ -397,14 +406,29 @@ async def run(state, now: Optional[float] = None) -> dict[str, Any]:
         yday = (datetime.fromtimestamp(now) - timedelta(days=1)).strftime("%Y-%m-%d")
         stats = await _yesterday(db, yday, members)
         covered = await day_coverage(db, yday)
+        # 极简模式（2026-10-11 站长）：每人每天同一个数 N，没有保底 / 上限两层。
+        # N = 把「账号日上限 − 全站 V5」按昨天的需求做最大最小公平分配：用得少的人用多少算多少，剩下的平分给用得多的人
+        from . import site_flags
+        v5_global = int(await site_flags.get(db, site_flags.GLOBAL_DAILY_V5, getattr(state, "settings", None)) or 0)
+        budget = max(0, cap - v5_global)
         if covered < P("allocation.min_coverage_hours", 20):
-            a2, b2, reasons = a, b, [f"昨天只有 {covered:.1f} 小时数据（不足 20 小时），不调整"]
+            n, reasons = a, [f"昨天只有 {covered:.1f} 小时数据（不足 20 小时），每人额度不变"]
         else:
-            a2, b2, reasons = daily_adjust(a, b, cap=cap, cfg=cfg, paced=bool(guard and guard.values.get("daily_burst")), **stats)
-        fair = await fair_base(db, yday, cap, lo=cfg["quota_base_min_fair"], hi=a2) if covered >= P("allocation.min_coverage_hours", 20) else None
-        if fair is not None and fair != b2:
-            reasons.append(f"保底按昨天的实际需求平分 {int(FAIR_SHARE * 100)}% 的账号日上限：{b2}→{fair}")
-            b2 = fair
+            usage = await member_usage(db, yday)
+            lo, hi = cfg["quota_base_min_fair"], cfg["quota_ceiling_max"]
+            if usage and sum(usage) >= budget * 0.95:
+                # 总需求已经顶满：按需求平分（可升可降）
+                n = max(lo, min(hi, water_fill(usage, budget)))
+                why = f"昨天总需求 {sum(usage)} 张已接近可分的 {budget} 张，按需求平分"
+            elif usage and max(usage) >= a:
+                # 还有余量且有人用满了 N：放宽一步（只用昨天的用量会被昨天的 N 截住，永远升不回来——Sonnet 审查 P1）
+                n = min(hi, a + cfg["quota_step"])
+                why = f"还有余量（昨天共 {sum(usage)} / {budget} 张），{sum(1 for u in usage if u >= a)} 人用满 {a} 张：放宽"
+            else:
+                n = max(lo, min(hi, a))
+                why = f"还有余量（昨天共 {sum(usage)} / {budget} 张），没人用满：不变"
+            reasons = [f"每人每天 {n} 张。{why}（可分 = 账号日上限 {cap} − 全站 V5 {v5_global}）"]
+        a2 = b2 = n
         stats["coverage_hours"] = round(covered, 1)
         review = {"day": yday, **stats, "cap": cap, "from": [a, b], "to": [a2, b2], "reasons": reasons}
         history = json.loads(await db.get_setting(HISTORY_KEY, "[]") or "[]")[-29:] + [review]
@@ -472,7 +496,7 @@ async def run(state, now: Optional[float] = None) -> dict[str, Any]:
         "SELECT key_id, SUM(v5) FROM counters WHERE day>=? GROUP BY key_id",
         (datetime.fromtimestamp(since7).strftime("%Y-%m-%d"),)) if k is not None}
     BORROW.clear()
-    BORROW.update(borrow_plan(pct, v5["each"], usage))
+    BORROW.update({"open": False, "why": "极简模式：每人固定张数，不借用"})       # 2026-10-11 站长：去掉借用这一层
     v5["borrow"] = {k: BORROW[k] for k in ("open", "why") if k in BORROW}
 
     # ---- 应用：所有由算法管理的成员同一套额度 ----
@@ -494,7 +518,7 @@ async def run(state, now: Optional[float] = None) -> dict[str, Any]:
         await guard.save({"base_daily_images": b})
     await db.set_settings_bulk(settings)
     # 首页提醒（站长要求：算法调整只在网站首页提示，不发 Discord）
-    note = f"今日额度（算法自动分配）：V4.5 每人 {a} 张、保底 {b} 张 · V5 每人 {v5['each']} 张" + (
+    note = f"今日额度（算法自动分配，所有人一样）：V4.5 每人 {a} 张 · V5 每人 {v5['each']} 张" + (
         f"（节约模式 ×{v5['economy']:g}）" if v5.get("economy") else "")
     if review and review["from"] != review["to"]:
         note = f"{today[5:].replace('-', '月')}日 算法调整：" + "；".join(review["reasons"]) + "。" + note

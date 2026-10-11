@@ -115,9 +115,9 @@ async def test_daily_review_sets_fair_base(tmp_path, monkeypatch):
         await db.set_settings_bulk({"quota_ceiling": 125, "quota_base_now": 90})
         st = SimpleNamespace(db=db, guard=guard, nai=SimpleNamespace(pool=[SimpleNamespace(usable=True)], allowance=None))
         r = await quota_algo.run(st, now=now)
-        want = water_fill(usage, 1500 * FAIR_SHARE)
-        assert r["base"] == want == guard.values["base_daily_images"]
-        assert any("平分" in x for x in r["review"]["reasons"])
+        # 极简模式：昨天共 871 张，远没用完 1500，有人用满 125 → 放宽一步到 150；上限 = 保底 = N
+        assert r["base"] == r["ceiling"] == 150 == guard.values["base_daily_images"]
+        assert any("放宽" in x for x in r["review"]["reasons"])
     finally:
         await db.close()
 
@@ -139,3 +139,54 @@ def test_review_signals_count_paced_and_not_headroom():
 def test_over_base_rejections_are_site_level():
     from app.reasons import OVER_BASE, LABELS
     assert OVER_BASE in SITE_LEVEL and OVER_BASE in LABELS      # 忙时自动重试不能被 key_guard 当成死循环暂停
+
+
+
+@pytest.mark.asyncio
+async def test_daily_cap_falls_back_on_upstream_signals():
+    # 2026-10-11 站长：日上限试探到 1700，上游 1 小时 ≥3 次 429 或连续 403 → 自动退回 1500，只降不升
+    g = _guard(account_daily_cap=1700, daily_cap_fallback=1500)
+    now = _at(12)
+    assert g.note_upstream_429(now) == 1 and g.note_upstream_429(now + 10) == 1   # 同一次限流的并发 429 只算一次
+    assert g.note_upstream_429(now + 70) == 2
+    assert g.note_upstream_429(now + 4000) == 1                       # 1 小时外的不算
+    assert await g.fall_back_daily("test") == (1700, 1500)
+    assert g.values["account_daily_cap"] == 1500
+    assert await g.fall_back_daily("again") is None                   # 已在安全档：不再动
+    g2 = _guard(account_daily_cap=1200, daily_cap_fallback=1500)
+    assert await g2.fall_back_daily("x") is None                      # 只降不升
+
+
+@pytest.mark.asyncio
+async def test_simple_mode_one_number_for_everyone(tmp_path, monkeypatch):
+    import time as _t
+    from datetime import timedelta
+    from types import SimpleNamespace
+    from app import quota_algo
+    from app.database import Database
+    db = Database(str(tmp_path / "s.sqlite"))
+    await db.connect()
+    try:
+        base = {"daily_images": 125, "daily_anlas": 0, "daily_v5": 6, "monthly_anlas": 0, "daily_text_tokens": 0,
+                "rpm": 10, "allow_anlas": False, "allow_img2img": False, "exclude_global_v5": False}
+        now = _t.time()
+        yday = (datetime.fromtimestamp(now) - timedelta(days=1)).strftime("%Y-%m-%d")
+        usage = [300, 200, 150] + [5] * 60
+        for i, u in enumerate(usage):
+            k = await db.create_key({"name": f"m{i}", "token": f"nai-s{i}", "image_model_scope": "all", **base})
+            await db._db.execute("INSERT INTO counters (key_id, day, images, legacy_free_images) VALUES (?,?,?,?)",
+                                 (k["id"], yday, u, u))
+        await db._db.commit()
+        await db.set_settings_bulk({"global_daily_v5": 200})
+        monkeypatch.setattr(quota_algo, "day_coverage", lambda db, day: _async(24.0))
+        guard = Guard(db)
+        guard.values["account_daily_cap"] = 1000
+        st = SimpleNamespace(db=db, guard=guard, nai=SimpleNamespace(pool=[SimpleNamespace(usable=True)], allowance=None))
+        r = await quota_algo.run(st, now=now)
+        n = water_fill(usage, 1000 - 200)
+        assert r["ceiling"] == r["base"] == n == guard.values["base_daily_images"]
+        rows = await db._db.execute_fetchall("SELECT DISTINCT daily_images FROM api_keys WHERE quota_auto=1")
+        assert [x[0] for x in rows] == [n]                              # 所有人同一个数
+        assert quota_algo.BORROW["open"] is False
+    finally:
+        await db.close()

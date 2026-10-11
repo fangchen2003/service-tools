@@ -62,7 +62,7 @@ async def test_run_applies_same_quota_to_auto_members_only(tmp_path):
                 return {"accounts": [{"percent": 98, "recharge_per_day": 11.0}]}
         st = SimpleNamespace(db=db, guard=guard, nai=SimpleNamespace(pool=[SimpleNamespace(usable=True)], allowance=Allow()))
         r = await quota_algo.run(st, now=time.time())
-        assert r["ceiling"] == 150 and r["base"] == 100 and r["review"] is not None
+        assert r["ceiling"] == r["base"] == 150 and r["review"] is not None      # 极简模式：每人一个数，没有保底 / 上限两层
         for k in (old, new):
             row = await db.get_key(k["id"])
             assert row["daily_images"] == 150 and row["daily_v5"] == r["v5"]["each"] and row["image_model_scope"] == "all"

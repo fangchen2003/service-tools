@@ -22,6 +22,7 @@ HOURLY_MIN, HOURLY_MAX, HOURLY_STEP = 100, 160, 10     # 上限 ≤ 0.8 × 单�
 # 名称: (默认值, 最小, 最大, 说明)
 FIELDS: dict[str, tuple[int, int, int, str]] = {
     "account_daily_cap": (1000, 0, 20000, "每个上游账号每天最多出图张数"),
+    "daily_cap_fallback": (1500, 0, 20000, "试探期的安全档：上游 1 小时内 ≥3 次 429 或连续 403 冷却时，每日上限自动退回这个数（只降不升；0 = 不自动退）"),
     "daily_burst": (150, 0, 20000, "每日上限按时段放行：0 点先放出这么多张，之后每小时补「每日上限 ÷ 24」张，没用完的留到后面；0 = 不分时段（整天先到先得）"),
     "account_hourly_cap": (150, 0, 240, "每个上游账号每小时最多出图张数（自动调整：上游 429 减半；前一天顶到过上限且没有 429 才 +10，范围 100～160）"),
     "account_3h_cap": (400, 0, 720, "每个上游账号连续 3 小时最多出图张数（防止连续几小时都在冲）"),
@@ -158,6 +159,29 @@ class Guard:
         new = min(old, max(P("capacity.hourly_min", HOURLY_MIN), int(old * P("capacity.hourly_decrease", 0.5))))
         await self._set_adaptive(new, now, last_429=now)
         return (old, new) if new != old else None
+
+    async def fall_back_daily(self, why: str, now: Optional[float] = None) -> Optional[tuple[int, int]]:
+        """每日上限试探期的保险丝（2026-10-11 站长定 1700，安全档 1500）：上游出现限流 / 封控信号时退回安全档。
+        只降不升，退回后要站长手动再调高。返回 (旧, 新)；没变化返回 None。"""
+        now = time.time() if now is None else now
+        old, safe = self.values["account_daily_cap"], self.values["daily_cap_fallback"]
+        if not safe or not old or old <= safe:
+            return None
+        self.values["account_daily_cap"] = safe
+        if self.db is not None:
+            await self.db.set_settings_bulk({_key("account_daily_cap"): safe, "guard_daily_fallback_at": now,
+                                             "guard_daily_fallback_why": why[:200]})
+        return old, safe
+
+    def note_upstream_429(self, now: Optional[float] = None) -> int:
+        """记一次上游 429，返回最近 1 小时内的次数（内存，重启清零）。"""
+        now = time.time() if now is None else now
+        seen = [t for t in getattr(self, "_upstream_429", []) if now - t < HOUR]
+        # 同一次限流里几个在途请求会同时收到 429：60 秒内只算一次（Sonnet 审查 P1，避免一次就误退档）
+        if not seen or now - seen[-1] >= 60:
+            seen.append(now)
+        self._upstream_429 = seen
+        return len(seen)
 
     async def adapt_daily(self, now: Optional[float] = None) -> Optional[tuple[int, int]]:
         """每 24 小时最多一次：过去 24 小时没有上游 429 → +10（不超过 200）。"""

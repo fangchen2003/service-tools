@@ -542,11 +542,10 @@ body.authed #board{margin-top:22px}
     <article class="mcard" id="m-aimd">
       <div class="math">
         <div class="m-k">③ 每日微调 · 加减步长</div>
-        <h3>保底 B 按昨天的需求平分，上限 A 只在有余量时放宽</h3>
-        <div class="eq">保底：Σ min(用量<sub>i</sub>, <i>B</i>) = 0.6 × 日上限 <span id="mDaily">1500</span></div>
-        <div class="eq">余量：<i>U</i> &lt; 0.6 ∧ 有人顶到 <i>A</i> ⇒ <i>A</i>+25（最多 300）</div>
-        <p class="m-note">保底用<b>最大最小公平</b>：昨天用得少的人用多少算多少，剩下的平分给用得多的人，10 ≤ <i>B</i> ≤ <i>A</i>。人多时总量由「按时段放行」管（见 ④），所以不再因为拥挤每天调低 <i>A</i>。<i>U</i> = 昨天出图总量 ÷ 日上限。</p>
-        <div class="m-read"><div><span>现在的上限 A</span><b id="rA">150</b></div><div><span>现在的保底 B</span><b id="rB">100</b></div><div><span>今天至今 U</span><b id="rU">—</b></div></div>
+        <h3>每人每天同一个数 N，按昨天的需求平分</h3>
+        <div class="eq">Σ min(用量<sub>i</sub>, <i>N</i>) = 日上限 <span id="mDaily">1700</span> − 全站 V5</div>
+                <p class="m-note">用<b>最大最小公平</b>：昨天用得少的人用多少算多少，剩下的平分给用得多的人，算出一个所有人一样的 <i>N</i>（10 ≤ <i>N</i> ≤ 300）。每天 0 点算一次，当天不变。总量怎么在一天里分配见 ④。</p>
+        <div class="m-read"><div><span>今天每人 N</span><b id="rA">—</b></div><div hidden><span>B</span><b id="rB">—</b></div><div><span>今天至今 U</span><b id="rU">—</b></div></div>
         <p class="m-prior">同类做法：<b>AIMD</b>，TCP 拥塞控制的加性增、乘性减。</p>
       </div>
       <div class="plot"><svg id="gA" role="img" aria-label="按昨日用量与拦截小时数划分的调整区域"></svg></div>
@@ -558,8 +557,7 @@ body.authed #board{margin-top:22px}
         <h3 id="mHourT">每小时最多 150 张</h3>
         <div class="eq" id="mHourEq">放行 ⇔ <i>n</i><sub>h</sub> &lt; <i>C</i>，<i>C</i> = <span class="hl">150</span></div>
         <div class="eq">按时段放行 ⇔ 今天已用 &lt; 150 + 日上限 × 已过去的时间 / 24 小时</div>
-        <div class="eq">借用 ⇔ 无人排队 ∧ 这个时段放出的份额还剩半小时以上的量</div>
-        <p class="m-note" id="mHourN">每天的总量平均分到 24 小时放出，没用完的留到后面，晚来的人也有图出。超过个人保底 B 以后，只有全站空闲（第三行）才能继续用到上限 A。</p>
+                <p class="m-note" id="mHourN">每天的总量平均分到 24 小时放出，没用完的留到后面，晚来的人也有图出。</p>
         <p class="m-now" id="mHourNow" hidden></p>
         <p class="m-prior">同类做法：<b>滑动窗口限流</b>（不是整点清零，最早一张滑出 60 分钟就空出一个位置）。</p>
       </div>
@@ -965,7 +963,7 @@ function fmtDate(sec){
     $id('d45').textContent = Math.round(used45); $id('d45').title = `今天全站出图 ${q.images_today || 0} 张`;
     $id('d45c').textContent = q.images_cap || 0; setBar('d45bar', used45, q.images_cap || 0);
     $id('d5').textContent = q.v5_today || 0; $id('d5c').textContent = q.v5_cap || 0; setBar('d5bar', q.v5_today || 0, q.v5_cap || 0);
-    $id('dAn').textContent = r.borrow_open ? '全站空闲：用完保底后也能继续出图' : '全站较忙：用完保底后要等空闲才能继续';
+    $id('dAn').textContent = '每人每天同样的张数，全站按时段放行';
     /* 运行情况：一句结论（按严重程度取第一条）+ 4 个关键数字 */
     var m = d.members || {}, hour = g.hour || 0, hcap = g.hour_cap || 0, qcap = r.queue_cap || 0, tone, txt, sub;
     if(g.cooldown){ tone = 'bad'; txt = '上游限流，全站暂停出图'; sub = '约 ' + g.cooldown + ' 秒后自动恢复，期间发的图会被拒绝，不用重试'; }
@@ -1159,7 +1157,7 @@ function fmtDate(sec){
     $m('mHourEq').nextElementSibling.innerHTML = '借用 ⇔ 无人排队 ∧ ' + nh + ' &lt; 0.6 · ' + C;
     $m('mHourN').textContent = (quiet ? '安静时段账号也跟着「作息」。' : '') + '理论上一天最多 ' +
       (quiet ? (24 - qn) + ' × ' + V.hourly + ' + ' + qn + ' × ' + V.quietCap + ' = ' : '24 × ' + V.hourly + ' = ') + day + ' 张' +
-      (V.daily && V.daily < day ? '，再被日上限 ' + V.daily + ' 截住' : '') + '。超过个人保底 B 以后，只有全站空闲（第二行）才能继续用到上限 A。橙色柱是现在的小时。';
+      (V.daily && V.daily < day ? '，再被日上限 ' + V.daily + ' 截住' : '') + '。橙色柱是现在的小时。';
     var now = $m('mHourNow');
     now.hidden = V.hour == null;
     if(V.hour != null) now.textContent = '现在近 60 分钟已出 ' + V.hour + ' / ' + capAt(bjHour()) + ' 张。';
@@ -1229,8 +1227,7 @@ function fmtDate(sec){
     box.appendChild(chip('恢复', fmt(V.rate) + '%/天'));
     box.appendChild(chip('V5 全站', V.global + '/天'));
     if(V.each != null) box.appendChild(chip('V5 每人', V.each + '/天'));
-    box.appendChild(chip('V4.5 上限', V.ceiling + '/天'));
-    box.appendChild(chip('保底', V.base + '/天'));
+    box.appendChild(chip('V4.5 每人', V.ceiling + '/天'));
     box.appendChild(chip('每小时上限', V.hourly + ' 张' + (V.qs !== V.qe ? '（北京时间 ' + V.qs + '–' + V.qe + ' 点 ' + V.quietCap + ' 张）' : '')));
     box.appendChild(chip('出图间隔', fmt(V.interval) + ' 秒'));
     $m('mLive').classList.toggle('on', isLive);
