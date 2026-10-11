@@ -1,26 +1,8 @@
-"""风险检查（后台只读诊断）：对截图指标逐项体检，能做的做实，做不了的留空并说明原因。
-
-两个用途：
-1. 出站指纹盘点 —— 我们发给 NovelAI 的流量现在长什么样（请求头、TLS 栈、出口链路），
-   站长知情即可，本模块不伪造任何一项；
-2. 白嫖 / 滥用识别 —— 谁在多人共用一把 Key、谁在把站当量产机：防分享风险分、网段共用、
-   用量集中度、上游限流 / 认证失败信号、当日 V5 消耗。
-
-━━ 出站伪装的现状（2026-10-10 站长批准，见 nai.py「anti-ban」）━━
-- 请求头：已模拟 Chrome 浏览器（UA、sec-ch-ua、Origin、Referer 等），每把 Token 固定一套 profile；
-  查额度、对账、查 Anlas 也用同一套。
-- HTTP/2：装了 h2 就启用；请求后 1~3 秒随机间隔；连续 3 次 403 冷却 5 分钟。
-- 代理：支持 UPSTREAM_PROXY，未配置时直连。
-- TLS(JA3/JA4) 指纹没有改，仍是 Python/OpenSSL 的原生指纹（页面如实标出这一不一致）。
-- 浏览器端指标（Canvas / WebGL 等）对纯服务端进程不适用。
-
-全部只读：不写数据库、不发上游请求（出口 IP 回显除外且默认关闭）、不发 Discord 消息。
-"""
+"""风险检查（后台只读诊断）：出站请求的样子（请求头、TLS、出口链路）和滥用线索（防分享风险分、
+网段共用、用量集中度、上游限流信号、当日 V5 消耗）。只读：不写库、不发上游请求、不发消息。"""
 from __future__ import annotations
 
 import os
-import ssl
-import sys
 import time
 from typing import Optional
 
@@ -32,7 +14,6 @@ STATUS_LABEL = {"ok": "正常", "warn": "注意", "bad": "风险", "na": "不适
 
 # 用量集中度：单把 Key 的成功出图占全站比例达到该值时提示（一把 Key 独吃全站产能，多半是共享/转卖）
 CONCENTRATION_WARN = 0.5
-IP_ECHO_TIMEOUT = 8.0
 
 
 def _item(id_: str, title: str, status: str, detail: str, evidence: Optional[list[str]] = None) -> dict:
@@ -79,26 +60,12 @@ def _outbound_headers_item(state) -> dict:
                     "连续 3 次 403 冷却 5 分钟")
     status = OK if client is not None and (h2_ok or not http2) else WARN
     return _item("outbound_headers", "出站请求头", status,
-                 "生图、查额度、对账、查 Anlas 都发同一套 Chrome 浏览器请求头（站长 10/10 批准）。", evidence)
-
-
-def _tls_stack_item() -> dict:
-    try:
-        import httpx
-        httpx_ver = httpx.__version__
-    except Exception:
-        httpx_ver = "未知"
-    evidence = [f"Python {sys.version.split()[0]} + httpx {httpx_ver}",
-                f"TLS 栈：{ssl.OPENSSL_VERSION}",
-                "TLS 握手特征随 Python/OpenSSL 版本与配置变化；升级依赖后指纹会变，属正常现象。"]
-    return _item("tls_stack", "TLS 栈自述", OK,
-                 "本机出站 TLS 使用的软件版本。只报告，不测量、不伪装。", evidence)
+                 "所有上游请求使用同一套 Chrome 请求头。", evidence)
 
 
 def _tls_fingerprint_item() -> dict:
     return _item("tls_fingerprint", "TLS 指纹（JA3/JA4）", WARN,
-                 "没有改：TLS 握手仍是 Python/OpenSSL 的原生指纹，和请求头里自称的 Chrome 不一致。"
-                 "实测要向第三方回显服务发请求，默认不做。是否改 TLS 指纹（如 curl_cffi）由站长决定。")
+                 "TLS 握手是 Python 原生指纹，与 Chrome 请求头不一致。")
 
 
 def _egress_ip_item() -> dict:
@@ -109,33 +76,8 @@ def _egress_ip_item() -> dict:
                 else "检测到代理环境变量（httpx 默认信任它们）："]
     evidence += active
     return _item("proxy_config", "代理 / 出口链路", OK,
-                 "网关走什么链路出站。生图支持 UPSTREAM_PROXY；未配置时直连本机 IP。",
+                 "出站链路。",
                  evidence)
-
-
-async def _egress_ip_echo_item() -> dict:
-    url = os.environ.get("RISK_CHECK_IP_ECHO_URL", "").strip()
-    if not url:
-        return _item("egress_ip", "出口 IP 实测", NA,
-                     "留空（默认关闭）：实测出口 IP 要向第三方回显服务发请求，会让对方记录到网关 IP。"
-                     "确有需要时在环境变量配置 RISK_CHECK_IP_ECHO_URL（返回纯文本 IP 的 URL），本页会显示结果。")
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=IP_ECHO_TIMEOUT) as client:
-            resp = await client.get(url)
-        status, body = str(resp.status_code), resp.text.strip()[:64]
-    except Exception as exc:
-        return _item("egress_ip", "出口 IP 实测", WARN, f"回显服务请求失败：{exc}")
-    ok = status == "200" and body
-    return _item("egress_ip", "出口 IP 实测", OK if ok else WARN,
-                 f"回显服务返回 HTTP {status}。",
-                 [f"出口 IP：{body}" if ok else f"响应：{body}"])
-
-
-def _browser_fingerprint_item() -> dict:
-    return _item("browser_fingerprint", "浏览器端指纹（Canvas / Audio / WebGL / 字体 / WebRTC）", NA,
-                 "留空：这些是浏览器运行时指标（截图里那类反指纹工具的对象）。本网关是纯服务端进程，"
-                 "没有浏览器环境，指标不适用；成员浏览器的指纹也不经过本站。")
 
 
 # ---------- 上游行为信号 ----------
@@ -156,8 +98,7 @@ async def _upstream_signals_item(state, now: float) -> dict:
     empty = not data.get("families")
     return _item("upstream_signals", "上游风控信号（429 / 401 / 成功率）",
                  NA if empty and status == OK else status,
-                 "最近 1 小时 / 24 小时的限流、认证失败、成功率与 7 天基线对比。"
-                 "这反映的是「上游怎么对我们」，行为治理（收紧间隔、降低人数）才是改善手段。",
+                 "近 1 小时 / 24 小时与 7 天基线对比。",
                  [f["text"] for f in flags])
 
 
@@ -178,7 +119,7 @@ async def _share_top_item(state, now: float) -> dict:
                 + (f"｜最近证据：{r['evidence'][0]['label']}" if r.get("evidence") else "")
                 for r in flagged[:5]]
     return _item("share_top", "防分享风险分（谁在多人共用）", status,
-                 "share_guard 的证据与风险分（网络 + 客户端双重印证才算强证据）。这才是「查白嫖」的主战场。",
+                 "按风险分排序的前 5 把 Key。",
                  evidence)
 
 
@@ -192,8 +133,7 @@ async def _net_overlap_item(state, now: float) -> dict:
         return _item("net_overlap", "同一网段多把 Key（24 小时）", NA, f"读取失败：{exc}")
     if not rows:
         return _item("net_overlap", "同一网段多把 Key（24 小时）", OK,
-                     "近 24 小时没有多个 Key 共用同一来源网段（同一家宽带 / 校园网出现 2~3 把属正常，"
-                     "数字大才有意义）。")
+                     "近 24 小时没有多把 Key 共用网段。")
     evidence = []
     for net_hash, count in rows:
         try:
@@ -206,7 +146,7 @@ async def _net_overlap_item(state, now: float) -> dict:
         evidence.append(f"{count} 把 Key 共用同一网段：{names}")
     notable = any(c >= 3 for _, c in rows) or len(rows) >= 3
     return _item("net_overlap", "同一网段多把 Key（24 小时）", WARN if notable else OK,
-                 "网段打码存储（IPv4 /24、IPv6 /48），不存完整 IP。仅作线索，处罚仍以 share_guard 强证据为准。",
+                 "同一宽带出现 2～3 把属正常，仅作线索。",
                  evidence)
 
 
@@ -226,8 +166,7 @@ async def _concentration_item(state, now: float) -> dict:
     top_share = rows[0][2] / total
     status = WARN if top_share >= CONCENTRATION_WARN else OK
     return _item("concentration", "用量集中度（24 小时）", status,
-                 f"成功出图按 Key 分布；单把 Key 占比 ≥ {round(CONCENTRATION_WARN * 100)}% 时提示"
-                 "（一把 Key 独吃全站产能，多半在共享或量产）。", evidence)
+                 f"单把 Key 占比 ≥ {round(CONCENTRATION_WARN * 100)}% 时提示。", evidence)
 
 
 async def _burn_today_item(state, now: float) -> dict:
@@ -262,7 +201,7 @@ async def _burn_today_item(state, now: float) -> dict:
         status = OK
         evidence.append(f"全站今日 V5 合计 {total_v5}（未设置全站日额度）")
     return _item("burn_today", "今日上游额度消耗（V5）", status,
-                 "上游免费 V5 额度恢复速率有限，冲得越快越容易撞上游限流；这里看今天冲了多少。", evidence)
+                 "今天各账号的出图和 V5 用量。", evidence)
 
 
 # ---------- 汇总 ----------
@@ -272,11 +211,8 @@ async def collect(state, now: Optional[float] = None) -> dict:
     now = time.time() if now is None else now
     items = [
         _outbound_headers_item(state),
-        _tls_stack_item(),
         _tls_fingerprint_item(),
         _egress_ip_item(),
-        await _egress_ip_echo_item(),
-        _browser_fingerprint_item(),
         await _upstream_signals_item(state, now),
         await _share_top_item(state, now),
         await _net_overlap_item(state, now),

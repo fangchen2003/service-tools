@@ -10,7 +10,6 @@ from app.database import Database
 from app.risk_check import collect, DAY
 
 NOW = 1_800_000_000.0
-NA_IDS = {"browser_fingerprint", "egress_ip"}
 
 
 @pytest_asyncio.fixture
@@ -36,14 +35,14 @@ async def _key(db, name: str, key_id: int) -> None:
 
 
 @pytest.mark.asyncio
-async def test_na_items_are_left_blank_with_reason(env, monkeypatch):
+async def test_items_are_concise_and_summary_adds_up(env):
+    # 10-11 站长：检查项只留有用的，说明一句话；永远「不适用」的纯说明项删掉
     db, state = env
-    monkeypatch.delenv("RISK_CHECK_IP_ECHO_URL", raising=False)
     data = await collect(state, NOW)
+    ids = {it["id"] for it in data["items"]}
+    assert not ids & {"browser_fingerprint", "egress_ip", "tls_stack"}
+    assert all(len(it["detail"]) <= 40 for it in data["items"]), [it["detail"] for it in data["items"]]
     by_id = {it["id"]: it for it in data["items"]}
-    for id_ in NA_IDS:
-        assert by_id[id_]["status"] == "na", id_
-        assert by_id[id_]["detail"], f"{id_} 必须解释为什么留空"
     assert by_id["tls_fingerprint"]["status"] == "warn" and "Chrome" in by_id["tls_fingerprint"]["detail"]
     assert sum(data["summary"][k] for k in ("ok", "warn", "bad", "na")) == len(data["items"])
 
