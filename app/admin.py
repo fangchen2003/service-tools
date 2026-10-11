@@ -704,7 +704,23 @@ async def status_codes(request: Request, hours: int = 24):
     """成员接口 HTTP 状态码分布（最近 1 / 24 / 168 小时）。"""
     require_admin(request)
     from . import status_stats
-    return await status_stats.distribution(request.app.state.gate.db, max(1, min(int(hours), 24 * 30)))
+    hours = max(1, min(int(hours), 24 * 30))
+    db = request.app.state.gate.db
+    out = await status_stats.distribution(db, hours)
+    # NovelAI 实际返回给网关的状态码（usage_log.up_status）：和上面「网关返回给成员的」分开看，
+    # 才知道 429 是网关自己限流还是上游真的限流。0 = 网关自己拦下 / 没发到上游
+    rows = await db._db.execute_fetchall(
+        "SELECT up_status, COUNT(*) FROM usage_log WHERE ts>=? GROUP BY up_status ORDER BY 2 DESC",
+        (time.time() - hours * 3600,))
+    total = sum(int(n) for _, n in rows)
+    meaning = {0: "没发到 NovelAI（网关自己拦下、排队超时或客户端断开）", 200: "NovelAI 正常返回",
+               400: "NovelAI 说参数不对", 401: "NovelAI 说凭证无效", 402: "NovelAI 说需要 Anlas / 额度不足",
+               403: "NovelAI 拒绝（账号受限 / 风控）", 429: "NovelAI 限流", 500: "NovelAI 内部错误",
+               502: "NovelAI 网关错误", 503: "NovelAI 暂时不可用", 504: "NovelAI 超时"}
+    out["upstream"] = [{"code": int(c or 0), "n": int(n), "pct": round(int(n) * 100 / total, 1) if total else 0,
+                        "meaning": meaning.get(int(c or 0), "其他")} for c, n in rows]
+    out["upstream_total"] = total
+    return out
 
 
 @router.post("/gift")

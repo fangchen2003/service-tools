@@ -250,3 +250,15 @@ async def test_member_tags_manual_and_auto(env):
     await client.put(f"/admin/api/keys/{key['id']}/tags", json={'tag': '站长熟人'})
     await state.db.delete_key(key['id'])
     assert not await state.db._db.execute_fetchall("SELECT 1 FROM key_tags WHERE key_id=?", (key['id'],))
+
+
+@pytest.mark.asyncio
+async def test_status_codes_also_show_upstream(env):
+    # 后台状态码分布要能分开看「网关返回给成员的」和「NovelAI 返回给网关的」（10-11 站长：分不清 429 是谁返回的）
+    state, client, key = env
+    await login(client)
+    await state.db.add_log(key['id'], key['name'], 'image', 'm', 'rejected', detail='429 本小时出图量已达上限')
+    await state.db.add_log(key['id'], key['name'], 'image', 'm', 'ok', up_status=200)
+    d = (await client.get('/admin/api/status-codes?hours=24')).json()
+    up = {c['code']: c for c in d['upstream']}
+    assert up[0]['n'] == 1 and '没发到' in up[0]['meaning'] and up[200]['n'] == 1 and d['upstream_total'] == 2
