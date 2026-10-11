@@ -38,12 +38,16 @@ CREATE TABLE IF NOT EXISTS incident_updates (
 CREATE INDEX IF NOT EXISTS idx_incident_updates ON incident_updates(incident_id, at);
 """
 
-COMPONENTS = [
+COMPONENTS = [               # 事件可以标这些组件（老事件里有 web / bot）
+    ("upstream", "NovelAI 上游（生图）"),
     ("api", "出图接口（gate.davidzhao.top）"),
     ("web", "官网与后台"),
     ("bot", "Discord 机器人（奶妹）"),
-    ("upstream", "上游 NovelAI"),
 ]
+SHOWN = ("upstream", "api")  # 10-11 站长：状态页只关心生图，上游放最前；只影响官网 / Discord 的事件不上状态页
+OFFICIAL_KEY = "novelai_official_status"        # 维护循环每 5 分钟从 NovelAI 官方状态页（status.io）取一次
+OFFICIAL_API = "https://api.status.io/1.0/status/654839612cedb404d4d5f578"
+OFFICIAL_PAGE = "https://status.novelai.net"
 IMPACT_RANK = {"none": 0, "minor": 1, "major": 2, "critical": 3}
 TRACKING_START = "2026-10-09"          # usage_log 第一条：10-09 18:18
 DAYS = 90
@@ -110,15 +114,61 @@ async def _api_error_days(db, start: float) -> dict[str, float]:
     return {d: (bad / total if total else 0.0) for d, (total, bad) in out.items()}
 
 
+async def _upstream_days(db, start: float) -> dict[str, float]:
+    """NovelAI 每天真实返回的失败占比：只看真的发到上游的请求（up_status>0），5xx / 429 / 403 算失败。
+    数据来自 usage_log（保留 7 天以上），更早的日子只看事件。"""
+    out: dict[str, list[int]] = {}
+    for ts, code in await db._db.execute_fetchall(
+            "SELECT ts, up_status FROM usage_log WHERE ts>=? AND up_status>0", (start,)):
+        tot = out.setdefault(datetime.fromtimestamp(ts).strftime("%Y-%m-%d"), [0, 0])
+        tot[0] += 1
+        if code >= 500 or code in (429, 403):
+            tot[1] += 1
+    return {d: bad / total for d, (total, bad) in out.items() if total}
+
+
+async def _upstream_last_hour(db, now: float) -> float:
+    r = await db._db.execute_fetchall(
+        "SELECT COUNT(*), SUM(up_status>=500 OR up_status IN (429,403)) FROM usage_log WHERE ts>=? AND up_status>0",
+        (now - 3600,))
+    total, bad = int(r[0][0] or 0), int(r[0][1] or 0)
+    return bad / total if total >= 10 else 0.0       # 不到 10 次不下结论
+
+
+def _level(ratio: float) -> int:
+    return 2 if ratio > 0.10 else 1 if ratio > 0.01 else 0
+
+
+async def fetch_official(db) -> None:
+    """NovelAI 官方状态（status.io 公开接口，不是出图接口，不涉及账号）。失败就保留上次的结果。"""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=8) as c:
+            d = (await c.get(OFFICIAL_API)).json()["result"]
+        img = next((x for x in d.get("status", []) if x.get("name") == "Image Generation"), {})
+        val = {"overall": d["status_overall"].get("status", ""), "image": img.get("status", ""),
+               "image_code": img.get("status_code", 0), "updated": d["status_overall"].get("updated", ""),
+               "fetched_at": time.time()}
+        await db.set_setting(OFFICIAL_KEY, json.dumps(val, ensure_ascii=False))
+    except Exception:
+        pass
+
+
 async def snapshot(db, now: Optional[float] = None) -> dict[str, Any]:
     now = time.time() if now is None else now
     today = datetime.fromtimestamp(now).date()
     first = today - timedelta(days=DAYS - 1)
     start = datetime.combine(first, datetime.min.time()).timestamp()
-    incidents = await list_incidents(db, since=start)
+    incidents = [i for i in await list_incidents(db, since=start) if any(c in SHOWN for c in i["components"])]
     errs = await _api_error_days(db, start)
+    up_days = await _upstream_days(db, start)
+    up_now = await _upstream_last_hour(db, now)
+    try:
+        official = json.loads(await db.get_setting(OFFICIAL_KEY, "") or "{}")
+    except (TypeError, ValueError):
+        official = {}
     comps = []
-    for key, name in COMPONENTS:
+    for key, name in [c for c in COMPONENTS if c[0] in SHOWN]:
         days, down_minutes, tracked_minutes = [], 0.0, 0.0
         for i in range(DAYS):
             d = first + timedelta(days=i)
@@ -141,13 +191,20 @@ async def snapshot(db, now: Optional[float] = None) -> dict[str, Any]:
                         down_minutes += (min(e, d1) - max(s, d0)) / 60
             if key == "api" and errs.get(ds, 0) > 0.01:
                 level = max(level, 1)
+            if key == "upstream" and ds in up_days:
+                level = max(level, _level(up_days[ds]))
             tracked_minutes += max(0.0, d1 - d0) / 60
             days.append({"day": ds, "level": level, "titles": titles})
         live = [inc for inc in incidents if inc["resolved_at"] is None and key in inc["components"]]
         now_level = max([IMPACT_RANK.get(i["impact"], 1) for i in live], default=0)
+        if key == "upstream":
+            now_level = max(now_level, _level(up_now))
+            if official.get("image_code", 100) >= 300:          # 官方自己标了故障
+                now_level = max(now_level, 1)
         uptime = 100.0 * (1 - down_minutes / tracked_minutes) if tracked_minutes else None
         comps.append({"key": key, "name": name, "days": days, "uptime": uptime,
-                      "status": IMPACT_COMPONENT[now_level], "level": now_level})
+                      "status": IMPACT_COMPONENT[now_level], "level": now_level,
+                      "official": official if key == "upstream" else None})
     return {"now": now, "components": comps, "incidents": incidents,
             "active": [i for i in incidents if i["resolved_at"] is None]}
 
@@ -247,6 +304,15 @@ def _bars_svg(days: list[dict]) -> str:
             f'viewBox="0 0 {len(days) * 5 - 2} 34">{"".join(rects)}</svg>')
 
 
+def _official_html(o: Optional[dict]) -> str:
+    """上游组件下面一行：判断依据 + NovelAI 官方状态（官方页人工维护，常常滞后，只作参考）。"""
+    if o is None:
+        return ""
+    off = (f'NovelAI 官方：图片生成 {html.escape(o.get("image") or "未知")}' if o.get("image") else "NovelAI 官方状态暂未取到")
+    return (f'<small style="display:block;margin-top:6px">按本站真实发到 NovelAI 的请求统计（5xx / 429 / 403 算失败）· {off} · '
+            f'<a href="{OFFICIAL_PAGE}" target="_blank" rel="noopener" style="text-decoration:underline">官方状态页</a></small>')
+
+
 def render(snap: dict[str, Any], subscribe_url: str = "/") -> str:
     status_cls = "status-none" if not snap["active"] else "status-" + max(
         (i["impact"] for i in snap["active"]), key=lambda x: IMPACT_RANK.get(x, 1))
@@ -279,7 +345,8 @@ def render(snap: dict[str, Any], subscribe_url: str = "/") -> str:
                      f'<div class="shared-partial uptime-90-days-wrapper">{_bars_svg(comp["days"])}'
                      f'<div class="legend"><div class="legend-item light legend-item-date-range">{DAYS} 天前</div>'
                      f'<div class="spacer"></div><div class="legend-item legend-item-uptime-value">{up}</div>'
-                     f'<div class="spacer"></div><div class="legend-item light legend-item-date-range">今天</div></div></div></div>')
+                     f'<div class="spacer"></div><div class="legend-item light legend-item-date-range">今天</div></div></div>'
+                     + _official_html(comp.get("official")) + '</div>')
     parts.append('</div></div><div class="incidents-list format-expanded">'
                  '<h2 class="font-largest no-link" id="past-incidents">过去的事件</h2>')
     today = datetime.fromtimestamp(snap["now"]).date()

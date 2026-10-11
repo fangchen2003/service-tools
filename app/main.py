@@ -184,7 +184,7 @@ async def lifespan(app: FastAPI):
         await STATE.db.close()
 
 
-__version__ = "2.19.0"
+__version__ = "2.19.1"
 
 app = FastAPI(title="猫头鹰公益站", version=__version__, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
@@ -569,7 +569,11 @@ async def maintenance_loop() -> None:
 
     while True:
         # 每一步单独兜底：一步失败不影响后面的步骤，并且每种失败都进 Bug 追踪
-        for name, job in (("purge", purge), ("registrar", registrar_jobs), ("perf", check_upstream_perf), ("disk", disk)):
+        async def official():
+            from . import status_page
+            await status_page.fetch_official(STATE.db)
+        for name, job in (("purge", purge), ("registrar", registrar_jobs), ("perf", check_upstream_perf), ("disk", disk),
+                          ("official", official)):
             try:
                 await job()
             except Exception as exc:
