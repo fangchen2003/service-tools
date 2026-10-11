@@ -383,6 +383,8 @@ class Database:
             "ALTER TABLE api_keys ADD COLUMN v5_pinned INTEGER",
             # 按算力折算的张数（节约模式 14 步的图算 0.5 张）；账号每日上限按它判断。老数据回填见下
             "ALTER TABLE upstream_token_counters ADD COLUMN units REAL",
+            # 非防分享的暂停（如自动驾驶限流）的原因：存库，重启后成员仍看到正确的原因；空 = 防分享暂停
+            "ALTER TABLE share_state ADD COLUMN pause_reason TEXT NOT NULL DEFAULT ''",
         ):
             try:
                 await self._db.execute(ddl)

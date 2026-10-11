@@ -924,8 +924,8 @@ async def share_guard_put(request: Request):
     body = await read_json_body(request)
     if body.get("mode") not in ("enforce", "observe", "off"):
         raise HTTPException(422, "mode 只能是 enforce / observe / off")
-    from .share_guard import MODE_SETTING
-    await request.app.state.gate.db.set_setting(MODE_SETTING, body["mode"])
+    from . import site_flags
+    await site_flags.put(request.app.state.gate.db, site_flags.SHARE_MODE, body["mode"])
     return {"ok": True, "mode": body["mode"]}
 
 

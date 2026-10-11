@@ -248,6 +248,17 @@ async def test_pause_key_sets_reason_and_is_idempotent(guard):
     assert guard.paused_until(1)
     assert guard.pause_reasons[1] == "你的 Key 短时间内被大量拒绝"
     assert not await guard.pause_key(1, 3600, "再次")      # 已在暂停中，不重复
+    await guard.db._db.commit()
+    # 重启后原因还在（以前只存内存，重启后成员会看到「多人共用」的错误说法）
+    g2 = ShareGuard(guard.db)
+    await g2.load()
+    assert g2.paused_until(1) and g2.pause_reasons[1] == "你的 Key 短时间内被大量拒绝"
+    # 站长点「误判」只清防分享的分数，不解除自动驾驶的限流
+    await g2.clear(1)
+    assert g2.paused_until(1) and g2.pause_reasons[1]
+    g3 = ShareGuard(guard.db)
+    await g3.load()
+    assert g3.paused_until(1)
 
 
 @pytest.mark.asyncio
