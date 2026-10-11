@@ -718,6 +718,8 @@ function applyBlockedPill(){
   p.className = cls; p.textContent = ''; p.appendChild(el('span', 'dot')); p.appendChild(el('span', '', txt));
   p.title = siteBlocked ? siteBlocked.text : '';
 }
+document.addEventListener('owl-live', function(e){ siteBlocked = ((e.detail || {}).guard || {}).blocked || null; applyBlockedPill(); });
+window.OWL_BLOCK_TITLE = BLOCK_TITLE;     /* 下面的实时面板在另一个作用域里，共用同一套标题 */
 function renderStatus(d){
   setSite(d.site);
   var up = d.upstream || {}, reg = d.registration || {};
@@ -981,14 +983,13 @@ function fmtDate(sec){
     /* 运行情况：一句结论（按严重程度取第一条）+ 4 个关键数字 */
     var m = d.members || {}, hour = g.hour || 0, hcap = g.hour_cap || 0, qcap = r.queue_cap || 0, tone, txt, sub;
     if(g.cooldown){ tone = 'bad'; txt = '上游限流，全站暂停出图'; sub = '约 ' + g.cooldown + ' 秒后自动恢复，期间发的图会被拒绝，不用重试'; }
-    else if(g.blocked && g.blocked.code !== 'hourly_cap' && g.blocked.code !== 'quiet_cap'){ tone = g.blocked.code === 'breaker' ? 'bad' : 'warn'; txt = BLOCK_TITLE[g.blocked.code] || '暂时不能出图'; sub = g.blocked.text; }
+    else if(g.blocked && g.blocked.code !== 'hourly_cap' && g.blocked.code !== 'quiet_cap'){ tone = g.blocked.code === 'breaker' ? 'bad' : 'warn'; txt = (window.OWL_BLOCK_TITLE || {})[g.blocked.code] || '暂时不能出图'; sub = g.blocked.text; }
     else if(hcap && hour >= hcap){ tone = 'warn'; txt = '本小时出图已满'; sub = '为了保护上游账号，每小时最多 ' + hcap + ' 张；最早那张满 60 分钟后就有空位，通常几分钟'; }
     else if(hcap && hour >= hcap * 0.95){ tone = 'warn'; txt = '本小时出图快满了'; sub = '每小时最多 ' + hcap + ' 张，已出 ' + hour + ' 张；满了要等几分钟才有空位'; }
     else if(qcap && w >= qcap){ tone = 'warn'; txt = '排队已满，请稍后再发'; sub = '队伍最多 ' + qcap + ' 张，新请求会被拒绝，过一会儿再试'; }
     else if(w + run > 0){ tone = 'busy'; txt = '正常出图 · 有人在排队'; sub = '现在发一张约 ' + Math.round((w + run) * iv) + ' 秒后开始画'; }
     else { tone = 'ok'; txt = '运行正常 · 发了就画'; sub = '没人在排队'; }
     if(tone !== 'bad' && tone !== 'warn' && hcap && hour >= hcap * 0.85) sub += '；本小时已出 ' + hour + ' / ' + hcap + ' 张，快到上限';
-    siteBlocked = g.blocked || null; applyBlockedPill();
     var vd = $id('verdict'); vd.dataset.tone = tone;
     $id('vText').textContent = txt; $id('vSub').textContent = sub;
     $id('kMem').textContent = m.active != null ? m.active : '—';
