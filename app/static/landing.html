@@ -162,9 +162,9 @@ section{margin-top:40px}
 #live .pills{justify-content:flex-end}
 .live-head .t{font-weight:600;font-size:17px;display:flex;align-items:center;gap:8px}
 .dash{margin-top:14px;display:flex;flex-direction:column;gap:12px}
-.dstrip{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12.5px;color:var(--muted)}
-.dstrip li{display:flex;align-items:center;gap:6px}
-.dstrip li span{padding:4px 10px;border-radius:8px;background:var(--surface-2)}
+.dstrip{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-size:12px;color:var(--muted)}
+.dstrip li{display:flex;align-items:center;gap:4px}
+.dstrip li span{padding:2px 7px;border-radius:6px;background:var(--surface-2)}
 .dstrip li+li::before{content:"›";color:var(--muted)}
 .dstrip li.on span{background:var(--warn-soft);color:var(--warn);font-weight:600}
 .dgrid{display:grid;gap:12px;grid-template-columns:minmax(0,1fr)}
@@ -355,12 +355,9 @@ body.authed #board{margin-top:22px}
   <section id="board" aria-labelledby="boardTitle">
     <div class="card">
       <div class="dash" id="dash" style="margin-top:0">
-        <ol class="dstrip" aria-label="出图流程">
-          <li data-step="client"><span>客户端</span></li><li data-step="auth"><span>验 Key</span></li><li data-step="quota"><span>查额度</span></li><li data-step="queue"><span>排队</span></li><li data-step="pace"><span>控速</span></li><li data-step="nai"><span>NovelAI</span></li>
-        </ol>
         <div class="dgrid">
           <div class="dtile dme verdict" id="dMe" data-tone="idle"><h2 class="v-title" id="boardTitle"><i aria-hidden="true"></i><span id="vText">正在读取运行情况…</span></h2><div class="dbig" id="dMeV">—</div><div class="dsub" id="dMeS" aria-live="polite"></div></div>
-          <div class="dtile"><div class="dk">排队</div><div class="dnum"><b id="dQ">0</b><span id="dQs"></span></div><div class="dseg" id="dQbar"></div><div class="dnote" id="dQn"></div></div>
+          <div class="dtile"><ol class="dstrip" aria-label="出图流程"><li data-step="client"><span>客户端</span></li><li data-step="auth"><span>验 Key</span></li><li data-step="quota"><span>查额度</span></li><li data-step="queue"><span>排队</span></li><li data-step="pace"><span>控速</span></li><li data-step="nai"><span>NovelAI</span></li></ol><div class="dnum"><b id="dQ">0</b><span id="dQs"></span></div><div class="dseg" id="dQbar"></div><div class="dnote" id="dQn"></div></div>
           <div class="dtile"><div class="dk">近 60 分钟出图</div><div class="dnum"><b id="dP">0</b><span id="dPs"></span></div><div class="dbar" role="progressbar" aria-label="近 60 分钟出图占上限的比例" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="dPbar"></i></div><div class="dnote" id="dPn"></div></div>
           <div class="dtile"><div class="dk">全站今日额度</div>
             <div class="drow"><span>全部出图</span><span><b id="d45">0</b> / <span id="d45c">0</span></span></div><div class="dbar" role="progressbar" aria-label="全部出图占今日额度的比例" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="d45bar"></i></div>
