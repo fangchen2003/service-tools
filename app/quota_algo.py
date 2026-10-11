@@ -496,7 +496,7 @@ async def run(state, now: Optional[float] = None) -> dict[str, Any]:
         await guard.save({"base_daily_images": b})
     await db.set_settings_bulk(settings)
     # 首页提醒（站长要求：算法调整只在网站首页提示，不发 Discord）
-    note = f"今日额度（算法自动分配，所有人一样）：V4.5 每人 {a} 张 · V5 每人 {v5['each']} 张"
+    note = f"今日额度：V4.5 每人 {a} 张 · V5 每人 {v5['each']} 张"
     if review and review["from"] != review["to"]:
         note = f"{today[5:].replace('-', '月')}日 算法调整：" + "；".join(review["reasons"]) + "。" + note
     await db.set_setting(NOTICE_KEY, note)

@@ -54,7 +54,6 @@ COMPONENTS = [               # 事件可以标这些组件（老事件里有 web
 SHOWN = ("upstream", "api")  # 10-11 站长：状态页只关心生图，上游放最前；只影响官网 / Discord 的事件不上状态页
 OFFICIAL_KEY = "novelai_official_status"        # 维护循环每 5 分钟从 NovelAI 官方状态页（status.io）取一次
 OFFICIAL_API = "https://api.status.io/1.0/status/654839612cedb404d4d5f578"
-OFFICIAL_PAGE = "https://status.novelai.net"
 IMPACT_RANK = {"none": 0, "minor": 1, "major": 2, "critical": 3}
 TRACKING_START = "2026-10-09"          # usage_log 第一条：10-09 18:18
 DAYS = 90
@@ -210,8 +209,7 @@ async def snapshot(db, now: Optional[float] = None) -> dict[str, Any]:
                 now_level = max(now_level, 1)
         uptime = 100.0 * (1 - down_minutes / tracked_minutes) if tracked_minutes else None
         comps.append({"key": key, "name": name, "days": days, "uptime": uptime,
-                      "status": IMPACT_COMPONENT[now_level], "level": now_level,
-                      "official": official if key == "upstream" else None})
+                      "status": IMPACT_COMPONENT[now_level], "level": now_level})
     return {"now": now, "components": comps, "incidents": incidents,
             "active": [i for i in incidents if i["resolved_at"] is None]}
 
@@ -318,15 +316,6 @@ def _bars_svg(days: list[dict]) -> str:
             f'viewBox="0 0 {len(days) * 5 - 2} 34">{"".join(rects)}</svg>')
 
 
-def _official_html(o: Optional[dict]) -> str:
-    """上游组件下面一行：判断依据 + NovelAI 官方状态（官方页人工维护，常常滞后，只作参考）。"""
-    if o is None:
-        return ""
-    off = (f'NovelAI 官方：图片生成 {html.escape(o.get("image") or "未知")}' if o.get("image") else "NovelAI 官方状态暂未取到")
-    return (f'<small style="display:block;margin-top:6px">按本站真实发到 NovelAI 的请求统计（5xx / 429 / 403 算失败）· {off} · '
-            f'<a href="{OFFICIAL_PAGE}" target="_blank" rel="noopener" style="text-decoration:underline">官方状态页</a></small>')
-
-
 def render(snap: dict[str, Any], subscribe_url: str = "/") -> str:
     status_cls = "status-none" if not snap["active"] else "status-" + max(
         (i["impact"] for i in snap["active"]), key=lambda x: IMPACT_RANK.get(x, 1))
@@ -359,8 +348,7 @@ def render(snap: dict[str, Any], subscribe_url: str = "/") -> str:
                      f'<div class="shared-partial uptime-90-days-wrapper">{_bars_svg(comp["days"])}'
                      f'<div class="legend"><div class="legend-item light legend-item-date-range">{DAYS} 天前</div>'
                      f'<div class="spacer"></div><div class="legend-item legend-item-uptime-value">{up}</div>'
-                     f'<div class="spacer"></div><div class="legend-item light legend-item-date-range">今天</div></div></div>'
-                     + _official_html(comp.get("official")) + '</div>')
+                     f'<div class="spacer"></div><div class="legend-item light legend-item-date-range">今天</div></div></div></div>')
     parts.append('</div></div><div class="incidents-list format-expanded">'
                  '<h2 class="font-largest no-link" id="past-incidents">过去的事件</h2>')
     today = datetime.fromtimestamp(snap["now"]).date()
