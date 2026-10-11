@@ -794,6 +794,7 @@ td.note{min-width:220px}
           <div class="card panel" id="scPanel">
             <div class="panel-head"><div><h2>状态码分布</h2><div class="desc" id="scSum">成员接口（出图、查额度等）返回的 HTTP 状态码</div></div>
               <div class="seg-ic" role="group" aria-label="时间范围">
+                <button class="btn mini on" data-scv="gw" title="网关返回给成员客户端的">网关→成员</button><button class="btn mini" data-scv="up" title="NovelAI 实际返回给网关的">NovelAI→网关</button>
                 <button class="btn mini" data-sc="1">1 小时</button><button class="btn mini on" data-sc="24">24 小时</button><button class="btn mini" data-sc="168">7 天</button></div></div>
             <div class="sc-list" id="scList"><div class="skel" style="height:160px"></div></div>
           </div>
@@ -1770,20 +1771,26 @@ async function renderOverviewTop(d){
 }
 
 /* 状态码分布（/admin/api/status-codes） */
-let scHours = 24;
+let scHours = 24, scView = 'gw';
 async function loadStatusCodes(){
   try{
     const d = await api('/admin/api/status-codes?hours=' + scHours);
-    const ok = (d.codes.find(c => c.code === 200) || {}).pct || 0;
-    $('#scSum').textContent = d.total ? `成员接口共 ${fmtNum(d.total)} 次请求，成功 ${ok}%` : '这段时间还没有请求';
-    $('#scList').innerHTML = d.codes.length ? d.codes.map(c => { const k = 'c' + String(c.code)[0];
-      return `<div class="sc-row"><span class="sc-pill ${k}">${c.code}</span><div class="sc-main"><span class="sc-n">${fmtNum(c.n)} 次</span><span class="sc-m">${esc(c.meaning)}</span></div>
+    const up = scView === 'up', codes = up ? (d.upstream || []) : d.codes, total = up ? d.upstream_total : d.total;
+    const ok = (codes.find(c => c.code === 200) || {}).pct || 0;
+    const sent = up ? codes.filter(c => c.code).reduce((a, c) => a + c.n, 0) : 0;
+    $('#scSum').textContent = !total ? '这段时间还没有请求'
+      : up ? `出图 / 工具请求共 ${fmtNum(total)} 次，其中 ${fmtNum(sent)} 次发到了 NovelAI（0 = 网关自己拦下，没发出去）`
+           : `成员接口共 ${fmtNum(total)} 次请求，成功 ${ok}%（这里的 429 / 402 等是网关返回的，切到「NovelAI→网关」看上游）`;
+    document.querySelectorAll('[data-scv]').forEach(b => b.classList.toggle('on', b.dataset.scv === scView));
+    $('#scList').innerHTML = codes.length ? codes.map(c => { const k = 'c' + (c.code ? String(c.code)[0] : '4');
+      return `<div class="sc-row"><span class="sc-pill ${k}">${c.code || '未发出'}</span><div class="sc-main"><span class="sc-n">${fmtNum(c.n)} 次</span><span class="sc-m">${esc(c.meaning)}</span></div>
         <span class="sc-pct">${c.pct}%</span><div class="sc-bar"><i class="${k}" style="width:${c.pct}%"></i></div></div>`; }).join('')
       : '<div class="muted sm">还没有数据</div>';
     document.querySelectorAll('[data-sc]').forEach(b => b.classList.toggle('on', +b.dataset.sc === scHours));
   }catch(e){ $('#scList').innerHTML = '<div class="muted sm">读取失败</div>'; }
 }
 document.addEventListener('click', e => { const b = e.target.closest('[data-sc]'); if(b){ scHours = +b.dataset.sc; loadStatusCodes(); } });
+document.addEventListener('click', e => { const b = e.target.closest('[data-scv]'); if(b){ scView = b.dataset.scv; loadStatusCodes(); } });
 
 async function loadStatus(){
   const box = $('#statusPanel');
@@ -2786,7 +2793,7 @@ async function loadLogs(){
         <td data-label="Key"><div class="stack"><span>${esc(l.key_name)}</span>${l.client?`<span class="muted" style="font-size:11.5px" title="${esc(l.client)}">${esc(formatClient(l.client))}</span>`:''}</div></td>
         <td class="nw" data-label="类型">${esc((FEAT[l.kind]||[l.kind])[0])}</td>
         <td class="nw" data-label="模型" title="${esc(l.model)}">${esc(shortModel(l.model))}</td>
-        <td class="st" data-label="状态">${l.status==='ok'?'<span class="tag on">成功</span>':l.status==='rejected'?'<span class="tag warn">拒绝</span>':'<span class="tag off">错误</span>'}</td>
+        <td class="st" data-label="状态">${l.status==='ok'?'<span class="tag on">成功</span>':l.status==='rejected'?'<span class="tag warn">拒绝</span>':'<span class="tag off">错误</span>'}${l.up_status ? `<div class="muted" style="font-size:11px" title="NovelAI 返回给网关的状态码">上游 ${esc(l.up_status)}</div>` : (l.status==='ok' ? '' : '<div class="muted" style="font-size:11px" title="网关自己拦下，没发到 NovelAI">网关拦下</div>')}</td>
         <td class="num tm" data-label="耗时">${timing}</td>
         <td class="num cost" data-label="消耗">${cost?`<span>${cost}</span>`:''}</td>
         <td class="muted note" data-label="备注">${esc(l.detail)}${l.rid?`<div class="mono" style="font-size:11px" title="错误编号（响应头 X-Request-Id）">#${esc(l.rid)}</div>`:''}</td>
