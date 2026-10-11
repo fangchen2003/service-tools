@@ -27,6 +27,8 @@ MEMBERSHIP_ROLE = "1335363403870502912"
 SITE_URL = "https://novelai.fangchen2003.asia/"
 
 
+KEY_SESSION_PREFIX = "key:"     # 网页会话里代替 discord_id：后台手动发、没走 /register 的 Key（Discord ID 都是纯数字，不会冲突）
+
 class RegistrationError(Exception):
     pass
 
@@ -365,6 +367,9 @@ class RegistrationService:
         return len(rows)
 
     async def registration_profile(self, discord_id: str) -> Optional[dict]:
+        if str(discord_id).startswith(KEY_SESSION_PREFIX):          # 没绑定 Discord 的 Key 登录（站长手动发的 Key）
+            key = await self.key_row_for(discord_id)
+            return {"id": str(discord_id), "display_name": key["name"] if key is not None else ""}
         rows = await self.db._db.execute_fetchall(
             "SELECT username, display_name, avatar FROM discord_registrations WHERE discord_id=?", (discord_id,))
         if not rows:
@@ -373,6 +378,11 @@ class RegistrationService:
         return {"id": str(discord_id), "username": u, "display_name": d, "avatar": a}
 
     async def key_row_for(self, discord_id: str):
+        if str(discord_id).startswith(KEY_SESSION_PREFIX):
+            try:
+                return await self.db.get_key(int(str(discord_id)[len(KEY_SESSION_PREFIX):]))
+            except ValueError:
+                return None
         rows = await self.db._db.execute_fetchall(
             "SELECT key_id FROM discord_registrations WHERE discord_id=?", (discord_id,))
         return await self.db.get_key(rows[0][0]) if rows else None

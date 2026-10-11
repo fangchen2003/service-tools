@@ -13,7 +13,7 @@ from . import site_flags
 from .action_log import log_action
 from .audit import audit_disclosure, audit_image_days
 from .policy import gen_key
-from .registration import RegistrationError
+from .registration import KEY_SESSION_PREFIX, RegistrationError
 
 router = APIRouter(prefix="/self-register")
 
@@ -327,7 +327,7 @@ def _parse_member(request: Request) -> Optional[tuple[str, str]]:
     try:
         if not _hmac.compare_digest(sig, good):
             return None
-        discord_id, exp, tag = payload.split(":")          # 旧格式（不带 Key 指纹）一律作废，重新登录
+        discord_id, exp, tag = payload.rsplit(":", 2)      # key:<id> 本身带冒号，从右边拆；旧格式（不带 Key 指纹）一律作废，重新登录
         return (discord_id, tag) if int(exp) > _time.time() else None
     except (ValueError, TypeError):
         return None
@@ -420,12 +420,14 @@ async def login_with_key(request: Request, body: KeyLogin):
     row = await gate.db.get_key_by_token(token) if token.startswith("nai-") and len(token) <= 200 else None
     reg = await gate.db._db.execute_fetchall(
         "SELECT discord_id FROM discord_registrations WHERE key_id=?", (row["id"],)) if row is not None else []
-    if not reg:
+    # 没走 /register 的 Key（站长后台手动发的、测试 Key）也能登录：会话用 "key:<id>" 代替 discord_id。站长 Key 不行。
+    unbound = row is not None and not reg and row["enabled"] and not row["is_admin"]
+    if not reg and not unbound:
         fails.append(now)
         _KEY_LOGIN_FAILS[ip] = fails
-        raise HTTPException(401, "Key 不对，或这个 Key 不是通过 /register 领取的")
+        raise HTTPException(401, "Key 不对，或这个 Key 已停用")
     _KEY_LOGIN_FAILS.pop(ip, None)
-    discord_id = str(reg[0][0])
+    discord_id = f"{KEY_SESSION_PREFIX}{row['id']}" if unbound else str(reg[0][0])
     resp = JSONResponse({"ok": True})
     exp = int(now) + SESSION_DAYS * 86400
     _set_cookie(resp, MEMBER_COOKIE, _sign_member(request, discord_id, exp, _key_tag(row)), SESSION_DAYS * 86400)
