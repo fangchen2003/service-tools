@@ -310,7 +310,7 @@ class OpenRegistrationTests(RegistrationTests):
             self.assertIn("discord.com", opened.headers["location"])
 
     async def test_key_login_issues_member_session_only_for_registered_keys(self):
-        # 网页 OAuth 暂停期间：用 /register 领到的 Key 登录首页；乱填 / 后台手建的 Key 都不行，错多了限流
+        # 网页 OAuth 暂停期间：用 /register 领到的 Key 登录首页；乱填的不行，后台手建的用 key:<id> 会话，错多了限流
         from types import SimpleNamespace
         from app.registration_routes import member_router, MEMBER_COOKIE, _KEY_LOGIN_FAILS
         app = FastAPI()
@@ -324,7 +324,22 @@ class OpenRegistrationTests(RegistrationTests):
         _KEY_LOGIN_FAILS.clear()
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://fixture.invalid") as client:
             self.assertEqual((await client.post("/login/key", json={"key": "nai-wrong"})).status_code, 401)
+            # 后台手建（没绑定 Discord）的 Key 也能登录（10-11 站长的 Key 登不进去），会话用 key:<id>，能看到自己的额度
+            unbound = await client.post("/login/key", json={"key": row["token"]})
+            self.assertEqual(unbound.status_code, 200)
+            self.assertTrue(unbound.cookies[MEMBER_COOKIE].strip('"').startswith(f"key:{row['id']}:"))
+            from app.registration_routes import _member_session
+            req = SimpleNamespace(cookies={MEMBER_COOKIE: unbound.cookies[MEMBER_COOKIE].strip('"')}, app=app)
+            self.assertEqual(await _member_session(req), f"key:{row['id']}")
+            self.assertEqual((await self.service.key_row_for(f"key:{row['id']}"))["id"], row["id"])
+            self.assertIsNone(await self.service.key_row_for("key:abc"))
+            # 停用的、站长的 Key 不行
+            await self.db._db.execute("UPDATE api_keys SET enabled=0 WHERE id=?", (row["id"],))
             self.assertEqual((await client.post("/login/key", json={"key": row["token"]})).status_code, 401)
+            await self.db._db.execute("UPDATE api_keys SET enabled=1, is_admin=1 WHERE id=?", (row["id"],))
+            self.assertEqual((await client.post("/login/key", json={"key": row["token"]})).status_code, 401)
+            await self.db._db.execute("UPDATE api_keys SET is_admin=0 WHERE id=?", (row["id"],))
+            _KEY_LOGIN_FAILS.clear()
             await self.db._db.execute("UPDATE discord_registrations SET key_id=?", (row["id"],))
             ok = await client.post("/login/key", json={"key": " " + row["token"] + " "})
             self.assertEqual(ok.status_code, 200)
