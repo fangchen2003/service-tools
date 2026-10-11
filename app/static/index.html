@@ -830,7 +830,7 @@ td.note{min-width:220px}
             <div class="table-wrap"><table class="rt"><thead><tr><th>模型</th><th class="nw">时段</th><th class="num">请求 / 成功率</th><th class="num" title="上游返回 429 的次数">限流</th><th class="num" title="上游返回 401/402/403/5xx 或连接失败">其他失败</th><th class="num" title="P50 = 中位数：一半的图比这快，代表典型速度">生成 P50</th><th class="num" title="P90：90% 的图比这快，代表较慢那 10% 有多慢（看卡顿）">生成 P90</th><th class="num" title="收到请求到发往上游：排队 + 冷却">平均排队</th><th class="num" title="实际：这一时段平均每小时出图张数（随负载变化）；上限：min(生成速度/请求间隔, 全站每小时上限)，只在设置或 AIMD 调整时变化">实际 / 上限（张/时）</th></tr></thead><tbody id="perfBody"></tbody></table></div>
           </div>
           <details class="card panel fold">
-            <summary class="panel-head"><h2>调度影子模式</h2><span class="desc" title="用真实请求回放「保底 + 空闲借用 + 成员间轮流 + 账号每日上限」">只回放计算，不改变实际出图顺序（分析用）</span></summary>
+            <summary class="panel-head"><h2>排队影子模式</h2><span class="desc" title="用真实请求回放排队：先到先出 vs 成员间轮流；加到 2 / 3 个账号时的等待">只回放计算，不改变实际出图顺序（额度怎么分见「额度与保护 › 算法影子模式」）</span></summary>
             <select id="shadowRange" aria-label="回放范围" style="width:140px;margin-bottom:12px"><option value="24">最近 24 小时</option><option value="168">最近 7 天</option></select>
             <div id="shadowBody"><div class="hint">正在回放…</div></div>
           </details>
@@ -972,7 +972,7 @@ td.note{min-width:220px}
             <div id="qaBody"><div class="skel" style="height:80px"></div></div>
           </div>
           <details class="card panel fold" id="quotaShadow">
-            <summary class="panel-head"><h2>算法影子模式</h2><span class="desc">历代算法每天 0 点按同一份数据各算一次，只记录不生效；对比 1 / 2 / 3 个账号时会怎么分</span></summary>
+            <summary class="panel-head"><h2>额度影子模式</h2><span class="desc">历代算法每天 0 点按同一份数据各算一次，只记录不生效；对比 1 / 2 / 3 个账号时会怎么分</span></summary>
             <div id="qsBody" class="table-wrap"><div class="muted sm">正在读取…</div></div>
           </details>
           <div class="card panel" id="autopilot">
@@ -1578,7 +1578,9 @@ async function loadShadow(){
       : `${ic('alert')}${pct(c.contended_share)} 的出图发出时有其他成员在排队（最多同时 ${c.peak_waiting_members} 人）：轮流出图开始有收益，可以考虑启用。`;
     const hist = c.hist, tot = Math.max(1, c.dispatches);
     const bars = ['0','1','2','3+'].map(k => `<div style="display:flex;align-items:center;gap:8px"><span class="muted sm" style="width:70px">${k==='0'?'无人排队':k+' 人在排队'}</span><div class="bar" style="flex:1;height:10px"><i style="width:${hist[k]/tot*100}%"></i></div><span class="num sm" style="width:44px;text-align:right">${hist[k]}</span></div>`).join('');
-    const members = q.members.slice(0, 8).map(m => `<tr><td data-label="成员">${esc(m.name)}</td><td class="num" data-label="出图">${m.images}</td><td data-label="新规则下">${m.over_ceil?`<span class="tag off">超出借用上限 ${m.over_ceil}</span>`:m.borrowed?`<span class="tag warn">借用 ${m.borrowed}</span>`:'<span class="tag on">保底内</span>'}</td></tr>`).join('');
+    const members = q.members.slice(0, 8).map(m => `<tr><td data-label="成员">${esc(m.name)}</td><td class="num" data-label="出图">${m.images}</td><td data-label="每人 N 张">${m.full?'<span class="tag warn">用满了</span>':'<span class="tag on">没用满</span>'}</td></tr>`).join('');
+    const ba = d.by_accounts || {}, acc = n => ba[n] || {fifo:{}, drr:{}};
+    const accRows = ['1','2','3'].map(n => `<tr><td data-label="号池">${n} 个账号${n==='1'?'（现在）':''}</td><td class="num" data-label="先到先出 P90">${sec(acc(n).fifo.p90)}</td><td class="num" data-label="轮流 P90">${sec(acc(n).drr.p90)}</td><td class="num" data-label="等得最久的人">${sec(acc(n).drr.worst_member_mean)}</td></tr>`).join('');
     box.innerHTML = `
       <div class="notice-box ${c.contended_share == null || c.contended_share < 0.1 ? 'ok' : 'warn'}" style="margin-bottom:12px">${verdict}</div>
       <div class="table-wrap"><table class="rt"><thead><tr><th>等待时间</th><th class="num">实际（现在的规则）</th><th class="num">回放：先到先出</th><th class="num">回放：成员间轮流</th></tr></thead><tbody>
@@ -1592,17 +1594,19 @@ async function loadShadow(){
         <div><h3 style="font-size:14px;margin-bottom:8px">发出时有几位其他成员在排队</h3>${bars}</div>
         <div><h3 style="font-size:14px;margin-bottom:8px">繁忙程度（15 分钟窗口）</h3>
           <div class="row" style="display:flex;justify-content:space-between"><span class="muted sm">峰值利用率</span><span class="num">${pct(L.peak_util)}</span></div>
-          <div class="row" style="display:flex;justify-content:space-between"><span class="muted sm">处于「繁忙」的时间</span><span class="num">${L.busy_minutes} 分钟</span></div>
+          <div class="row" style="display:flex;justify-content:space-between"><span class="muted sm">利用率超过 70% 的时间</span><span class="num">${L.busy_minutes} 分钟</span></div>
 </div>
       </div>
-      <h3 style="font-size:14px;margin:14px 0 8px">保底与借用（保底 ${q.base} 张 / 借用上限 ${q.ceil} 张；账号每日上限 ${q.account_cap} 张）</h3>
+      <h3 style="font-size:14px;margin:14px 0 8px">加号池回测（同样的请求，出图通道变多时的排队等待）</h3>
+      <div class="table-wrap"><table class="rt"><thead><tr><th>号池</th><th class="num">先到先出 P90</th><th class="num">成员间轮流 P90</th><th class="num">等得最久那个人（轮流）</th></tr></thead><tbody>${accRows}</tbody></table></div>
+      <h3 style="font-size:14px;margin:14px 0 8px">每人每天 ${q.per_person || '—'} 张：${q.full} 人用满（账号每日上限 ${q.account_cap} 张）</h3>
       <div class="row" style="display:flex;justify-content:space-between;margin-bottom:6px"><span class="muted sm">账号总量 / 每日上限</span><span class="num">${q.total} / ${q.account_cap}（${pct(q.cap_used)}）</span></div>
       <div class="bar" style="margin-bottom:10px"><i style="width:${Math.min(100, q.cap_used*100)}%"></i></div>
-      <div class="table-wrap"><table class="rt"><thead><tr><th>成员</th><th class="num">出图</th><th>新规则下</th></tr></thead><tbody>${members || '<tr><td colspan="3" class="empty-cell">暂无</td></tr>'}</tbody></table></div>
+      <div class="table-wrap"><table class="rt"><thead><tr><th>成员</th><th class="num">出图</th><th>每人 N 张</th></tr></thead><tbody>${members || '<tr><td colspan="3" class="empty-cell">暂无</td></tr>'}</tbody></table></div>
       <details style="margin-top:12px"><summary class="hint" style="cursor:pointer">说明</summary><div class="hint">
         <p>样本 ${d.samples} 次出图。「实际」是日志里记录的等待；回放按相同到达时间、生成耗时和 ${P.interval} 秒间隔重新排队，两者应接近，差距大说明模型需要校准。</p>
-        <p>利用率 &gt; ${pct(P.busy_util)} 进入繁忙（只服务保底内请求），&lt; ${pct(P.idle_util)} 回到空闲（允许借用）。</p>
-        <p>${q.borrowers ? `有 ${q.borrowers} 人超过保底，共借用 ${q.borrowed_images} 张：新规则下这些请求只在空闲时放行。` : '没有人超过保底：新规则下所有请求都在保底内，体验不变。'} 7 天视图按 7 天合计张数显示，保底按天计算，仅供参考。</p></div></details>`;
+        <p>利用率 = 这 15 分钟里出图通道被占用的比例；超过 ${pct(P.busy_util)} 时排队会明显变长（M/D/1）。</p>
+        <p>被「排队满」直接拒掉的请求没有生成耗时，回放不到，所以真实需求比回放的多，等待会被低估；加号池回测同理只能当下限看。7 天视图按 7 天合计张数显示。</p></div></details>`;
   }catch(e){ box.innerHTML = '<div class="hint">回放失败</div>'; }
 }
 /* 总览图表：今日数值 + 近 7 天，用按钮切换指标（原来的几张今日卡片合并到这里） */

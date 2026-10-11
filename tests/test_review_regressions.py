@@ -1019,6 +1019,8 @@ def test_shadow_drr_lets_light_users_skip_a_burst():
     assert r["fifo"]["worst_member_mean"] == 87 and round(r["drr"]["worst_member_mean"]) == 56   # D 不再等完 A 的 4 张
     assert r["contention"]["peak_waiting_members"] == 3 and r["contention"]["contended_share"] > 0
     assert r["fifo"]["p50"] is not None and abs(r["actual"]["p90"] - r["fifo"]["p90"]) < 2   # 回放与实际一致
+    by = r["by_accounts"]                                                  # 加号池回测：通道越多等得越短
+    assert by["1"]["fifo"]["p90"] == r["fifo"]["p90"] and by["2"]["fifo"]["p90"] < by["1"]["fifo"]["p90"]
 
 
 def test_shadow_quiet_day_has_no_contention_and_no_borrowing():
@@ -1027,17 +1029,17 @@ def test_shadow_quiet_day_has_no_contention_and_no_borrowing():
     r = shadow.analyze(rows)
     assert r["contention"]["contended_share"] == 0
     assert r["drr"]["p90"] == r["fifo"]["p90"] == 0
-    assert r["quota"]["borrowers"] == 0 and r["load"]["busy_minutes"] == 0
+    assert r["quota"]["full"] == 0 and r["load"]["busy_minutes"] == 0
 
 
-def test_shadow_borrowing_and_busy_hysteresis():
+def test_shadow_per_person_and_busy_hysteresis():
     from app import shadow
     rows = [_shadow_row(5000 + 15 * i, 7) for i in range(120)]           # 30 分钟满负荷，同一个人
     rows += [_shadow_row(5000 + 15 * i + 1, 8) for i in range(3)]
-    r = shadow.analyze(rows)
+    r = shadow.analyze(rows, per_person=100)
     q = r["quota"]
-    assert q["members"][0]["images"] == 120 and q["members"][0]["borrowed"] == 120 - shadow.BASE_QUOTA
-    assert q["borrowers"] == 1 and q["total"] == 123
+    assert q["members"][0]["images"] == 120 and q["members"][0]["full"] is True      # 用满了每人 N 张
+    assert q["full"] == 1 and q["total"] == 123 and q["per_person"] == 100
     assert r["load"]["peak_util"] >= 0.9 and r["load"]["busy_minutes"] >= 15
 
 

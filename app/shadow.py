@@ -1,4 +1,8 @@
-"""调度影子模式：用真实请求日志回放「保底 + 空闲借用 + 成员间轮流（DRR）+ 账号每日上限」，只计算、不改变实际出图顺序。
+"""排队影子模式：用真实请求日志回放排队过程，比较「先到先出」和「成员间轮流（DRR）」，并模拟加到 2 / 3 个账号时的等待。
+只计算、不改变实际出图顺序。（额度怎么分的影子模式在 quota_policies.py，两者互不相干。）
+
+2026-10-11 起额度是「每人每天 N 张 + 全站按时段放行」，没有保底 / 借用两层，这里的额度部分改成「谁用满了 N」。
+已知局限：日志里被「排队满」直接拒掉的请求没有生成耗时，回放不到——真实需求比回放的多，等待会被低估。
 
 为什么用日志回放而不是在请求路径里旁路计算：影子模式绝不能影响线上请求；日志里已有每个请求的
 到达时间（完成时间 − 生成耗时 − 排队时间）、生成耗时和 Key，足够复现排队过程，也方便与实际等待对比。
@@ -124,23 +128,18 @@ def busy_windows(reqs: list[dict], *, slots: int, interval: float) -> dict:
     return {"windows": windows, "busy_minutes": busy, "peak_util": max(x["util"] for x in windows), "state": state}
 
 
-def borrowing(day_images: dict, names: dict, *, accounts: int, base: int = BASE_QUOTA,
-              ceil: int = CEIL_QUOTA, account_cap: int = ACCOUNT_DAILY_CAP) -> dict:
-    """当天每把 Key 的张数相对保底 / 借用上限的位置，以及账号总量相对每日上限。"""
-    rows = []
-    for key, n in sorted(day_images.items(), key=lambda kv: -kv[1]):
-        rows.append({"key": key, "name": names.get(key, f"#{key}"), "images": n,
-                     "borrowed": max(0, n - base) if base else 0, "over_ceil": max(0, n - ceil)})
+def per_member(day_images: dict, names: dict, *, accounts: int, per_person: int, account_cap: int) -> dict:
+    """当天每把 Key 用了多少、有没有用满每人 N 张，以及账号总量相对每日上限。"""
+    rows = [{"key": key, "name": names.get(key, f"#{key}"), "images": n, "full": bool(per_person and n >= per_person)}
+            for key, n in sorted(day_images.items(), key=lambda kv: -kv[1])]
     total = sum(day_images.values())
     cap = account_cap * max(1, accounts) if account_cap else 0
     return {"members": rows, "total": total, "account_cap": cap, "cap_used": round(total / cap, 3) if cap else None,
-            "borrowers": sum(1 for r in rows if r["borrowed"]), "borrowed_images": sum(r["borrowed"] for r in rows),
-            "base": base, "ceil": ceil}
+            "per_person": per_person, "full": sum(1 for r in rows if r["full"])}
 
 
 def analyze(rows: Iterable[tuple], *, slots: int = 1, interval: float = 15, key_interval: float = 15,
-            accounts: int = 1, base: int = BASE_QUOTA, account_cap: int = ACCOUNT_DAILY_CAP,
-            ceil: int = CEIL_QUOTA) -> dict:
+            accounts: int = 1, per_person: int = 0, account_cap: int = ACCOUNT_DAILY_CAP) -> dict:
     rows = list(rows)
     reqs = _requests(rows)
     day_images: dict = defaultdict(int)
@@ -159,8 +158,12 @@ def analyze(rows: Iterable[tuple], *, slots: int = 1, interval: float = 15, key_
         "drr": replay(reqs, "drr", slots=slots, interval=interval, key_interval=key_interval) if reqs else None,
         "contention": contention(reqs),
         "load": busy_windows(reqs, slots=slots, interval=interval),
-        "quota": borrowing(day_images, names, accounts=accounts, base=base, ceil=ceil, account_cap=account_cap),
-        "params": {"base": base, "ceil": ceil, "account_cap": account_cap,
+        "quota": per_member(day_images, names, accounts=accounts, per_person=per_person, account_cap=account_cap),
+        # 加号池回测：同样的到达和耗时，账号（出图通道）变成 1 / 2 / 3 倍时的等待
+        "by_accounts": {str(n): {p: replay(reqs, p, slots=max(1, slots // max(1, accounts)) * n, interval=interval,
+                                           key_interval=key_interval) for p in ("fifo", "drr")} if reqs else None
+                        for n in (1, 2, 3)},
+        "params": {"per_person": per_person, "account_cap": account_cap,
                    "busy_util": BUSY_UTIL, "idle_util": IDLE_UTIL, "slots": slots, "interval": interval},
     }
 
@@ -171,11 +174,11 @@ async def collect(state, since: float) -> dict:
     usable = [t for t in pool if t.usable]
     slots = sum(t.image_slots.limit for t in usable) or 1
     guard = getattr(state, "guard", None)
-    extra = {"base": guard.values["base_daily_images"], "account_cap": guard.values["account_daily_cap"]} if guard else {}
-    try:   # 借用上限跟随动态额度算法当前的 quota_ceiling（100～300 浮动），不再固定 300，否则影子回放和真实规则对不上
-        live_ceil = await state.db.get_setting("quota_ceiling", None)
-        if live_ceil is not None:
-            extra["ceil"] = int(float(live_ceil))
+    extra = {"account_cap": guard.values["account_daily_cap"]} if guard else {}
+    try:   # 每人每天 N 张（quota_algo 每天 0 点定）
+        live_n = await state.db.get_setting("quota_ceiling", None)
+        if live_n is not None:
+            extra["per_person"] = int(float(live_n))
     except (TypeError, ValueError):
         pass
     # 回放是纯 CPU（contention 为 O(n²)），7 天数据可达数千行：放到线程里跑，并只取最近 MAX_ROWS 条，不能卡住出图的事件循环
