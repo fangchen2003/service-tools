@@ -838,7 +838,10 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
         base = guard.values["base_daily_images"] if guard is not None else 0
         if base and base < key["daily_images"] and used_legacy + legacy_free_images > base:
             tokens = [t.token_id for t in getattr(STATE.nai, "pool", []) if t.usable]
-            if not guard.site_idle(key["id"], tokens):
+            # 按时段放行时，超出保底的部分只能用「这个时段放出来、还剩得多」的份额：至少留半小时的量给保底内的人
+            reserve = guard.values["account_daily_cap"] / 48 * len(tokens)
+            if not guard.site_idle(key["id"], tokens) or \
+                    await guard.paced_headroom(STATE.db, tokens, STATE.day()) <= reserve:
                 raise err(429, f"今天的保底 {base} 张已用完。全站空闲时可以继续用到 {key['daily_images']} 张，"
                                "现在有其他人在排队或用量较高，请过几分钟再试")
     if est["v5"] > 0:

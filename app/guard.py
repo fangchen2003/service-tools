@@ -22,6 +22,7 @@ HOURLY_MIN, HOURLY_MAX, HOURLY_STEP = 100, 160, 10     # 上限 ≤ 0.8 × 单�
 # 名称: (默认值, 最小, 最大, 说明)
 FIELDS: dict[str, tuple[int, int, int, str]] = {
     "account_daily_cap": (1000, 0, 20000, "每个上游账号每天最多出图张数"),
+    "daily_burst": (150, 0, 20000, "每日上限按时段放行：0 点先放出这么多张，之后每小时补「每日上限 ÷ 24」张，没用完的留到后面；0 = 不分时段（整天先到先得）"),
     "account_hourly_cap": (150, 0, 240, "每个上游账号每小时最多出图张数（自动调整：上游 429 减半；前一天顶到过上限且没有 429 才 +10，范围 100～160）"),
     "account_3h_cap": (400, 0, 720, "每个上游账号连续 3 小时最多出图张数（防止连续几小时都在冲）"),
     "quiet_start": (0, 0, 23, "安静时段开始（北京时间，整点）；与结束相同 = 不启用（2026-10-10 起不启用：夜里不限速）"),
@@ -33,7 +34,7 @@ FIELDS: dict[str, tuple[int, int, int, str]] = {
     "base_daily_images": (100, 0, 100000, "V4.5 每人每天保底张数；超过后只在全站空闲时放行，直到 Key 的每日上限"),
 }
 IDLE_SHARE = 0.6
-from .reasons import BREAKER, CAP_3H, DAILY_CAP, HOURLY_CAP, KEY_BUSY, QUEUE_FULL, QUIET_CAP, Reason
+from .reasons import BREAKER, CAP_3H, DAILY_CAP, HOURLY_CAP, PACED, KEY_BUSY, QUEUE_FULL, QUIET_CAP, Reason
 from .params import P           # 本小时用量低于上限的 60% 且没人排队，算「空闲」，允许借用
 
 
@@ -204,6 +205,34 @@ class Guard:
         self.breaker_until = now + max(0.0, seconds)
         self._breaker_reason = reason or f"上游连续出错，已暂停出图 {int(seconds)} 秒，到点自动恢复"
 
+    # ---------- 每日上限按时段放行（令牌桶：0 点有 burst 张，每小时补 daily/24，当天总量不超过 daily）----------
+    def _day_elapsed(self, now: float) -> float:
+        local = datetime.fromtimestamp(now, self.tz)
+        return now - local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+    def paced_allowance(self, now: Optional[float] = None) -> float:
+        """到现在为止，这个账号今天最多可以出多少张。"""
+        now = time.time() if now is None else now
+        daily, burst = self.values["account_daily_cap"], self.values["daily_burst"]
+        return min(float(daily), burst + daily * self._day_elapsed(now) / 86400)
+
+    def minutes_until_paced(self, used: float, now: Optional[float] = None) -> int:
+        now = time.time() if now is None else now
+        daily, burst = self.values["account_daily_cap"], self.values["daily_burst"]
+        at = (used + 1 - burst) * 86400 / daily if daily else 0
+        return max(1, math.ceil((at - self._day_elapsed(now)) / 60))
+
+    async def paced_headroom(self, db, token_ids: list[str], day: str, now: Optional[float] = None) -> float:
+        """所有账号「按时段已放出、还没用掉」的张数之和；不分时段时返回无穷大。"""
+        if not self.values["daily_burst"] or not self.values["account_daily_cap"]:
+            return float("inf")
+        allow = self.paced_allowance(now)
+        total = 0.0
+        for tid in token_ids:
+            c = await db.get_upstream_counter(tid, day)
+            total += max(0.0, allow - c.get("units", c["images"]))
+        return total
+
     async def token_block_reason(self, db, token_id: str, day: str, now: Optional[float] = None) -> Optional[str]:
         """这个上游账号现在不能再接新的出图任务时，返回给成员看的原因。"""
         now = time.time() if now is None else now
@@ -216,6 +245,10 @@ class Guard:
             used = c.get("units", c["images"])          # 按算力折算：节约模式 14 步的图算半张
             if used >= daily:
                 return Reason(f"本站今天的出图总量已达上限（每个账号 {daily} 张/天，按算力折算，用来保护上游账号），明天 0 点恢复", DAILY_CAP)
+            if self.values["daily_burst"] and used >= self.paced_allowance(now):
+                wait = self.minutes_until_paced(used, now)
+                return Reason(f"全站出图按时段放行（每天 {daily} 张平均分到 24 小时，保证晚来的人也有图出），"
+                              f"这个时段的份额已用完，约 {wait} 分钟后有空位", PACED)
         cap = self.hourly_cap(now)
         if cap and self.hour_count(token_id, now) >= cap:
             wait = self.minutes_until_free(token_id, now)

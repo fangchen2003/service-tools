@@ -1129,7 +1129,7 @@ async def test_guard_blocks_token_on_daily_and_hourly_caps():
     from zoneinfo import ZoneInfo
     noon = datetime(2026, 10, 9, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp()
     g = Guard()
-    g.values["account_hourly_cap"] = 80
+    g.values.update(account_hourly_cap=80, daily_burst=0)       # 按时段放行另见 test_fair_pacing
     assert await g.token_block_reason(_CounterDB(999), "t", "d", noon) is None
     assert "明天 0 点" in await g.token_block_reason(_CounterDB(1000), "t", "d", noon)
     for i in range(80):
@@ -1192,7 +1192,7 @@ async def test_second_image_from_same_key_is_rejected_while_first_runs(state):
 async def test_base_quota_borrowing_only_when_site_is_idle(state):
     from app.guard import Guard
     state.guard = Guard()
-    state.guard.values["base_daily_images"] = 1
+    state.guard.values.update(base_daily_images=1, daily_burst=0)
     state.db.keys["fixture-1"]["daily_images"] = 5
     assert (await post("/ai/generate-image", image_body())).status_code == 200      # 保底内
     state.guard.image_inflight[999] = 1                                               # 另一位成员在排队

@@ -7,7 +7,9 @@
 
 ━━ 三个量 ━━
   A  每人每天 V4.5 上限（daily_images）。初始 150。
-  B  保底（guard_base_daily_images）。初始 100。超过保底后只在全站空闲时放行（见 guard.site_idle）。
+  B  保底（guard_base_daily_images）。2026-10-13 起每天按前一天的实际需求做最大最小公平分配（water_fill）：
+     账号日上限的 60% 按人平分，用得少的人用多少算多少，剩下的平分给用得多的人。
+     超过保底后只在全站空闲、且按时段放出的份额还剩得多时放行（见 guard.site_idle / paced_headroom）。
   D5 每人每天 V5 额度（daily_v5）；G 全站每天 V5 上限（global_daily_v5）。
 
 ━━ V5：按官方恢复速度分配（数据来源：NovelAI 官方 Usage Limit 说明 + 账号接口实测）━━
@@ -63,6 +65,7 @@ DEFAULTS = {
     "quota_base": 100,            # B 初始值
     "quota_ceiling_max": 300,
     "quota_base_min": 50,
+    "quota_base_min_fair": 10,    # 按需求平分的保底最低值（人再多也至少保 10 张）
     "quota_step": 25,             # A 每次调整幅度
     "quota_base_step": 10,        # B 每次调整幅度
     "quota_v5_min": 3,
@@ -171,6 +174,35 @@ def daily_adjust(a: int, b: int, *, used: int, cap: int, hourly_blocks: int, cei
     if not reasons:
         reasons.append(f"用量 {util:.0%}，无需调整")
     return a2, b2, reasons
+
+
+FAIR_SHARE = 0.6        # 账号日上限里拿多少按人平分做保底；其余 40% 留给超出保底的人在空闲时段用
+
+
+def water_fill(usage: list[int], budget: float) -> int:
+    """最大最小公平（water-filling）：找最小的 b，使 Σ min(用量ᵢ, b) ≥ budget。
+    用得少的人用多少算多少，剩下的平分给用得多的人；需求不到 budget 时返回最大用量（人人都满足）。"""
+    us = sorted(u for u in usage if u > 0)
+    if not us:
+        return 0
+    left, n = float(budget), len(us)
+    for i, u in enumerate(us):
+        share = left / (n - i)
+        if u >= share:
+            return max(1, int(share))
+        left -= u
+    return us[-1]
+
+
+async def fair_base(db, day: str, cap: int, *, lo: int, hi: int) -> Optional[int]:
+    """按前一天每个成员的 V4.5 用量算保底（只看算法管理的成员，不含测试 / 站长 Key）。"""
+    rows = await db._db.execute_fetchall(
+        "SELECT c.legacy_free_images FROM counters c JOIN api_keys k ON k.id=c.key_id "
+        "WHERE c.day=? AND k.is_test=0 AND k.is_admin=0 AND c.legacy_free_images>0", (day,))
+    usage = [int(r[0]) for r in rows]
+    if not usage:
+        return None
+    return max(lo, min(hi, water_fill(usage, cap * FAIR_SHARE)))
 
 
 async def _cfg(db) -> dict[str, int]:
@@ -359,6 +391,10 @@ async def run(state, now: Optional[float] = None) -> dict[str, Any]:
             a2, b2, reasons = a, b, [f"昨天只有 {covered:.1f} 小时数据（不足 20 小时），不调整"]
         else:
             a2, b2, reasons = daily_adjust(a, b, cap=cap, cfg=cfg, **stats)
+        fair = await fair_base(db, yday, cap, lo=cfg["quota_base_min_fair"], hi=a2) if covered >= P("allocation.min_coverage_hours", 20) else None
+        if fair is not None and fair != b2:
+            reasons.append(f"保底按昨天的实际需求平分 {int(FAIR_SHARE * 100)}% 的账号日上限：{b2}→{fair}")
+            b2 = fair
         stats["coverage_hours"] = round(covered, 1)
         review = {"day": yday, **stats, "cap": cap, "from": [a, b], "to": [a2, b2], "reasons": reasons}
         history = json.loads(await db.get_setting(HISTORY_KEY, "[]") or "[]")[-29:] + [review]

@@ -2822,7 +2822,7 @@ async function loadGuard(){
     $('#guardFields').innerHTML = Object.keys(f).map(k => `<div class="field"><label for="g_${k}">${esc(f[k].label)}</label>
       <input id="g_${k}" type="number" min="${f[k].min}" max="${f[k].max}" step="1" value="${esc(v[k])}"><div class="hint" title="默认 ${esc(f[k].default)}">${f[k].min}～${f[k].max}</div></div>`).join('');
     const acc = guardData.accounts.map(a => `账号 ${a.position}：今天 ${a.today}${v.account_daily_cap?' / '+v.account_daily_cap:''} 张，本小时 ${a.this_hour}${guardData.hourly_cap_now?' / '+guardData.hourly_cap_now:''} 张`).join('；');
-    $('#fs-guard').textContent = `每小时 ${v.account_hourly_cap || '不限'} · 3 小时 ${v.account_3h_cap || '不限'} · 每天 ${v.account_daily_cap || '不限'} 张（每个上游账号）`;
+    $('#fs-guard').textContent = `每小时 ${v.account_hourly_cap || '不限'} · 3 小时 ${v.account_3h_cap || '不限'} · 每天 ${v.account_daily_cap || '不限'} 张${v.daily_burst && v.account_daily_cap ? '，按时段放行（0 点先放 '+v.daily_burst+' 张，每小时补 '+Math.round(v.account_daily_cap/24)+' 张）' : ''}（每个上游账号）`;
     limitsVerdict();
     $('#guardLive').textContent = `${guardData.quiet_now ? '现在是安静时段' : '正常时段'} · ${acc || '没有可用账号'} · 正在生成或排队 ${guardData.queued_images} 张`;
   }catch(e){ $('#guardLive').textContent = '读取失败'; }
