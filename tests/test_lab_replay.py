@@ -199,3 +199,15 @@ def test_classify():
     assert data.classify("rejected", "429 今天的保底 100 张已用完。全站空闲时……有其他人在排队") == "base"
     assert data.classify("rejected", "402 已达今日 V5 额度") == "other"
     assert data.classify("error", "upstream 500") == "upstream_error"
+
+
+def test_replay_models_time_paced_daily_cap():
+    # v2.17 起每日上限按时段放行：0 点只放出 burst 张，之后每小时补 daily/24（回放要和线上一致才能回测加号）
+    t0 = -28800.0                                        # 北京时间 0 点
+    res = rp.replay(make([t0 + i * 20 for i in range(6)], list(range(6))),
+                    {**BASE, "account_daily_cap": 24, "daily_burst": 2, "queue_per_account": 100})
+    got = codes(res)
+    assert got[:3] == ["ok"] * 3 and got[3:] == ["paced"] * 3       # 份额是连续累积的：放出 2.01 张时第 3 张也能过（和线上同一判断）
+    res2 = rp.replay(make([t0 + i * 20 for i in range(6)], list(range(6))),
+                     {**BASE, "account_daily_cap": 24, "daily_burst": 2, "accounts": 2, "queue_per_account": 100})
+    assert codes(res2).count("ok") == 5                  # 2 个账号：放出的份额翻倍
