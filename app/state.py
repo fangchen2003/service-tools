@@ -40,6 +40,8 @@ class GateState:
             image_min_interval=settings.image_min_interval,
         )
         self._global_sem = asyncio.Semaphore(max(1, settings.global_concurrency))
+        # Bound CPU and decoded-image memory independently of upstream lanes.
+        self.reference_conversion_sem = asyncio.Semaphore(1)
         self._key_sems: dict[int, asyncio.Semaphore] = {}
         self._key_image_next_at: dict[int, float] = {}
         self._rpm: dict[int, deque[float]] = {}

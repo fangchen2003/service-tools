@@ -69,6 +69,10 @@ def prepare_tool(body: dict, operation: str) -> tuple[dict, int]:
     if not isinstance(prompt, str) or len(prompt.encode("utf-8")) > 8192:
         raise ValueError("导演工具提示词最多 8192 字节")
     payload = {"image": image, "width": width, "height": height, "req_type": tool}
+    if "use_new_shared_trial" in body:
+        if type(body["use_new_shared_trial"]) is not bool:
+            raise ValueError("use_new_shared_trial 必须是布尔值")
+        payload["use_new_shared_trial"] = body["use_new_shared_trial"]
     if tool in {"colorize", "emotion"}:
         defry = body.get("defry", 0)
         if type(defry) is not int or not 0 <= defry <= 5:

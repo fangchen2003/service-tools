@@ -30,6 +30,7 @@ from .image_events import ImageEventTracker, ImageStreamProtocolError, STREAM_ME
 from .image_streaming import ImageStreamResponse
 from .image_tools import prepare_tool, validate_result, MAX_RESPONSE_BYTES
 from .image_payload import read_image_body
+from .image_compat import needs_reference_normalization, normalize_image_references
 from .nai import NaiClient, UpstreamError, _wait_cleanup
 from .policy import (
     clamp_image_params,
@@ -594,7 +595,7 @@ async def _generate_image(request: Request, *, streaming: bool):
     # 图生图功能权限与费用分开判断；免费规格也沿用 Anlas 权限要求。
     if body.get("image") or body.get("mask"):
         raise err(400, "生图请求的 image 和 mask 请放在 parameters 中")
-    problem = validate_image_references(body)
+    problem = validate_image_references(body, transport_only=True)
     if problem:
         raise err(400, problem)
     p0 = body.get("parameters", {}) or {}
@@ -658,7 +659,7 @@ async def _generate_image(request: Request, *, streaming: bool):
         raise err(400, "n_samples 必须是正整数")
 
     try:
-        est = estimate_image_cost(body, is_opus=True)
+        est = estimate_image_cost(body, is_opus=True, reference_transport_only=True)
     except (TypeError, ValueError, OverflowError) as exc:
         raise err(400, "图片参数无效，无法估算费用") from exc
     legacy_free_images = (
@@ -666,6 +667,33 @@ async def _generate_image(request: Request, *, streaming: bool):
     )
     if model_tier != "v5":
         await quota_image_check(key, est, legacy_free_images=legacy_free_images)
+
+    # Reject unsupported references and exhausted/unauthorized budgets before
+    # allocating decoded images. Conversion uses Key admission plus a separate
+    # global memory limit, without occupying any upstream Token lane.
+    if needs_reference_normalization(body):
+        async with acquire_concurrency(key, image=True):
+            try:
+                async with asyncio.timeout(STATE.settings.queue_timeout):
+                    await STATE.reference_conversion_sem.acquire()
+            except TimeoutError:
+                raise err(429, "参考图片处理繁忙，请稍后再试") from None
+            try:
+                check_image_cooldown()
+                await quota_image_check(key, est, legacy_free_images=legacy_free_images)
+                # Keep admission locks until Pillow finishes even on disconnect.
+                body = await _wait_cleanup(asyncio.create_task(anyio.to_thread.run_sync(
+                    normalize_image_references, body,
+                    request.headers.get("authorization", "")[7:].strip())))
+                await anyio.lowlevel.checkpoint_if_cancelled()
+            except ValueError as exc:
+                raise err(400, str(exc)) from None
+            finally:
+                STATE.reference_conversion_sem.release()
+        p = body.get("parameters", {})
+    problem = validate_image_references(body)
+    if problem:
+        raise err(400, problem)
 
     cost = "; ".join(part for part in (
         f"est={est['anlas']}A" if est["anlas"] else "",

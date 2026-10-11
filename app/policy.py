@@ -48,7 +48,7 @@ VIBE_ENCODING_ANLAS = 2
 REFERENCE_FIELDS = (
     "reference_image_multiple", "reference_image_multiple_cached",
     "reference_information_extracted_multiple", "reference_strength_multiple",
-    "director_reference_images_cached", "director_reference_descriptions",
+    "director_reference_images", "director_reference_images_cached", "director_reference_descriptions",
     "director_reference_information_extracted", "director_reference_strength_values",
     "director_reference_secondary_strength_values",
 )
@@ -91,11 +91,13 @@ def validate_vibe_encoding(body: dict) -> Optional[str]:
     return None
 
 
-def validate_image_references(payload: dict) -> Optional[str]:
+def validate_image_references(payload: dict, *, transport_only: bool = False) -> Optional[str]:
     """Validate complete JSON reference data without trusting shared cache hits.
 
     The 0..1 range and 16 precise-reference limit are local input limits, not
-    claims about every upstream client's unlocked controls.
+    claims about every upstream client's unlocked controls. Transport preflight
+    checks structure without decoding images and accepts precise UUID identifiers
+    pending normalization; the final validation always requires canonical data.
     """
     p = payload.get("parameters", payload)
     if not isinstance(p, dict):
@@ -105,15 +107,18 @@ def validate_image_references(payload: dict) -> Optional[str]:
         groups = {name: _reference_list(p, name) for name in REFERENCE_FIELDS}
     except ValueError as exc:
         return str(exc)
-    if any(p.get(name) for name in ("director_reference_images", "characterReferences", "reference_image")):
+    if any(p.get(name) for name in ("characterReferences", "reference_image")):
         return "请使用完整的 reference_image_multiple 或 director_reference_images_cached 参考参数"
     vibes = groups["reference_image_multiple"]
     cached_vibes = groups["reference_image_multiple_cached"]
+    precise_raw = groups["director_reference_images"]
     precise = groups["director_reference_images_cached"]
+    if precise_raw and precise:
+        return "精确参考原始数组与缓存数组不能同时提交"
     if vibes and cached_vibes:
         return "Vibe 原始数组与缓存数组不能同时提交"
     vibe_count = len(vibes or cached_vibes)
-    precise_count = len(precise)
+    precise_count = len(precise_raw or precise)
     if vibe_count > REFERENCE_LIMIT or precise_count > REFERENCE_LIMIT:
         return "每次最多使用 16 张参考图"
     if vibe_count and precise_count:
@@ -145,10 +150,19 @@ def validate_image_references(payload: dict) -> Optional[str]:
                 or caption.get("base_caption") not in ("character", "style", "character&style")
                 or caption.get("char_captions") != [] or item.get("legacy_uc") is not False):
             return "精确参考描述须为 character、style 或 character&style"
+    def valid_data(value, **options):
+        if transport_only:
+            return isinstance(value, str) and 0 < len(value) <= 25 * 1024 * 1024
+        return _base64_data(value, **options)
+
     for item in vibes:
-        if (not _base64_data(item, source_image=model in VIBE_RAW_MODELS)
-                or (model in VIBE_ENCODED_MODELS and _base64_data(item, source_image=True))):
+        if (not valid_data(item, source_image=model in VIBE_RAW_MODELS)
+                or (not transport_only and model in VIBE_ENCODED_MODELS
+                    and _base64_data(item, source_image=True))):
             return "Vibe 须为有效 base64；V3 必须传原图而不是 V4 编码"
+    for item in precise_raw:
+        if not valid_data(item, png=True):
+            return "精确参考原始数组必须包含完整 PNG base64"
     for item in cached_vibes + precise:
         is_precise = any(item is entry for entry in precise)
         cache_key = item.get("cache_secret_key") if isinstance(item, dict) else None
@@ -158,12 +172,14 @@ def validate_image_references(payload: dict) -> Optional[str]:
             re.fullmatch(r"[0-9a-f]{64}", cache_key)
             or (not is_precise and re.fullmatch(
                 r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", cache_key))
+            or (is_precise and transport_only and re.fullmatch(
+                r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", cache_key))
         )
         if (not isinstance(item, dict)
                 or not valid_key
-                or not _base64_data(item.get("data"), png=is_precise,
+                or not valid_data(item.get("data"), png=is_precise,
                                     source_image=not is_precise and model in VIBE_RAW_MODELS)
-                or (not is_precise and model in VIBE_ENCODED_MODELS
+                or (not transport_only and not is_precise and model in VIBE_ENCODED_MODELS
                     and _base64_data(item.get("data"), source_image=True))):
             return "缓存参考必须包含 64 位小写十六进制 cache_secret_key（Vibe 也支持小写 UUIDv4）和完整 base64 data；精确参考须为 PNG"
     return None
@@ -172,7 +188,7 @@ def validate_image_references(payload: dict) -> Optional[str]:
 def reference_surcharge(payload: dict) -> int:
     """单张参考附加费，批次减免在总价中处理；编码另行收费。"""
     p = payload.get("parameters", payload)
-    precise = len(p.get("director_reference_images_cached") or [])
+    precise = len(p.get("director_reference_images") or p.get("director_reference_images_cached") or [])
     vibes = len(p.get("reference_image_multiple") or p.get("reference_image_multiple_cached") or [])
     model = str(payload.get("model", "")).strip().lower()
     return precise * 5 + (max(0, vibes - 4) * 2 if model in VIBE_ENCODED_MODELS else 0)
@@ -271,13 +287,15 @@ def snap_v5_preset(width: int, height: int) -> Tuple[int, int]:
 
 def estimate_image_cost(params: dict, is_opus: bool = True, *,
                         v5_allowance_available: bool = True,
-                        medium_multiplier: float = 0.60) -> dict[str, float]:
+                        medium_multiplier: float = 0.60,
+                        reference_transport_only: bool = False) -> dict[str, float]:
     """估算一次 /ai/generate-image 的消耗。
 
     返回 {"anlas": 扣多少 Anlas, "v5": 占多少个 V5 额度单位}。
     V5 多图批次可同时占首张额度并支付其余图片的 Anlas。
+    转换前预检仅检查参考结构；上游派发和结算仍校验完整规范数据。
     """
-    problem = validate_image_references(params)
+    problem = validate_image_references(params, transport_only=reference_transport_only)
     if problem:
         raise ValueError(problem)
     p = params.get("parameters", params)

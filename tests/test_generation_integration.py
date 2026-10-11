@@ -132,6 +132,7 @@ class FakeState:
         )
         self.image_budget_lock = asyncio.Lock()
         self.global_sem = asyncio.Semaphore(3)
+        self.reference_conversion_sem = asyncio.Semaphore(1)
         self.semaphores = {}
         self.global_active = self.global_waiting = self.rpm_hits = 0
         self.key_slots = []

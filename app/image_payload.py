@@ -93,6 +93,15 @@ async def read_image_body(request: Request, limit: int) -> dict:
                     for item in values:
                         if isinstance(item, dict):
                             await resolve(item, "data")
+            for field in ("reference_image_multiple", "director_reference_images"):
+                values = container.get(field, [])
+                if isinstance(values, list):
+                    if len(values) > REFERENCE_LIMIT:
+                        raise HTTPException(400, "每次最多使用 16 张参考图")
+                    for index, value in enumerate(values):
+                        slot = {"data": value}
+                        await resolve(slot, "data")
+                        values[index] = slot["data"]
         if used != attachments.keys():
             raise HTTPException(400, "multipart 包含未被图片字段引用的附件")
         return data
