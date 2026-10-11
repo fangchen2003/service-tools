@@ -851,9 +851,10 @@ async def quota_algo_put(request: Request):
     from . import quota_algo
     body = await read_json_body(request)
     st = request.app.state.gate
-    bounds = {"quota_auto_enabled": (0, 1), "quota_target_avg": (10, 2000), "quota_base": (0, 2000),
-              "quota_ceiling_max": (10, 5000), "quota_base_min": (0, 2000), "quota_step": (1, 500),
-              "quota_base_step": (1, 500), "quota_v5_min": (0, 500), "quota_v5_max": (1, 500)}
+    # 极简模式（2026-10-11）：保底 = N，不再单独设保底（quota_base / quota_base_min / quota_base_step 已不用）
+    bounds = {"quota_auto_enabled": (0, 1), "quota_target_avg": (10, 2000),
+              "quota_ceiling_max": (10, 5000), "quota_base_min_fair": (1, 2000), "quota_step": (1, 500),
+              "quota_v5_min": (0, 500), "quota_v5_max": (1, 500)}
     updates = {}
     for k, v in body.items():
         if k in bounds:
@@ -861,10 +862,9 @@ async def quota_algo_put(request: Request):
     if updates:
         await st.db.set_settings_bulk(updates)
         # 改了初始值时，同步当前值（否则要等明天的微调）
-        if "quota_target_avg" in updates:
-            await st.db.set_setting("quota_ceiling", updates["quota_target_avg"])
-        if "quota_base" in updates:
-            await st.db.set_setting("quota_base_now", updates["quota_base"])
+        if "quota_target_avg" in updates:      # 站长手动定今天的 N：上限和保底一起改，保持「每人一个数」
+            await st.db.set_settings_bulk({"quota_ceiling": updates["quota_target_avg"],
+                                           "quota_base_now": updates["quota_target_avg"]})
     result = await quota_algo.run(st)
     return {"ok": True, "last": result}
 
@@ -1693,6 +1693,8 @@ async def ops_set_economy(request: Request):
     require_admin(request)
     body = await read_json_body(request)
     on = str(body.get("on")).strip().lower() in ("1", "true", "yes", "on") if not isinstance(body.get("on"), bool) else body["on"]
+    if on:   # 2026-10-11 停用：取消打折后它只降画质、不多出图（见首页算法说明 ⑦）
+        raise HTTPException(410, "节约模式已停用，只能关闭")
     changed = await ops.set_economy(request.app.state.gate.db, on, request.app.state.gate, by="站长")
     return {"economy": on, "changed": changed}
 

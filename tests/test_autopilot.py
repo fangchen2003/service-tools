@@ -114,7 +114,7 @@ def test_economy_rule():
 
 
 @pytest.mark.asyncio
-async def test_economy_enforce_flips_and_announces(tmp_path):
+async def test_economy_is_never_turned_on_by_autopilot(tmp_path):
     db = Database(str(tmp_path / "e.sqlite"))
     await db.connect()
     try:
@@ -127,12 +127,9 @@ async def test_economy_enforce_flips_and_announces(tmp_path):
         st = SimpleNamespace(db=db, guard=None, share=None, announcer=ann, sources=SimpleNamespace(events=[]))
         now = time.time()
         out = await autopilot.run(st, None, now=now)
-        assert out["rules"]["economy"]["value"] is True and out["rules"]["economy"].get("applied")
-        assert (await db.get_setting("economy_mode")) == "on"
-        assert posts and "节约模式已开启" in posts[0]
-        # 1 小时内不重复切换（避免公告刷屏）
-        out2 = await autopilot.run(st, None, now=now + 60)
-        assert not out2["rules"]["economy"].get("applied")
+        # 2026-10-11 节约模式停用：算法仍会给出「建议开」，但自动驾驶不再执行
+        assert out["rules"]["economy"]["value"] is True and not out["rules"]["economy"].get("applied")
+        assert (await db.get_setting("economy_mode")) != "on" and not posts
     finally:
         await db.close()
 

@@ -225,7 +225,8 @@ async def run(state, registrar=None, now: Optional[float] = None) -> dict[str, A
                              f"AND reason='{reasons.QUEUE_FULL}'", now - 1800))[0][0] or 0)
     econ_target, econ_why = economy_rule(econ_now, qr15, qr30, keys15)
     out["rules"]["economy"] = {"mode": await _mode(db, "economy"), "value": econ_target, "why": econ_why}
-    if econ_target != econ_now and out["rules"]["economy"]["mode"] == "enforce":
+    # 2026-10-11 节约模式停用：自动驾驶最多只会把它关掉，不会再打开
+    if econ_target != econ_now and out["rules"]["economy"]["mode"] == "enforce" and not econ_target:
         last_flip = float(await db.get_setting("autopilot_economy_at", 0) or 0)
         if now - last_flip >= ECON_DWELL:                 # 间隔 ≥1 小时，避免公告刷屏
             from . import ops
