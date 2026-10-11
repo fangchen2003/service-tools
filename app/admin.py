@@ -1112,10 +1112,10 @@ async def admin_actions(request: Request, page: int = 1, actor: str = "", action
         where.append("actor = '系统'")
     elif kind == "member":
         where.append("actor LIKE 'Discord:%'")
-    act = (action or "").strip()
-    if act:
-        where.append("action = ?")
-        args.append(act)
+    acts = [a for a in (x.strip() for x in (action or "").split("|")) if a][:40]    # 后台按分组筛，一组可含多个旧名
+    if acts:
+        where.append("action IN (" + ",".join("?" * len(acts)) + ")")
+        args.extend(acts)
     clause = (" WHERE " + " AND ".join(where)) if where else ""
     total = int((await (await db._db.execute(
         "SELECT COUNT(*) FROM admin_actions" + clause, tuple(args))).fetchone())[0])
