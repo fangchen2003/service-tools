@@ -989,6 +989,8 @@ class Database:
             for d in sorted(self.image_dir.iterdir(), reverse=True):
                 if d.is_dir():
                     try:
+                        if d.stat().st_mtime >= older_than:
+                            continue            # 刚建的目录可能正要写图，不碰（rmdir 和写文件之间的竞争）
                         d.rmdir()               # 空的日期目录顺手删掉，非空会抛错，忽略
                     except OSError:
                         pass

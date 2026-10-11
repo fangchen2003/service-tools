@@ -87,8 +87,9 @@ def build_client() -> tuple[discord.Client, app_commands.CommandTree, discord.Ob
     tree = app_commands.CommandTree(client)
 
     @tree.command(name="register", description="领取你的猫头鹰公益站 API Key", guild=guild)
-    async def register(interaction: discord.Interaction):
-        await handle_register(interaction)
+    @app_commands.describe(key="收到站长发的邀请 Key 时粘贴在这里，绑定到你的账号（可选）")
+    async def register(interaction: discord.Interaction, key: str | None = None):
+        await handle_register(interaction, (key or "").strip())
 
     @tree.command(name="quota", description="查看今日额度、Key 有效期和服务状态", guild=guild)
     async def quota(interaction: discord.Interaction):

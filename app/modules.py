@@ -1,7 +1,6 @@
-"""模块登记：把现有算法包成模块（容量 / 分配 / Anlas / 自动驾驶 / 诚信 / 领 Key / 观测）。
+"""模块登记：容量 / 分配 / 公平调度 / Anlas / 自动驾驶 / 诚信 / 风险检查 / 领 Key / 观测。
 
-每个模块写明它回答的问题、依据的现实数据、数学原理、关键参数（依据等级）和交叉校验。
-框架见 kernel.py。新增模块：写一个 Module(...) 并在 build() 里 register。
+每个模块写明回答的问题、关键参数的当前值和交叉校验。框架见 kernel.py；新增模块写一个 Module(...) 并在 build() 里 register。
 """
 from __future__ import annotations
 
@@ -78,20 +77,17 @@ def capacity(state) -> Module:
         ]
 
     return Module(
-        name="capacity", title="① 容量", question="账号今天、这小时能承受多少？",
-        reality="账号 V5 剩余与恢复速度（订阅接口）、上游 429、生成耗时、实际出图数",
-        principle="电池模型（V5 剩余 + 每日恢复）；每小时上限用 AIMD：上游 429 减半，平稳一天 +10",
+        name="capacity", title="容量", question="每个上游账号一小时、一天能出多少张",
         tick=tick, checks=checks,
-        hard_note="关闭后停止自动调整每小时上限；每小时 / 3 小时 / 每天上限仍然生效",
+        hard_note="关闭后不再自动调每小时上限；各项上限照常生效",
         params=[
-            Param("每小时上限", lambda: g.values["account_hourly_cap"], "A", "AIMD 自动调整（100～200）",
-                  "起点 150 没有依据；靠上游 429 反馈逐步变成实测值"),
-            Param("3 小时上限", lambda: g.values["account_3h_cap"], "A", "", "防止连续几小时都在冲"),
-            Param("每日上限", lambda: g.values["account_daily_cap"], "B", "fccc 账号日均 ~1370 张被限制（他人一次经历，单个案例）"),
-            Param("每 1% V5 ≈ 张", lambda: quota_algo.V5_IMAGES_PER_PERCENT, "B", "官方 17.3 张 / 1%（23 步）× 23/28",
-                  "待用账号实际扣减校准"),
-            Param("V5 默认恢复 %/天", lambda: quota_algo.V5_FALLBACK_RATE, "B", "官方：订阅首月约 11%/天"),
-            Param("出图间隔（秒）", lambda: state.settings.image_min_interval, "A", "", "加随机 0～5 秒"),
+            Param("每天", lambda: f"{g.values['account_daily_cap']}（上游 429 / 403 时自动退到 {g.values.get('daily_cap_fallback')}）"),
+            Param("按时段放行", lambda: f"0 点先放 {g.values['daily_burst']} 张，之后每小时补 "
+                  f"{round(g.values['account_daily_cap'] / 24)} 张" if g.values.get("daily_burst") else "关"),
+            Param("每小时", lambda: g.values["account_hourly_cap"], "连续 24 小时没有 429 且顶到过上限时 +10"),
+            Param("每 3 小时", lambda: g.values["account_3h_cap"] or "不限"),
+            Param("出图间隔（秒）", lambda: state.settings.image_min_interval, "另加随机 0～5 秒"),
+            Param("V5 每 1% ≈ 张", lambda: quota_algo.V5_IMAGES_PER_PERCENT),
         ])
 
 
@@ -102,42 +98,32 @@ def allocation(state) -> Module:
     async def tick(k: Kernel):
         r = await quota_algo.run(state)
         v5 = (r or {}).get("v5") or {}
-        return f"V4.5 {r.get('ceiling')} / 保底 {r.get('base')} · V5 每人 {v5.get('each')} / 全站 {v5.get('global')}" if r else ""
+        return f"每人 V4.5 {r.get('ceiling')} 张 · V5 {v5.get('each')} 张（全站 V5 {v5.get('global')}）" if r else ""
 
     async def checks(k: Kernel):
         db = state.db
         last = await _setting_json(db, quota_algo.STATE_KEY)
         if not last or last.get("enabled") is False:
             return []
-        v5, a, b = last.get("v5") or {}, last.get("ceiling"), last.get("base")
+        v5, a = last.get("v5") or {}, last.get("ceiling")
         each = v5.get("each") or 0
         drift = int(await _q1(db, "SELECT COUNT(*) FROM api_keys WHERE quota_auto=1 AND is_admin=0 AND is_test=0 "
                                   "AND enabled=1 AND (daily_images<>? OR daily_v5<>?)", a, each) or 0)
-        base_now = state.guard.values.get("base_daily_images", 0)
-        # 「人均 × 人数 ≤ 全站」「领 Key 默认 = 算法值」是同一个函数写出来的恒等式（统计审查），不算交叉校验，已移到单元测试
-        return [
-            Check("算法管理的 Key 都已同步", drift == 0, f"{drift} 把 Key 的额度和算法结果不一致"),
-            Check("保底 ≤ 上限", base_now <= (a or 0), f"保底 {base_now}，上限 {a}"),
-            Check("保底 = 算法当前值", base_now == b, f"实际保底 {base_now}，算法 {b}"),
-        ]
+        return [Check("算法管理的 Key 都已同步", drift == 0, f"{drift} 把 Key 的额度和算法结果不一致")]
 
     cfg = quota_algo.DEFAULTS
+    async def current(key: str):
+        return (await _setting_json(state.db, quota_algo.STATE_KEY)).get(key)
+
     return Module(
-        name="allocation", title="② 分配", question="容量怎么分给每个人？",
-        reality="最近 3 天活跃人数、昨天的总用量、被每小时上限拦的小时数、顶格人数",
-        principle="全站 V5 按人均截断分配（max-min 公平）；V4.5 上限 / 保底按昨天拥挤程度加减步长；保底 + 空闲借用",
-        tick=tick, checks=checks, hard_note="关闭后额度冻结在当前值，不再随人数和拥挤程度变化",
+        name="allocation", title="分配", question="每人每天能出多少张（所有人一样）",
+        tick=tick, checks=checks, hard_note="关闭后额度冻结在当前值",
         params=[
-            Param("V4.5 上限初始值", lambda: cfg["quota_target_avg"], "A", "站长定：平均 150"),
-            Param("保底初始值", lambda: cfg["quota_base"], "A", "站长定：100"),
-            Param("每日步长 上限 / 保底", lambda: f"{cfg['quota_step']} / {cfg['quota_base_step']}", "A"),
-            Param("拥挤：用量 ≥", lambda: P("allocation.congested_util", 0.85), "A", "", "与「拦截小时」是「或」关系 → 待改为两者都满足 + 3 天平滑", key="allocation.congested_util"),
-            Param("拥挤：拦截小时 ≥", lambda: P("allocation.congested_hours", 3), "A", "", "只基于一次 10 连拦（样本 1）", key="allocation.congested_hours"),
-            Param("余量：用量 <", lambda: P("allocation.slack_util", 0.6), "D", "与「有人顶格」同时满足才放宽", key="allocation.slack_util"),
-            Param("V5 系数 k（按剩余）", lambda: "≥90:1.3 · ≥70:1.1 · ≥40:0.9 · ≥20:0.6 · 其余 0.3", "A",
-                  "目标让剩余稳定在 60～80%", "待换连续 P 控制"),
-            Param("V5 每人范围", lambda: f"{cfg['quota_v5_min']}～{cfg['quota_v5_max']}", "A"),
-            Param("至少按几人分", lambda: P("allocation.min_people", 10), "A", "", "给新来的人留位置", key="allocation.min_people"),
+            Param("今天每人 V4.5", lambda: current("ceiling"), "0 点按昨天的用量重算"),
+            Param("规则", lambda: "需求接近总量 → 按需求平分；有余量且有人用满 → +"
+                  f"{cfg['quota_step']}；否则不变"),
+            Param("范围", lambda: f"{cfg['quota_base_min_fair']}～{cfg['quota_ceiling_max']} 张"),
+            Param("V5 每人范围", lambda: f"{cfg['quota_v5_min']}～{cfg['quota_v5_max']} 张", "按账号 V5 剩余和恢复速度分"),
         ])
 
 
@@ -157,15 +143,13 @@ def anlas(state) -> Module:
 
     d = anlas_pool.DEFAULTS
     return Module(
-        name="anlas", title="Anlas 续杯", question="V5 用完后，账号的 Anlas 怎么分给常用成员续杯？",
-        reality="账号剩余 Anlas、离补满还有几天、成员近 7 天出图数",
-        principle="（剩余 − 保留）÷ 剩余天数 ÷ 合格人数，低于一张的价格就不分",
-        tick=tick, checks=checks, hard_note="关闭后不再重新分配，已分配的当天额度保持",
+        name="anlas", title="Anlas 续杯", question="V5 用完后，账号的 Anlas 怎么分给常用成员",
+        tick=tick, checks=checks, hard_note="关闭后不再重新分配，当天已分配的保持",
         params=[
-            Param("续杯单价", lambda: anlas_pool.V5_PAID_PRICE, "C", "policy.py 实测扣费系数（20 × V5 1.5 倍）"),
-            Param("保留不分", lambda: d["anlas_reserve"], "A"),
-            Param("每人每天最多", lambda: d["anlas_member_daily_cap"], "A", "", "约 3 张"),
-            Param("近 7 天至少出图", lambda: d["anlas_min_images_7d"], "A"),
+            Param("一张 V5 约", lambda: anlas_pool.V5_PAID_PRICE, "Anlas"),
+            Param("保留不分", lambda: d["anlas_reserve"]),
+            Param("每人每天最多", lambda: d["anlas_member_daily_cap"]),
+            Param("近 7 天至少出图", lambda: d["anlas_min_images_7d"]),
         ])
 
 
@@ -175,17 +159,16 @@ def autopilot_module(state) -> Module:
 
     async def tick(k: Kernel):
         r = await autopilot.run(state, k.extra.get("registrar"))
-        slots = (r.get("rules") or {}).get("slots") or {}
-        return f"名额判断 {slots.get('value')}（{slots.get('mode')}）"
+        rules = r.get("rules") or {}
+        guarded = len((rules.get("key_guard") or {}).get("value") or [])
+        return f"全站熔断：{'触发' if (rules.get('breaker') or {}).get('value') else '没有'} · 被限流的 Key：{guarded} 把"
 
     return Module(
-        name="autopilot", title="自动驾驶", question="名额、回收天数、熔断这些站务设置怎么自动调？",
-        reality="已领人数、候补、昨天用量、上游失败率",
-        principle="每条规则先观察后执行；名额 +5 需要「快满或有候补」「昨天有余量」「拦截小时 < 3」三者同时满足",
-        tick=tick, hard_note="关闭后名额等设置保持当前值",
-        params=[Param("名额自动 +", lambda: autopilot.SLOTS_STEP, "D", "三个条件同时满足"),
-                Param("名额上限", lambda: autopilot.SLOTS_MAX, "A"),
-                Param("两次加名额间隔（小时）", lambda: autopilot.SLOTS_COOLDOWN // 3600, "A")])
+        name="autopilot", title="自动驾驶", question="名额、全站熔断、单个 Key 限流",
+        tick=tick, hard_note="关闭后这些设置保持当前值",
+        params=[Param("全站熔断", lambda: "15 分钟上游失败 ≥ 5 次且 ≥ 30% → 暂停出图 5 分钟"),
+                Param("单个 Key 限流", lambda: "1 小时被拒 ≥ 60 次 → 暂停 1 小时"),
+                Param("名额", lambda: f"快满且有余量时 +{autopilot.SLOTS_STEP}，最多 {autopilot.SLOTS_MAX}（名额不限时不动）")])
 
 
 # ---------------- ④ 诚信（防分享）----------------
@@ -215,18 +198,15 @@ def integrity(state) -> Module:
                       f"{len(rows)} 把 Key 在处罚中" + (f"，其中 {unsupported} 没有强证据" if unsupported else ""))]
 
     return Module(
-        name="integrity", title="④ 诚信（防分享）", question="谁在破坏公平（共用 Key、倒卖）？",
-        reality="来源网络（打码）、客户端指纹、出图习惯（参数签名 + 提示词固定部分）、是否同时在途",
-        principle="多证据加权、半衰期衰减；三重滤网：辅助证据必须有强证据印证；提醒 → 暂停 → 重置 → 停用",
+        name="integrity", title="诚信（防分享）", question="有没有人共用或转卖 Key",
         get_enabled=get_enabled, set_enabled=set_enabled, checks=checks,
         hard_note="关闭后不再收集证据和处罚；已暂停的 Key 到期自动恢复",
         params=[
-            Param("强证据加分", lambda: sg._pts("overlap"), "A", "", "证据之间相关，直接相加会重复计分；待改为校准的似然比", key="share.points.overlap"),
-            Param("辅助证据加分", lambda: f"{sg.POINTS['multi_device']} / {sg.POINTS['allday']}", "A", "",
-                  "72 小时内有计分的强证据才计分"),
-            Param("提醒 / 暂停 / 重置", lambda: f"{P('share.warn', sg.WARN)} / {P('share.pause', sg.PAUSE)} / {P('share.reset', sg.RESET)}", "A", "", "待回放回测", key="share.warn"),
-            Param("半衰期（小时）", lambda: P("share.half_life", sg.HALF_LIFE) // 3600, "A", "", "待回放回测", key="share.half_life"),
-            Param("停用前违规次数", lambda: sg.STRIKES_BAN, "A"),
+            Param("模式", lambda: state.share.mode(), "observe = 只记录不处罚"),
+            Param("提醒 / 暂停 / 重置", lambda: f"{P('share.warn', sg.WARN)} / {P('share.pause', sg.PAUSE)} / {P('share.reset', sg.RESET)} 分"),
+            Param("强证据 / 辅助证据", lambda: f"{sg._pts('overlap')} / {sg.POINTS['multi_device']} 分", "辅助证据要 72 小时内有强证据才计分"),
+            Param("分数半衰期", lambda: f"{P('share.half_life', sg.HALF_LIFE) // 3600} 小时"),
+            Param("停用前违规次数", lambda: sg.STRIKES_BAN),
         ])
 
 
@@ -248,13 +228,11 @@ def registration(state) -> Module:
         return [Check("已领人数 ≤ 名额", not cap or active <= cap, f"{active} / {cap}")]
 
     return Module(
-        name="registration", title="领 Key", question="谁能领 Key、名额多少？",
-        reality="已领人数、候补、Discord 账号年龄、身份组",
-        principle="名额由自动驾驶按负载开放；闲置回收让名额流转",
+        name="registration", title="领 Key", question="新成员能不能领 Key",
         get_enabled=get_enabled, set_enabled=set_enabled, checks=checks,
-        hard_note="关闭 = 暂停领取，已领的成员不受影响",
-        params=[Param("Key 有效天数", lambda: getattr(state.settings, "default_key_expires_days", 30), "A"),
-                Param("闲置回收天数", lambda: state.settings.key_inactivity_delete_days, "A")])
+        hard_note="关闭 = 暂停领取；已领的成员和邀请 Key 绑定不受影响",
+        params=[Param("Key 有效天数", lambda: getattr(state.settings, "default_key_expires_days", 30)),
+                Param("闲置回收", lambda: f"{state.settings.key_inactivity_delete_days} 天" if state.settings.key_inactivity_delete_days else "关")])
 
 
 # ---------------- ⑥ 观测 ----------------
@@ -287,10 +265,8 @@ def observation(state) -> Module:
         return Check("V5 恢复速度：接口 ↔ 实测", rc.get("status") != "对不上", detail)
 
     return Module(
-        name="observation", title="⑥ 观测", question="实际发生了什么？各处的数字对得上吗？",
-        reality="用量日志、每日计数、上游状态",
-        principle="同一件事用两个独立来源记录，互相核对",
-        checks=checks, hard_note="关闭后不再做数据一致性核对；日志照常记录")
+        name="observation", title="观测", question="各处记录的数字对不对得上",
+        checks=checks, hard_note="关闭后不再核对；日志照常记录")
 
 
 # ---------------- ③ 公平调度（DRR）----------------
@@ -319,22 +295,29 @@ def scheduling(state) -> Module:
                       f"FIFO 不公平决策 {r['unfair_rate']:.0%}（DRR 可消除）")]
 
     return Module(
-        name="scheduling", title="③ 公平调度（DRR）", question="账号空出槽位时，下一张图轮到谁？",
-        reality="每把 Key 最近 10 分钟的出图数、当前排队的 Key",
-        principle="亏损轮询（DRR）：挑最近服务最少的 Key 先出；参数 quantum（一把连出几张后让队）",
+        name="scheduling", title="排队顺序", question="多人排队时，下一张轮到谁",
         get_enabled=get_enabled, set_enabled=set_enabled, tick=tick, checks=checks,
-        hard_note="关闭后完全按 FIFO；observe 模式只统计不改顺序（冻结期保持 observe）",
-        params=[Param("配额粒度 quantum", lambda: P("scheduling.quantum", sch.DEFAULT_QUANTUM), "A", "",
-                      "1 = 严格轮流最公平；越大越偏吞吐。待用影子数据自动调", key="scheduling.quantum"),
-                Param("自动生效门槛（≥N 人同时排队）", lambda: P("scheduling.engage_min_waiters", 2), "A", "",
-                      "少于此数等于 FIFO；达到才按公平挑人", key="scheduling.engage_min_waiters"),
-                Param("防饥饿（秒）", lambda: P("scheduling.starvation_seconds", 60), "A", "",
-                      "一张图等满这么久强制插最前", key="scheduling.starvation_seconds"),
-                Param("模式", lambda: "observe（影子，不改顺序）", "A", "", "只观察：真实顺序仍是 FIFO，DRR 重排尚未接入派发路径")])
+        hard_note="现在按先来后到出图；这里只统计「如果轮流出图会怎样」，不改顺序",
+        params=[Param("实际顺序", lambda: "先来后到"),
+                Param("对照：轮流出图", lambda: f"每把 Key 连出 {P('scheduling.quantum', sch.DEFAULT_QUANTUM)} 张后让队，"
+                      f"等满 {P('scheduling.starvation_seconds', 60)} 秒插最前")])
+
+
+# ---------------- 风险检查 ----------------
+def risk(state) -> Module:
+    """出站请求的样子和滥用线索（risk_check.py），每 10 分钟体检一次；只展示，不处罚、不记 Bug。"""
+    from . import risk_check
+
+    async def checks(k: Kernel):
+        data = await risk_check.collect(state, time.time())
+        return [Check(it["title"], True, it["detail"], level=it["status"], evidence=it["evidence"]) for it in data["items"]]
+
+    return Module(name="risk", title="风险检查", question="出站请求像不像正常浏览器，有没有滥用迹象",
+                  checks=checks, report_bugs=False, hard_note="关闭后不再体检；不影响任何处罚")
 
 
 def build(state, bug) -> Kernel:
     k = Kernel(state, bug)
-    for make in (observation, capacity, allocation, scheduling, anlas, autopilot_module, integrity, registration):
+    for make in (observation, capacity, allocation, scheduling, anlas, autopilot_module, integrity, risk, registration):
         k.register(make(state))
     return k

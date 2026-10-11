@@ -46,7 +46,7 @@ def _outbound_headers_item(state) -> dict:
     for ts in pool:
         h = default_browser_headers("x", profile=getattr(ts, "browser_profile", None))
         h.pop("Authorization", None)
-        evidence.append(f"Token #{ts.position}（{_mask_token(ts.token)}）：")
+        evidence.append(f"Token #{getattr(ts, 'position', '?')}（{_mask_token(getattr(ts, 'token', ''))}）：")
         evidence += [f"  {k}: {v}" for k, v in h.items()]
     client = getattr(nai, "_client", None)
     http2 = bool(getattr(nai, "_http2", False))
@@ -181,8 +181,8 @@ async def _burn_today_item(state, now: float) -> dict:
             counter = await state.db.get_upstream_counter(t.token_id, day)
             v5 = int(counter.get("v5", 0))
             total_v5 += v5
-            evidence.append(f"Token #{t.position}：今日图片 {int(counter.get('images', 0))} 张，V5 {v5} 张"
-                            + (f"（本账号日限 {t.v5_daily_limit}）" if t.v5_daily_limit else ""))
+            evidence.append(f"Token #{getattr(t, 'position', '?')}：今日图片 {int(counter.get('images', 0))} 张，V5 {v5} 张"
+                            + (f"（本账号日限 {t.v5_daily_limit}）" if getattr(t, "v5_daily_limit", 0) else ""))
     except Exception as exc:
         return _item("burn_today", "今日上游额度消耗（V5）", NA, f"读取失败：{exc}")
     cap = 0

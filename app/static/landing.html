@@ -271,6 +271,7 @@ footer{max-width:960px;margin:0 auto;padding:24px 16px 40px;text-align:center;co
 .lh-left{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-width:0}
 .head-key{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}
 .head-key code{font-family:var(--mono);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 9px;font-size:13px;white-space:nowrap}
+.invite-bind{margin-top:12px;padding:10px 12px;border:1px solid var(--accent);border-radius:10px;display:flex;gap:8px;align-items:flex-start;font-size:13.5px}
 .share-check{margin-top:12px;padding:12px;border:1px solid var(--warn);border-radius:10px;display:grid;gap:6px}
 .share-check b{display:flex;align-items:center;gap:6px;font-size:14px}
 .share-check-btns{display:grid;gap:6px}
@@ -608,7 +609,7 @@ function renderMe(d){
     }
     var retDays = d.image_retention_days != null ? d.image_retention_days : 3;
     var expBlock = retDays === 0
-      ? '<p class="muted sm">当前未开启原图备份功能（出图不保存原图）。</p>'
+      ? '<p class="muted sm">原图下载暂未开放。</p>'
       : (d.images_stored
         ? '<p class="muted sm">可以打包你最近 ' + retDays + ' 天的 ' + d.images_stored + ' 张原图，用来找回客户端里误删的图。这不是长期相册，请自己保存好；打包较重，每分钟限 1 次。</p>'
           + '<div class="me-export-btns"><a class="btn exp" href="/public/my-export?format=epub">' + icon('book') + '<span>EPUB 画册<small>一图一页，附提示词和参数，手机、电脑的图书 App 都能打开</small></span></a>'
@@ -618,6 +619,7 @@ function renderMe(d){
       + '<div><span>今日 V5（张）</span><b' + (lim5 === '不限' ? ' title="个人不限额度，仍受全站日上限约束"' : '') + '>' + (t.v5 || 0) + ' / ' + lim5 + '</b></div>'
       + '<div><span>出图状态</span><b>' + pos + '</b></div>'
       + '<div><span>有效期</span><b>' + (d.expires_at ? '至 ' + fmtDate(d.expires_at) : '长期') + '</b></div></div>'
+      + (d.invite_unbound ? '<div class="invite-bind">' + icon('info') + '<span>这是邀请 Key，还没绑定 Discord 账号。请在 Discord 的 <code>🔑｜领取key</code> 输入 <code>/register</code>，把这把 Key 粘贴到 <code>key</code> 一栏完成绑定。</span></div>' : '')
       + shareCheckHtml(d.share_check)
       + couponsHtml(d.coupons || [])
       + '<div class="me-export"><div class="me-export-h">' + icon('archive') + '作品备份<span class="beta">beta</span></div>'

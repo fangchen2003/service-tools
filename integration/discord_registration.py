@@ -8,7 +8,7 @@ import httpx
 COMMAND_GUILD = 1480185480048808009
 
 
-async def handle_register(interaction):
+async def handle_register(interaction, invite_key: str = ""):
     # This is the sole untrusted-user exception to Hermes's normal allowlist.
     guild = int(os.getenv("DISCORD_GUILD_ID") or COMMAND_GUILD)
     if getattr(interaction, "guild_id", None) != guild or not getattr(
@@ -32,7 +32,8 @@ async def handle_register(interaction):
                       "name": str(getattr(user, "name", "") or "")[:80],
                       "username": str(getattr(user, "name", "") or "")[:80],
                       "global_name": str(getattr(user, "global_name", "") or getattr(user, "display_name", "") or "")[:80],
-                      "avatar": str(getattr(getattr(user, "avatar", None), "key", "") or "")[:120]})
+                      "avatar": str(getattr(getattr(user, "avatar", None), "key", "") or "")[:120],
+                      "invite_key": invite_key[:80]})
         if response.status_code == 200:
             message = response.json().get("message") or "领取成功。"
         elif response.status_code == 403:
