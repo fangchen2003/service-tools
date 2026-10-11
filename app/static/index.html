@@ -788,7 +788,7 @@ td.note{min-width:220px}
         <!-- 总览 -->
         <section id="tab-ov">
           <div class="page-head"><div class="ttl"><h1>总览</h1></div>
-            <div class="tools"><button class="btn" id="econBtn" data-act="toggle-economy" title="节约模式：全站免费档统一 14 步 + Euler-a，V5 Full 改走 Medium 档（画质接近正常，省约 42% 额度、出图更快）；开 / 关都会在公告频道通知成员">节约模式</button><button class="btn rf" data-act="refresh-ov" aria-label="刷新" title="刷新"><span data-ic="refresh"></span><span class="lbl">刷新</span></button></div></div>
+            <div class="tools"><button class="btn" id="econBtn" data-act="toggle-economy" hidden title="节约模式：全站免费档统一 14 步 + Euler-a，V5 Full 改走 Medium 档（画质接近正常，省约 42% 额度、出图更快）；开 / 关都会在公告频道通知成员">节约模式</button><button class="btn rf" data-act="refresh-ov" aria-label="刷新" title="刷新"><span data-ic="refresh"></span><span class="lbl">刷新</span></button></div></div>
           <div class="card panel ovv" id="ovVerdict"><div class="skel" style="height:64px"></div></div>
           <div class="stats" id="ovCards"></div>
           <div class="card panel" id="scPanel">
@@ -2928,7 +2928,7 @@ async function loadGuard(){
   try{
     guardData = await api('/admin/api/guard');
     const v = guardData.values, f = guardData.fields;
-    $('#guardFields').innerHTML = Object.keys(f).map(k => `<div class="field"><label for="g_${k}">${esc(f[k].label)}</label>
+    $('#guardFields').innerHTML = Object.keys(f).filter(k => !GUARD_ALGO_OWNED.has(k)).map(k => `<div class="field"><label for="g_${k}">${esc(f[k].label)}</label>
       <input id="g_${k}" type="number" min="${f[k].min}" max="${f[k].max}" step="1" value="${esc(v[k])}"><div class="hint" title="默认 ${esc(f[k].default)}">${f[k].min}～${f[k].max}</div></div>`).join('');
     const acc = guardData.accounts.map(a => `账号 ${a.position}：今天 ${a.today}${v.account_daily_cap?' / '+v.account_daily_cap:''} 张，本小时 ${a.this_hour}${guardData.hourly_cap_now?' / '+guardData.hourly_cap_now:''} 张`).join('；');
     $('#fs-guard').textContent = `每小时 ${v.account_hourly_cap || '不限'} · 3 小时 ${v.account_3h_cap || '不限'} · 每天 ${v.account_daily_cap || '不限'} 张${v.daily_burst && v.account_daily_cap ? '，按时段放行（0 点先放 '+v.daily_burst+' 张，每小时补 '+Math.round(v.account_daily_cap/24)+' 张）' : ''}（每个上游账号）`;
@@ -3078,10 +3078,13 @@ async function saveAnlasPool(){
     toast('已保存并重算 Anlas 分配', 'ok'); loadAnlasPool();
   }catch(e){ toastErr(e); }
 }
+/* 由额度算法每天 0 点写入的字段：后台不让手动改（改了会在 0 点被覆盖，且当天会和「每人 N 张」打架） */
+const GUARD_ALGO_OWNED = new Set(['base_daily_images']);
 async function saveGuard(){
   try{
     const body = {};
     for(const k of Object.keys(guardData.fields)){
+      if(GUARD_ALGO_OWNED.has(k)) continue;
       const f = guardData.fields[k];
       body[k] = readNum('g_' + k, f.label, {min:f.min, max:f.max});
     }
