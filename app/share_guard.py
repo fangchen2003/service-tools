@@ -169,8 +169,9 @@ class ShareGuard:
 
     async def load(self) -> None:
         rows = await self.db._db.execute_fetchall(
-            "SELECT key_id, paused_until FROM share_state WHERE paused_until > ?", (time.time(),))
+            "SELECT key_id, paused_until, pause_reason FROM share_state WHERE paused_until > ?", (time.time(),))
         self.paused = {int(r[0]): float(r[1]) for r in rows}
+        self.pause_reasons = {int(r[0]): r[2] for r in rows if r[2]}
 
     def paused_until(self, key_id: int, now: Optional[float] = None) -> float:
         until = self.paused.get(int(key_id), 0.0)
@@ -190,6 +191,7 @@ class ShareGuard:
             return False
         s = await self._state(kid)
         s["paused_until"] = now + max(0.0, seconds)
+        s["pause_reason"] = reason
         await self._save(kid, s)
         self.paused[kid] = s["paused_until"]
         self.pause_reasons[kid] = reason
@@ -243,19 +245,21 @@ class ShareGuard:
     # ---------- 记账与处罚 ----------
     async def _state(self, key_id: int) -> dict[str, Any]:
         rows = await self.db._db.execute_fetchall(
-            "SELECT score, score_ts, strikes, paused_until, warned_ts, paused_ts FROM share_state WHERE key_id=?",
+            "SELECT score, score_ts, strikes, paused_until, warned_ts, paused_ts, pause_reason FROM share_state WHERE key_id=?",
             (key_id,))
         if not rows:
-            return {"score": 0.0, "score_ts": 0.0, "strikes": 0, "paused_until": 0.0, "warned_ts": 0.0, "paused_ts": 0.0}
+            return {"score": 0.0, "score_ts": 0.0, "strikes": 0, "paused_until": 0.0, "warned_ts": 0.0, "paused_ts": 0.0,
+                    "pause_reason": ""}
         r = rows[0]
         return {"score": float(r[0]), "score_ts": float(r[1]), "strikes": int(r[2]), "paused_until": float(r[3]),
-                "warned_ts": float(r[4]), "paused_ts": float(r[5])}
+                "warned_ts": float(r[4]), "paused_ts": float(r[5]), "pause_reason": r[6] or ""}
 
     async def _save(self, key_id: int, s: dict[str, Any]) -> None:
         await self.db._db.execute(
-            "INSERT OR REPLACE INTO share_state(key_id, score, score_ts, strikes, paused_until, warned_ts, paused_ts) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (key_id, s["score"], s["score_ts"], s["strikes"], s["paused_until"], s["warned_ts"], s["paused_ts"]))
+            "INSERT OR REPLACE INTO share_state(key_id, score, score_ts, strikes, paused_until, warned_ts, paused_ts, pause_reason) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (key_id, s["score"], s["score_ts"], s["strikes"], s["paused_until"], s["warned_ts"], s["paused_ts"],
+             s.get("pause_reason", "")))
 
     async def _evidence(self, key_id: int, kind: str, points: float, detail: str, now: float) -> None:
         await self.db._db.execute("INSERT INTO share_evidence(ts, key_id, kind, points, detail) VALUES (?,?,?,?,?)",
@@ -344,7 +348,9 @@ class ShareGuard:
                     and now - s["paused_ts"] >= P("share.pause_cooldown", PAUSE_COOLDOWN)):
                 action = "pause"
                 s["paused_until"], s["paused_ts"] = now + P("share.pause_seconds", PAUSE_SECONDS), now
+                s["pause_reason"] = ""
                 self.paused[kid] = s["paused_until"]
+                self.pause_reasons.pop(kid, None)
                 await self._evidence(kid, "action", 0, "暂停 24 小时", now)
                 if member:
                     await member(kid, f"检测到你的 Key 可能被多人使用（{why}），已暂停 24 小时，"
@@ -431,9 +437,16 @@ class ShareGuard:
         return await self._apply(key, [(kind, text)], now, **callbacks)
 
     async def clear(self, key_id: int) -> None:
-        """站长判定误判：清零分数、解除暂停、违规次数归零（证据保留）。"""
-        self.paused.pop(int(key_id), None)
-        await self.db._db.execute("DELETE FROM share_state WHERE key_id=?", (key_id,))
+        """站长判定误判：清零分数、解除防分享暂停、违规次数归零（证据保留）。
+        自动驾驶等非防分享的暂停（有 pause_reason）不是误判对象，保留到期。"""
+        kid, now = int(key_id), time.time()
+        s = await self._state(kid)
+        if s["pause_reason"] and s["paused_until"] > now:
+            await self._save(kid, {**s, "score": 0.0, "score_ts": now, "strikes": 0, "warned_ts": 0.0, "paused_ts": 0.0})
+        else:
+            self.paused.pop(kid, None)
+            self.pause_reasons.pop(kid, None)
+            await self.db._db.execute("DELETE FROM share_state WHERE key_id=?", (key_id,))
         await self._evidence(int(key_id), "action", 0, "站长清零（误判）", time.time())
         await self.db._db.commit()
 
