@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import hashlib
 import random
 import time
@@ -66,8 +65,6 @@ def default_browser_headers(token: Optional[str] = None, accept: str = "applicat
     return headers
 
 
-# 这次出图的算力权重：节约模式 14 步约是 28 步的一半，计 0.5 张；其余计 1 张。网关在派发前设置。
-IMAGE_COST_WEIGHT: contextvars.ContextVar[float] = contextvars.ContextVar("image_cost_weight", default=1.0)
 
 class UpstreamError(Exception):
     def __init__(self, status: int, message: str, *, billing_uncertain: bool = False):
@@ -408,12 +405,9 @@ class NaiClient:
                 ts.pending_v5 = max(0, ts.pending_v5 - 1)
 
     async def record_successful_images(self, ts: TokenState, image_count: int) -> None:
-        """按上游实际成功响应记录生成张数；失败、拒绝和限流不计入。
-        同时按算力折算（IMAGE_COST_WEIGHT，由网关按最终步数设置）记一份，账号每日上限按折算值判断。"""
+        """按上游实际成功响应记录生成张数；失败、拒绝和限流不计入。每张都按 1 张计（10-11 起不再折算）。"""
         if image_count > 0:
-            await self._db.bump_upstream_image_counter(
-                ts.token_id, self._day_fn(), image_count, IMAGE_COST_WEIGHT.get()
-            )
+            await self._db.bump_upstream_image_counter(ts.token_id, self._day_fn(), image_count)
 
     async def wait_for_token_image_slot(self, ts: TokenState) -> None:
         """每把上游 Token 各自保持图片请求间隔，不与其他 Token 共享计时。"""

@@ -78,45 +78,8 @@ async def test_run_applies_same_quota_to_auto_members_only(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_economy_mode_does_not_change_v5(tmp_path):
-    # 站长 10/10：「打折以后不搞了」——节约模式的 V5 走 Medium 每张计 1，额度不放大
-    from app import ops, site_flags
-    db = Database(str(tmp_path / "e.sqlite"))
-    await db.connect()
-    try:
-        k = await db.create_key({"name": "m", "token": "nai-m", "daily_images": 150, "daily_anlas": 0, "daily_v5": 0,
-                                 "monthly_anlas": 0, "daily_text_tokens": 0, "rpm": 10, "allow_anlas": False,
-                                 "allow_img2img": False, "exclude_global_v5": False, "image_model_scope": "all"})
-        pct = {"v": 98}
-
-        class Allow:
-            async def snapshot(self, pool):
-                return {"accounts": [{"percent": pct["v"], "recharge_per_day": 11.0}]}
-        st = SimpleNamespace(db=db, guard=Guard(db), announcer=None,
-                             nai=SimpleNamespace(pool=[SimpleNamespace(usable=True)], allowance=Allow()))
-        base = (await quota_algo.run(st))["v5"]
-        assert not base.get("economy")
-        assert await ops.set_economy(db, True, st)                      # 开启时立刻重算
-        on = json.loads(await db.get_setting(quota_algo.STATE_KEY, "{}"))["v5"]
-        assert not on.get("economy") and on["each"] == base["each"] and on["global"] == base["global"]
-        assert (await db.get_key(k["id"]))["daily_v5"] == on["each"]
-        assert int(await db.get_setting("global_daily_v5", 0)) == on["global"]
-        assert "节约模式 ×" not in await db.get_setting(quota_algo.NOTICE_KEY, "")
-        pct["v"] = 30                                                   # 账号剩余跌破 40%：安全优先，不放大
-        assert not (await quota_algo.run(st))["v5"].get("economy")
-        pct["v"] = 98
-        await ops.set_economy(db, False, st)                            # 关掉：回到当天的基础方案（上面收紧过就是收紧后的值）
-        day_plan = json.loads(await db.get_setting(quota_algo.V5_DAY_KEY, "{}"))["plan"]
-        assert (await db.get_key(k["id"]))["daily_v5"] == day_plan["each"] and not day_plan.get("economy")
-        assert await site_flags.get(db, site_flags.ECONOMY) is False
-    finally:
-        await db.close()
-
-
-@pytest.mark.asyncio
 async def test_manual_v5_is_exact_and_pinned_rows_are_cleared(tmp_path):
     # 2026-10-11：手动 Key 填多少就是多少；旧的 v5_pinned（「不低于普通成员」）启动时清掉，算法不再改手动 Key
-    from app import ops
     db = Database(str(tmp_path / "p.sqlite"))
     await db.connect()
     try:
@@ -137,8 +100,6 @@ async def test_manual_v5_is_exact_and_pinned_rows_are_cleared(tmp_path):
                              nai=SimpleNamespace(pool=[SimpleNamespace(usable=True)], allowance=Allow()))
         each = (await quota_algo.run(st))["v5"]["each"]
         assert each > 5 and (await db.get_key(low["id"]))["daily_v5"] == 5   # 不再被抬到普通成员的值
-        await ops.set_economy(db, True, st)
-        assert (await db.get_key(low["id"]))["daily_v5"] == 5
     finally:
         await db.close()
 

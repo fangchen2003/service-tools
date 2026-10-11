@@ -4,7 +4,7 @@
 ━━ 模式 ━━
 每条规则独立设置 autopilot_<规则> = observe（只记录「如果是我会怎么做」）/ enforce（真的执行）/ off。
 没设过的默认 observe。下面每条都写明「能不能执行」——有的规则只给建议，设成 enforce 也不会动。
-（2026-10-10 线上：slots、breaker、key_guard 为 enforce；economy 为 observe。
+（2026-10-10 线上：slots、breaker、key_guard 为 enforce。节约模式 10-11 停用、代码已删除。
   「闲置回收天数」「每日重置时间」两条只给建议、从不执行，已删除——回收天数固定为 KEY_INACTIVITY_DELETE_DAYS，每日重置是北京时间 0 点。）
 
 ━━ 规则 ━━
@@ -19,10 +19,7 @@
    另两条只观察、不执行：24 小时内「10 分钟内网段来回切换」≥ 2 次（建议暂停 24 小时）；
    「≥ 3 种客户端」且「近 24 小时 ≥ 20 个小时在用」（建议重置 Key）。重置会私信本人，申诉期内不接。
    没有逐级加重，也不私信——暂停原因在成员请求被拒时直接显示。
-4. economy 节约模式 —— 可执行
-   最近 15 分钟「排队的人太多」≥ 8 次 → 开（全站免费档 14 步 + Euler-a）；30 分钟 ≤ 1 次 → 关。
-   两次切换至少隔 1 小时；开关都经 ops.set_economy 在公告频道通知成员。
-5. alt_link 疑似同一人（小号）—— 只观察，没有执行路径（处罚由站长决定）
+4. alt_link 疑似同一人（小号）—— 只观察，没有执行路径（处罚由站长决定）
    用完一把马上换另一把、来回交替、同网段同时出图、少见网段 / 客户端相同，打分 ≥ 50 且有行为信号才列出（alt_guard.py）。
 """
 from __future__ import annotations
@@ -97,23 +94,6 @@ def key_guard_rule(alternate: int, clients: int, allday: int, rejects_1h: int) -
     return None
 
 
-ECON_ON_KEYS = 3           # 且来自至少这么多把不同的 Key（审查 P2：防止一个客户端重试就把全站切到节约模式）
-ECON_ON_REJECTS = 8        # 最近 15 分钟「排队的人太多」≥ 这么多次 → 拥挤，开节约模式
-ECON_OFF_REJECTS = 1       # 最近 30 分钟 ≤ 这么多次 → 不拥挤，关节约模式
-ECON_DWELL = 3600          # 两次切换至少间隔 1 小时，避免公告刷屏
-
-
-def economy_rule(on_now: bool, queue_rejects_15m: int, queue_rejects_30m: int,
-                 keys_15m: int = ECON_ON_KEYS) -> tuple[bool, str]:
-    """拥挤（排队被拒多）时建议开节约模式让更多人出到图；持续空闲时建议关掉恢复高质量。带滞回。
-    开启还要求被拒的来自至少 ECON_ON_KEYS 把不同的 Key：一个客户端连续重试刷出来的拒绝不算全站拥挤。"""
-    if not on_now and queue_rejects_15m >= ECON_ON_REJECTS and keys_15m < ECON_ON_KEYS:
-        return False, f"最近 15 分钟排队被拒 {queue_rejects_15m} 次，但只来自 {keys_15m} 把 Key：不算全站拥挤"
-    if not on_now and queue_rejects_15m >= ECON_ON_REJECTS:
-        return True, f"最近 15 分钟 {queue_rejects_15m} 次因排队拥挤被拒：建议开节约模式（14 步）多服务些人"
-    if on_now and queue_rejects_30m <= ECON_OFF_REJECTS:
-        return False, f"最近 30 分钟排队拥挤仅 {queue_rejects_30m} 次：建议关节约模式，恢复高质量"
-    return on_now, f"排队拥挤 15m={queue_rejects_15m}：保持{'节约' if on_now else '正常'}模式"
 
 
 async def run(state, registrar=None, now: Optional[float] = None) -> dict[str, Any]:
@@ -215,24 +195,6 @@ async def run(state, registrar=None, now: Optional[float] = None) -> dict[str, A
                                          "你的 Key 短时间内被大量拒绝，疑似客户端在反复重试，已暂停 1 小时", now):
                     await log_action(db, "系统", "自动驾驶：Key 限流", str(d["name"]), d["why"])
                     d["applied"] = True
-
-    # 6 节约模式：拥挤（排队被拒多）时统一 14 步让更多人出到图，空闲时恢复高质量。切换都会公告。
-    econ_now = await site_flags.get(db, site_flags.ECONOMY)
-    r15 = (await _q(db, "SELECT COUNT(*), COUNT(DISTINCT key_id) FROM usage_log WHERE ts>=? AND status='rejected' "
-                        f"AND reason='{reasons.QUEUE_FULL}'", now - 900))[0]
-    qr15, keys15 = int(r15[0] or 0), int(r15[1] or 0)
-    qr30 = int((await _q(db, "SELECT COUNT(*) FROM usage_log WHERE ts>=? AND status='rejected' "
-                             f"AND reason='{reasons.QUEUE_FULL}'", now - 1800))[0][0] or 0)
-    econ_target, econ_why = economy_rule(econ_now, qr15, qr30, keys15)
-    out["rules"]["economy"] = {"mode": await _mode(db, "economy"), "value": econ_target, "why": econ_why}
-    # 2026-10-11 节约模式停用：自动驾驶最多只会把它关掉，不会再打开
-    if econ_target != econ_now and out["rules"]["economy"]["mode"] == "enforce" and not econ_target:
-        last_flip = float(await db.get_setting("autopilot_economy_at", 0) or 0)
-        if now - last_flip >= ECON_DWELL:                 # 间隔 ≥1 小时，避免公告刷屏
-            from . import ops
-            if await ops.set_economy(db, econ_target, state, by="自动驾驶"):
-                await db.set_setting("autopilot_economy_at", now)
-                out["rules"]["economy"]["applied"] = True
 
     # 观察模式：只记录；有「会执行的动作」时写操作日志，方便第二天审核（已执行的规则各自单独记日志，这里不重复）
     notable = [f"{r}：{v['why']}" for r, v in out["rules"].items()

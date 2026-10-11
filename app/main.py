@@ -36,7 +36,7 @@ from . import reasons
 from .image_streaming import ImageStreamResponse
 from .image_tools import prepare_tool, validate_result, MAX_RESPONSE_BYTES
 from .image_payload import read_image_body
-from .nai import IMAGE_COST_WEIGHT, UpstreamError, _wait_cleanup
+from .nai import UpstreamError, _wait_cleanup
 from .policy import (
     normalize_image_request,
     upstream_parameter_problem,
@@ -48,7 +48,6 @@ from .policy import (
     is_v5_medium,
     fill_v4_prompt,
     medium_normalize,
-    to_medium,
     legacy_normal_free_eligible,
     validate_image_references,
     validate_vibe_encoding,
@@ -59,7 +58,7 @@ from .policy import (
 )
 from .state import GateState
 from . import features
-from .policy import ECONOMY_STEPS, REFERENCE_FIELDS, economy_trim
+from .policy import REFERENCE_FIELDS
 from . import status_stats, quota_algo
 from .key_sources import RETENTION_SECONDS as KEY_SOURCE_RETENTION
 from .action_log import RETENTION_DAYS as ADMIN_ACTION_RETENTION_DAYS, log_action
@@ -184,7 +183,7 @@ async def lifespan(app: FastAPI):
         await STATE.db.close()
 
 
-__version__ = "2.19.3"
+__version__ = "2.19.4"
 
 app = FastAPI(title="猫头鹰公益站", version=__version__, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
@@ -1259,32 +1258,23 @@ async def _generate_image(request: Request, *, streaming: bool):
 
     # 免费档钳制：只对没有 Anlas 权限的 Key 生效；有 Anlas（含自动分配）的 Key 可以用超规格参数，按 Anlas 扣
     if STATE.settings.safe_clamp and not key["is_admin"] and not key["allow_anlas"]:
-        economy_on = await site_flags.get(STATE.db, site_flags.ECONOMY)
         try:
             body, notes, problem = clamp_image_params(
                 body,
                 max_pixels=STATE.settings.max_pixels,
                 max_steps=STATE.settings.max_steps,
                 allow_img2img=True,  # 权限已在上面预检
-                economy=economy_on,
             )
         except (TypeError, ValueError, OverflowError):
             raise err(400, "图片参数无效") from None
         if problem:
             record(key, "image", model, "rejected", detail=problem)
             raise err(400, problem)
-    elif not key["is_admin"] and key["allow_anlas"] and _anlas_auto(key) \
-            and await site_flags.get(STATE.db, site_flags.ECONOMY):
-        body, notes = economy_trim(body)      # 算法分到的 Anlas 不应让人在节约模式下还按 28 步出图
     else:
         notes = []
     body, more = fill_v4_prompt(body)          # V4 / V4.5 缺结构化提示词时上游回 500：照官方网页端补上
     notes = list(notes) + more
     if model_tier == "v5":
-        # 节约模式下 V5 Full 改走官方 Medium 档（不再是「High 压到 14 步」：用量差不多，但画质差很多，10/10 修正）
-        if not key["is_admin"] and await site_flags.get(STATE.db, site_flags.ECONOMY):
-            body, more = to_medium(body)
-            notes = list(notes) + more
         if is_v5_medium(str(body.get("model", ""))):
             body, more = medium_normalize(body)     # 成员自己选 Medium 时也按官方规则整理，免得上游拒绝
             notes = list(notes) + more
@@ -1321,13 +1311,8 @@ async def _generate_image(request: Request, *, streaming: bool):
         f"est={est['anlas']}A" if est["anlas"] else "",
         f"V5额度+{est['v5']}" if est["v5"] else "",
     ) if part) or "免费"
-    # 尺寸 / 步数 / 费用始终在前：节约模式等钳制说明只追加在后面，不能顶掉记账信息
+    # 尺寸 / 步数 / 费用始终在前：钳制说明只追加在后面，不能顶掉记账信息
     detail = "; ".join([f"{p.get('width')}x{p.get('height')}/{p.get('steps')}step {cost}", *notes])
-    # 不打折（2026-10-11 站长）：每张都按 1 张计入账号每日上限。原来 ≤14 步计 0.5 张，节约模式关了也在生效
-    try:
-        IMAGE_COST_WEIGHT.set(1.0)
-    except (TypeError, ValueError):
-        IMAGE_COST_WEIGHT.set(1.0)
 
     reservation = None
 
@@ -2066,7 +2051,6 @@ async def _public_status_body(request: Request) -> dict:
         "audit_notice": await audit_disclosure(STATE.db, SETTINGS),
         # 网页 Discord 登录：Discord 应用审核期间 OAuth 被封，暂停时首页改为提示用 /register、/quota（站长可随时改回 0）
         "web_login": not await site_flags.get(STATE.db, site_flags.WEB_LOGIN_PAUSED),   # 默认暂停（fail-closed）
-        "economy": await site_flags.get(STATE.db, site_flags.ECONOMY),
         "algo_notice": (await site_flags.get(STATE.db, site_flags.ALGO_NOTICE))[:300],
         "discord_invite": SETTINGS.discord_invite_url,
         "key_inactivity_delete_days": SETTINGS.key_inactivity_delete_days,

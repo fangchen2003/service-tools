@@ -294,14 +294,6 @@ async def _members(db) -> list[int]:
     return [r[0] for r in rows]
 
 
-async def economy_multiplier(db, pct: Optional[float]) -> float:
-    """节约模式不再放大 V5 额度，固定为 1。
-
-    原来节约模式下 V5 额度 ×2（28 ÷ 14 步）。站长 10/10 定了「打折以后不搞了，影响参数」：
-    节约模式的 V5 走 Medium，每张按 1 张计。×2 是遗留，22:58 实际触发过一次（18 → 36），这里移除。"""
-    return 1.0
-
-
 async def _active_v5(db, days: int, now: float) -> int:
     """最近 days 天用过 V5 的成员数（不含测试 / 站长 Key）。"""
     since = [(datetime.fromtimestamp(now) - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]
@@ -475,11 +467,6 @@ async def run(state, now: Optional[float] = None) -> dict[str, Any]:
     if pct is not None:
         v5["percent"] = pct
     v5["rate_check"] = rate_info          # 实时的核对结果（方案一天定一次，核对状态每 10 分钟更新）
-    mult = await economy_multiplier(db, pct)
-    if mult > 1:
-        v5.update(base_each=v5["each"], base_global=v5["global"], economy=mult,
-                  each=min(int(cfg["quota_v5_max"] * mult), int(v5["each"] * mult)),
-                  **{"global": int(v5["global"] * mult)})
 
     # ---- 空闲借用（账号快满时才开放）----
     since7 = time.mktime(time.strptime(today, "%Y-%m-%d")) - 6 * 86400
@@ -509,8 +496,7 @@ async def run(state, now: Optional[float] = None) -> dict[str, Any]:
         await guard.save({"base_daily_images": b})
     await db.set_settings_bulk(settings)
     # 首页提醒（站长要求：算法调整只在网站首页提示，不发 Discord）
-    note = f"今日额度（算法自动分配，所有人一样）：V4.5 每人 {a} 张 · V5 每人 {v5['each']} 张" + (
-        f"（节约模式 ×{v5['economy']:g}）" if v5.get("economy") else "")
+    note = f"今日额度（算法自动分配，所有人一样）：V4.5 每人 {a} 张 · V5 每人 {v5['each']} 张"
     if review and review["from"] != review["to"]:
         note = f"{today[5:].replace('-', '月')}日 算法调整：" + "；".join(review["reasons"]) + "。" + note
     await db.set_setting(NOTICE_KEY, note)

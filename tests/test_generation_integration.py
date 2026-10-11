@@ -632,69 +632,6 @@ async def test_cancelled_semaphore_wait_restores_key_slot_and_queue_counts(state
 
 
 @pytest.mark.asyncio
-async def test_economy_log_detail_keeps_size_steps_and_cost(state):
-    # 线上 15:06 起节约模式的日志只剩「steps 已钳制到 14」，尺寸 / 步数 / 费用全丢了
-    state.db.keys["fixture-1"]["allow_anlas"] = False
-    state.db.kv = {"economy_mode": "on"}
-    ok = await post("/ai/generate-image", image_body(width=832, height=1216, sampler="k_euler"))
-    assert ok.status_code == 200
-    detail = state.db.logs[-1][1]["detail"]
-    assert detail.startswith("832x1216/14step 免费") and "钳制到 14" in detail and "k_euler_ancestral" in detail
-
-
-@pytest.mark.asyncio
-async def test_economy_images_carry_half_cost_weight_to_upstream(state):
-    # 不打折（2026-10-11）：节约模式 14 步的图也按 1 张计入账号每日上限
-    from app.nai import IMAGE_COST_WEIGHT
-    seen = []
-    orig = state.nai.request
-
-    async def spy(*a, **kw):
-        seen.append(IMAGE_COST_WEIGHT.get())
-        return await orig(*a, **kw)
-    state.nai.request = spy
-    state.db.keys["fixture-1"]["allow_anlas"] = False
-    assert (await post("/ai/generate-image", image_body())).status_code == 200
-    state.db.kv = {"economy_mode": "on"}
-    assert (await post("/ai/generate-image", image_body())).status_code == 200
-    assert seen == [1.0, 1.0]
-
-
-@pytest.mark.asyncio
-async def test_economy_trims_steps_for_auto_anlas_keys_but_not_manual(state):
-    # 线上 10/10：吉吉子（算法分到 Anlas）在节约模式下仍按 28 步出图；手动给 Anlas 的 Key 不受影响
-    state.db.kv = {"economy_mode": "on"}
-    key = state.db.keys["fixture-1"]
-    key.update(allow_anlas=True, anlas_auto=1)
-    assert (await post("/ai/generate-image", image_body(width=1216, height=832, steps=28))).status_code == 200
-    assert state.db.logs[-1][1]["detail"].startswith("1216x832/14step")
-    key.update(anlas_auto=-1)
-    assert (await post("/ai/generate-image", image_body(width=1216, height=832, steps=28))).status_code == 200
-    assert state.db.logs[-1][1]["detail"].startswith("1216x832/28step")
-
-
-@pytest.mark.asyncio
-async def test_economy_routes_v5_full_to_medium(state):
-    # 节约模式下 V5 Full 走官方 Medium 档；Medium 和 High 一样每张记 1 张 V5（不打折）
-    sent = []
-    orig = state.nai.request
-
-    async def spy(*a, **kw):
-        sent.extend(x.get("model") for x in list(a) + list(kw.values()) if isinstance(x, dict) and "model" in x)
-        return await orig(*a, **kw)
-    state.nai.request = spy
-    state.db.keys["fixture-1"]["allow_anlas"] = False
-    state.db.kv = {"economy_mode": "on"}
-    v5 = image_body(width=832, height=1216, negative_prompt="hat") | {"model": "nai-diffusion-5-full"}
-    assert (await post("/ai/generate-image", v5)).status_code == 200
-    assert sent[-1] == "nai-diffusion-5-full-medium"
-    state.db.kv = {}
-    assert (await post("/ai/generate-image", v5)).status_code == 200
-    assert sent[-1] == "nai-diffusion-5-full"                     # 关掉节约模式就按成员选的 High 出图
-    assert not hasattr(main, "_medium_v5_units")
-
-
-@pytest.mark.asyncio
 async def test_status_code_distribution_counts_member_api(state):
     # 后台「状态码分布」：成员接口每个响应按状态码计数（Key 错误 401、成功 200），后台路径不算
     from app import status_stats
@@ -745,7 +682,6 @@ async def test_extreme_bracket_and_weight_preflight_blocks_without_dispatch(stat
     body["input"] = "1girl, [[[[[[[[artist:xxx]]]]]]]], best quality"
     resp = await post("/ai/generate-image", body)
     assert resp.status_code == 200
-
 
 
 @pytest.mark.asyncio
