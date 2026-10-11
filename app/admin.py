@@ -28,7 +28,7 @@ from .action_log import ADMIN_ACTIONS, log_action, summarize
 from . import features as feature_defs
 from . import token_store
 from . import ops
-from .audit import audit_image_days
+from .audit import audit_image_cap_mb, audit_image_days
 from .policy import gen_key
 from .body import read_json_body
 from .allowance import SETTING, read_alert_threshold
@@ -1568,13 +1568,28 @@ async def server_status(request: Request):
     return {
         "alerts": {"configured": st.alerter.configured, "sent": st.alerter.sent},
         "audit": {**dict(zip(("prompts", "thumbs", "retention_days"), await ops.audit_flags(st.db, cfg))),
-                  "image_retention_days": await audit_image_days(st.db)},
+                  "image_retention_days": await audit_image_days(st.db),
+                  "image_cap_mb": await audit_image_cap_mb(st.db), "image_bytes": await st.db.audit_image_bytes(),
+                  "image_cap_mb": await audit_image_cap_mb(st.db), "image_bytes": await st.db.audit_image_bytes()},
         "upstream": st.upstream_health(),
         "protection": {"auth_fail_max": cfg.auth_fail_max, "auth_fail_window": cfg.auth_fail_window,
                        "auth_block_seconds": cfg.auth_block_seconds,
                        "login_max_attempts": cfg.login_max_attempts},
         "disk": {"free_mb": usage.free // 2**20, "total_mb": usage.total // 2**20},
     }
+
+
+@router.post("/audit/purge-images")
+async def audit_purge_images(request: Request):
+    """站长手动清空服务器上的全部原图（只删原图，提示词和参数照留）。必须带 {"confirm": "清空"}。"""
+    require_admin(request)
+    body = await read_json_body(request)
+    if body.get("confirm") != "清空":
+        raise HTTPException(422, "需要 confirm=清空")
+    st = request.app.state.gate
+    n = await st.db.purge_audit_images_before_id(2 ** 62)
+    await log_action(st.db, "站长", "清空原图", "", f"{n} 张")
+    return {"ok": True, "purged": n}
 
 
 @router.post("/alerts/test")

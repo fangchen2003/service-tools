@@ -44,7 +44,8 @@ from .guard import FIELDS as _GUARD  # noqa: E402  保底张数的默认值和�
 GUARD_BASE = Spec("guard_base_daily_images", "int", _GUARD["base_daily_images"][0], "guard（注册私信也读）",
                   "V4.5 每人每天保底张数", _GUARD["base_daily_images"][1], _GUARD["base_daily_images"][2])
 ALGO_NOTICE = Spec("algo_notice", "str", "", "quota_algo → 首页", "首页显示的今日额度说明")
-IMAGE_RETENTION = Spec("audit_image_retention_days", "int", 3, "audit", "原图保留天数（0 = 不保存原图）", 0, 365)
+IMAGE_RETENTION = Spec("audit_image_retention_days", "int", 3, "audit", "（已停用，2026-10-11 起原图按容量上限清理）", 0, 365)
+IMAGE_CAP_MB = Spec("audit_image_cap_mb", "int", 8192, "audit", "原图占用上限（MB）：超过后自动删掉最旧的原图；0 = 不限", 0, 500_000)
 SHARE_MODE = Spec("share_guard_mode", "choice", "observe", "share_guard", "防分享：enforce 处罚 / observe 只记录 / off",
                   choices=("enforce", "observe", "off"))
 
@@ -53,7 +54,7 @@ WAITLIST = Spec("waitlist_enabled", "flag", False, "registration",
 MEMBER_SWEEP = Spec("member_sweep", "flag", True, "registration", "退群回收：每人每天核对一次是否还在服务器，不在就删 Key")
 
 ALL = (WAITLIST, MEMBER_SWEEP, WEB_LOGIN_PAUSED, ECONOMY, DM_ENABLED, WAITLIST_DM, ISSUE_HOURLY_CAP, REGISTER_OPEN,
-       GLOBAL_DAILY_V5, GLOBAL_MONTHLY_ANLAS, GUARD_BASE, ALGO_NOTICE, IMAGE_RETENTION, SHARE_MODE)
+       GLOBAL_DAILY_V5, GLOBAL_MONTHLY_ANLAS, GUARD_BASE, ALGO_NOTICE, IMAGE_RETENTION, IMAGE_CAP_MB, SHARE_MODE)
 
 
 def default_of(spec: Spec, settings=None) -> Any:
