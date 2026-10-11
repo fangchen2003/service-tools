@@ -875,7 +875,7 @@ td.note{min-width:220px}
         <section id="tab-members" hidden>
           <div class="page-head">
             <div class="tools">
-              <button class="btn primary" data-act="new-key"><span data-ic="plus"></span>新建 Key</button></div></div>
+              <button class="btn" data-act="new-invite"><span data-ic="plus"></span>新建邀请 Key</button><button class="btn primary" data-act="new-key"><span data-ic="plus"></span>新建 Key</button></div></div>
           <div class="mtools">
             <div class="search"><span data-ic="search"></span><input id="memberSearch" type="search" placeholder="搜索名称、Discord ID、标签或备注" aria-label="搜索成员"></div>
             <div class="chips-filter" id="memberFilter" role="group" aria-label="筛选成员"></div>
@@ -1746,7 +1746,7 @@ async function loadStatusCodes(fresh = true){
   document.querySelectorAll('[data-scv]').forEach(b => b.classList.toggle('on', b.dataset.scv === scView));
   const hours = scHours, seq = ++scSeq;
   if(scCache[hours]) renderStatusCodes(scCache[hours]);
-  if(!fresh && scCache[hours]) return;
+  if(!fresh && scCache[hours]){ $('#scList').classList.remove('busy'); return; }
   $('#scList').classList.add('busy');
   try{
     const d = await api('/admin/api/status-codes?hours=' + hours);
@@ -3144,6 +3144,12 @@ document.addEventListener('click', ev=>{
     case 'member-del': el.closest('details')?.removeAttribute('open'); memberDelete(id, false); break;
     case 'member-ban': el.closest('details')?.removeAttribute('open'); memberDelete(id, true); break;
     case 'new-key': openCreate(); break;
+    case 'new-invite':
+      api('/admin/api/keys/invite', {method:'POST', body:'{}'}).then(d => {
+        refreshAfterMemberChange();
+        showKey(`${d.key.name} 已创建`, '发给对方，让他在 Discord 用 /register 并把这把 Key 填进 key 一栏完成绑定：', d.key.token);
+      }).catch(toastErr);
+      break;
     case 'mx-toggle': toggleMemberPanel(id); break;
     case 'edit-key': openEdit(id); break;
     case 'close-modal': closeModal(); break;

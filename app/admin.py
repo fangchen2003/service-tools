@@ -433,6 +433,39 @@ async def _new_key_features(request: Request, body: dict):
     return feature_defs.dump(reg.get("features") or ["image"])
 
 
+@router.post("/keys/invite")
+async def create_invite_key(request: Request):
+    """一键新建邀请 Key（10-11 站长）：自动编号「邀请-N」、打「邀请」标签、额度交给算法，其余和 /register 发的一样。
+    成员拿到后在 Discord 用 /register 填这把 Key 完成绑定，后台自动认出是谁。"""
+    require_admin(request)
+    import re as _re
+    from .database import INVITE_TAG
+    from .policy import gen_key
+    st = request.app.state.gate
+    reg = getattr(request.app.state, "registrar", None)
+    cfg = await reg.settings() if reg is not None else {"daily_images": st.settings.default_daily_images,
+                                                        "daily_v5": st.settings.default_daily_v5, "features": None,
+                                                        "image_scope": "all", "expires_days": 30}
+    nums = [int(m.group(1)) for (n,) in await st.db._db.execute_fetchall("SELECT name FROM api_keys")
+            if (m := _re.match(r"邀请-(\d+)", n or ""))]
+    name = f"邀请-{max(nums, default=0) + 1}"
+    row = await st.db.create_key({
+        "name": name, "token": gen_key("nai"),
+        "daily_images": cfg["daily_images"], "daily_v5": cfg["daily_v5"],
+        "features": feature_defs.dump(cfg["features"]) if cfg["features"] is not None else None,
+        "daily_anlas": 0, "monthly_anlas": 0, "daily_text_tokens": 0, "rpm": st.settings.default_rpm,
+        "allow_anlas": False, "allow_img2img": False, "exclude_global_v5": False,
+        "image_model_scope": cfg["image_scope"],
+        "expires_at": (time.time() + cfg["expires_days"] * 86400) if cfg["expires_days"] > 0 else None,
+    })
+    await st.db._db.execute(
+        "INSERT INTO key_tags(key_id, tag, note, by, ts) VALUES (?,?,?,?,?)",
+        (row["id"], INVITE_TAG, "站长发的邀请 Key：成员用 /register 填它完成绑定；只由站长手动删除", "站长", time.time()))
+    await st.db._db.commit()
+    await log_action(st.db, "站长", "新建邀请 Key", name)
+    return {"key": _key_json(await st.db.get_key(row["id"]), await st.db.get_counter(row["id"], st.day()), 0)}
+
+
 @router.post("/keys")
 async def create_key(request: Request):
     require_admin(request)

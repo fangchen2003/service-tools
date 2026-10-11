@@ -27,8 +27,14 @@ REASK_AFTER = 7 * 86400    # 回答过以后，新的检测记录要晚于回答
 NETS_ALERT = 3             # 24 小时内 ≥ 3 个网段也算异常（和后台成员页的提示一致）
 
 
+_READY: set[int] = set()      # 已建表的连接（executescript 会隐式提交，不能每次请求都跑）
+
+
 async def ensure(db) -> None:
+    if id(db._db) in _READY:
+        return
     await db._db.executescript(SCHEMA)
+    _READY.add(id(db._db))
 
 
 async def _flagged_at(db, key_id: int, now: float) -> float:
@@ -54,16 +60,21 @@ async def pending(db, key_id: int, now: Optional[float] = None) -> bool:
     return not row or flagged > float(row[0][0]) + REASK_AFTER
 
 
-async def record(db, key_id: int, answer: str, note: str = "", now: Optional[float] = None) -> None:
+async def record(db, key_id: int, answer: str, note: str = "", now: Optional[float] = None) -> bool:
+    """记下回答；和上次一样则不重写，返回是否有变化（调用方据此决定要不要写操作日志）。"""
     if answer not in ANSWERS:
         raise ValueError("answer")
     now = time.time() if now is None else now
     await ensure(db)
+    prev = await db._db.execute_fetchall("SELECT answer, note FROM share_confirm WHERE key_id=?", (key_id,))
+    if prev and prev[0][0] == answer and prev[0][1] == note.strip()[:200]:
+        return False
     flagged = await _flagged_at(db, key_id, now)
     await db._db.execute(
         "INSERT OR REPLACE INTO share_confirm(key_id, answer, note, answered_at, flagged_at) VALUES (?,?,?,?,?)",
         (key_id, answer, note.strip()[:200], now, flagged))
     await db._db.commit()
+    return True
 
 
 async def answers(db) -> dict[int, dict[str, Any]]:

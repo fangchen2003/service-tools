@@ -5,10 +5,11 @@
 from __future__ import annotations
 
 import os
+import time
 
 import discord
 
-TOKEN = os.environ["WARDEN_BOT_TOKEN"]
+TOKEN = os.environ.get("WARDEN_BOT_TOKEN", "").strip()
 
 
 class Warden(discord.Client):
@@ -19,4 +20,8 @@ class Warden(discord.Client):
 
 
 if __name__ == "__main__":
+    if not TOKEN:                       # 没配 Token 时不要反复登录失败重启（会被 Discord 限流）
+        print("[warden] WARDEN_BOT_TOKEN 未设置，不启动", flush=True)
+        while True:
+            time.sleep(3600)
     Warden(intents=discord.Intents.none()).run(TOKEN, log_handler=None)

@@ -25,6 +25,7 @@ class IssueRequest(BaseModel):
     username: str = ""      # 直发 Key 用：机器人从 interaction 带来的用户名 / 显示名 / 头像
     global_name: str = ""
     avatar: str = ""
+    invite_key: str = ""    # /register 的可选项：填了邀请 Key 就绑定，不发新 Key
 
 
 def _service(request: Request):
@@ -229,10 +230,14 @@ async def issue(request: Request, body: IssueRequest):
     try:
         result = await service.issue_direct(
             body.discord_id, body.guild_id, username=body.username[:80],
-            global_name=body.global_name[:80], avatar=body.avatar[:120], name=body.name[:80])
+            global_name=body.global_name[:80], avatar=body.avatar[:120], name=body.name[:80],
+            invite_key=body.invite_key[:80])
     except RegistrationError as exc:
         await _log_bot(request, body.discord_id, "领取 Key 失败（/register）", "", str(exc)[:200])
         raise HTTPException(403, str(exc)) from exc
+    if body.invite_key:
+        await _log_bot(request, body.discord_id, "绑定邀请 Key（/register）", f"Key #{result.get('key_id')}")
+        return JSONResponse({"message": result["message"]}, headers={"Cache-Control": "no-store"})
     await _log_bot(request, body.discord_id, "领取 Key（/register 直发）", "")
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
@@ -474,6 +479,11 @@ async def public_me(request: Request):
                    images_stored=await gate.db.audit_image_count(key["id"], since=_time.time() - img_days * 86400),
                    image_retention_days=img_days)
         try:
+            if await service.is_unbound_invite(key["id"]):
+                out["invite_unbound"] = True
+        except Exception:
+            pass
+        try:
             from . import share_confirm
             if await share_confirm.pending(gate.db, key["id"]):
                 out["share_check"] = {"options": share_confirm.ANSWERS}
@@ -520,8 +530,8 @@ async def share_confirm_answer(request: Request):
     if answer not in share_confirm.ANSWERS:
         raise HTTPException(422, "请选一个选项")
     gate = request.app.state.gate
-    await share_confirm.record(gate.db, key["id"], answer, str((body or {}).get("note") or ""))
-    await log_action(gate.db, f"Discord:{discord_id}", "成员确认网络情况", key["name"], share_confirm.ANSWERS[answer])
+    if await share_confirm.record(gate.db, key["id"], answer, str((body or {}).get("note") or "")):
+        await log_action(gate.db, f"Discord:{discord_id}", "成员确认网络情况", key["name"], share_confirm.ANSWERS[answer])
     return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
 
 

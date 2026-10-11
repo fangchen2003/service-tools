@@ -437,8 +437,46 @@ class RegistrationService:
             "SELECT COUNT(*) FROM discord_registrations WHERE created_at>=?", (now - 3600,))
         return bool(rows) and int(rows[0][0]) >= cap
 
+    async def is_unbound_invite(self, key_id: int) -> bool:
+        """站长发的邀请 Key（带「邀请」标签）还没绑定 Discord 账号。"""
+        from .database import INVITE_TAG
+        rows = await self.db._db.execute_fetchall(
+            "SELECT 1 FROM key_tags WHERE key_id=? AND tag=? "
+            "AND NOT EXISTS (SELECT 1 FROM discord_registrations WHERE key_id=?)", (key_id, INVITE_TAG, key_id))
+        return bool(rows)
+
+    async def bind_invite(self, user_id: str, token: str, user: dict) -> dict:
+        """/register 时填了邀请 Key：把这把 Key 绑定到发命令的 Discord 账号（10-11 站长：不用后台手动认人）。
+        邀请是站长预先放行的，所以不受「领 Key 开关 / 名额 / 每小时上限」限制；Key 本身不变。调用方须持有 self.lock。"""
+        token = (token or "").strip()
+        row = (await self.db._db.execute_fetchall(
+            "SELECT id, enabled FROM api_keys WHERE token=?", (token,))) if token.startswith("nai-") else []
+        if not row or not await self.is_unbound_invite(row[0][0]):
+            raise RegistrationError("这不是一把待绑定的邀请 Key。请检查是否复制完整；普通领取请不填这一项。")
+        key_id = int(row[0][0])
+        if not row[0][1]:
+            raise RegistrationError("这把邀请 Key 已被停用，请联系站长。")
+        await self.db._db.execute(
+            "INSERT INTO discord_registrations(discord_id,key_id,created_at,username,display_name,avatar) "
+            "VALUES (?,?,?,?,?,?)",
+            (user_id, key_id, time.time(), _clip(user.get("username")), _clip(user.get("global_name")),
+             _clip(user.get("avatar"))))
+        await self.db.update_key(key_id, {"name": member_label(user)})
+        if self.member_role_id:
+            await self.db._db.execute("DELETE FROM pending_role_removals WHERE discord_id=?", (user_id,))
+            await self.db._db.execute("UPDATE discord_registrations SET role_granted=1 WHERE discord_id=?", (user_id,))
+        await self.db._db.execute("DELETE FROM waitlist WHERE discord_id=?", (user_id,))
+        await self.db._db.commit()
+        if self.member_role_id:
+            try:
+                await self._set_role(user_id, True)
+            except Exception:
+                pass
+        return {"key_id": key_id, "message": "✅ 邀请 Key 已绑定到你的 Discord 账号，Key 不变，客户端里不用改。"
+                                             "用 /quota 查看额度，Key 泄露可用 /resetkey 重置。"}
+
     async def issue_direct(self, user_id: str, guild_id: str, *, username: str = "",
-                           global_name: str = "", avatar: str = "", name: str = "") -> dict:
+                           global_name: str = "", avatar: str = "", name: str = "", invite_key: str = "") -> dict:
         """/register 直接发 Key：斜杠命令的 interaction 已被 Discord 签名验明发起人身份，
         不必再走 OAuth 授权（应用被标记审查期间 OAuth 被封；这条通路同时去掉了批量私信）。
         这是唯一的发 Key 入口（旧的 OAuth 领取 begin/finish 已删除，不能再恢复）。
@@ -458,6 +496,10 @@ class RegistrationService:
             if (await self.db._db.execute_fetchall(
                     "SELECT 1 FROM discord_registrations WHERE discord_id=?", (user_id,))):
                 raise RegistrationError("这个 Discord 账号已经领取过 Key，可用 /quota 查看、/resetkey 重置。")
+            if invite_key:
+                return await self.bind_invite(user_id, invite_key,
+                                              {"id": user_id, "username": username, "global_name": global_name,
+                                               "avatar": avatar})
             if await self._issue_rate_blocked():
                 raise RegistrationError("本小时领取人数较多，为保护服务稳定已暂时限流，请过几分钟再用 /register 领取。")
             cfg = await self._check_capacity(user_id, name)

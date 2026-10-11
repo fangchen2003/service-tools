@@ -173,6 +173,8 @@ async def snapshot(db, now: Optional[float] = None) -> dict[str, Any]:
         official = json.loads(await db.get_setting(OFFICIAL_KEY, "") or "{}")
     except (TypeError, ValueError):
         official = {}
+    if now - float(official.get("fetched_at") or 0) > 3600:       # 超过 1 小时没取到新的，不再参考
+        official = {}
     comps = []
     for key, name in [c for c in COMPONENTS if c[0] in SHOWN]:
         days, down_minutes, tracked_minutes = [], 0.0, 0.0
@@ -317,8 +319,9 @@ def _bars_svg(days: list[dict]) -> str:
 
 
 def render(snap: dict[str, Any], subscribe_url: str = "/") -> str:
-    status_cls = "status-none" if not snap["active"] else "status-" + max(
-        (i["impact"] for i in snap["active"]), key=lambda x: IMPACT_RANK.get(x, 1))
+    worst = max((c["level"] for c in snap["components"]), default=0)
+    status_cls = ("status-" + max((i["impact"] for i in snap["active"]), key=lambda x: IMPACT_RANK.get(x, 1))
+                  if snap["active"] else "status-none" if not worst else "status-minor")
     parts = [f'<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
              f'<meta name="viewport" content="width=device-width,initial-scale=1">'
              f'<title>猫头鹰公益站 状态</title><style>{CSS}</style></head>'
@@ -336,6 +339,9 @@ def render(snap: dict[str, Any], subscribe_url: str = "/") -> str:
                          f'<div class="updates font-regular" style="border-color:{c}">'
                          + "".join(_update_html(u) for u in inc["updates"]) + '</div></div>')
         parts.append('</div>')
+    elif worst:
+        parts.append(f'<div class="page-status status-minor" style="background:{STATUS_TEXT[worst]}">'
+                     f'<span class="status font-large">部分系统{IMPACT_COMPONENT[worst]}</span></div>')
     else:
         parts.append('<div class="page-status status-none"><span class="status font-large">所有系统运行正常</span></div>')
     parts.append(f'<div class="components-section font-regular"><div class="components-uptime-link">'
@@ -374,9 +380,20 @@ STATUS_HEADERS = {"Content-Security-Policy": "default-src 'none'; style-src 'uns
                   "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"}
 
 
+_SNAP: dict[str, Any] = {"at": 0.0, "snap": None}
+
+
+async def _cached_snapshot(db) -> dict[str, Any]:
+    """公开页不登录就能访问：60 秒内复用同一份快照，避免被反复刷新时每次都扫 90 天日志。"""
+    now = time.time()
+    if _SNAP["snap"] is None or now - _SNAP["at"] > 60:
+        _SNAP.update(at=now, snap=await snapshot(db, now))
+    return _SNAP["snap"]
+
+
 @router.get("/status", response_class=HTMLResponse)
 async def status_page(request: Request):
-    snap = await snapshot(request.app.state.gate.db)
+    snap = await _cached_snapshot(request.app.state.gate.db)
     import os
     guild, chan = os.getenv("DISCORD_GUILD_ID", ""), os.getenv("ANNOUNCE_CHANNEL_ID", "")
     sub = f"https://discord.com/channels/{guild}/{chan}" if guild and chan else "/"
@@ -385,7 +402,7 @@ async def status_page(request: Request):
 
 @router.get("/status.json")
 async def status_json(request: Request):
-    snap = await snapshot(request.app.state.gate.db)
+    snap = await _cached_snapshot(request.app.state.gate.db)
     return JSONResponse({"components": [{k: c[k] for k in ("key", "name", "status", "uptime")} for c in snap["components"]],
                          "active": snap["active"], "incidents": snap["incidents"][:50]},
                         headers={"Cache-Control": "no-cache"})

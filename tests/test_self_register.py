@@ -569,3 +569,32 @@ class GiftTests(RegistrationTests):
         again = await self.service.gift({"id": "888"})
         self.assertEqual((again["new"], again["key_id"]), (False, g["key_id"]))
         self.assertEqual(await self.count("api_keys"), 1)
+
+
+class InviteBindTests(RegistrationTests):
+    """10-11 站长：邀请 Key 用 /register 的 key 一栏绑定，后台自动认人；领 Key 关着也能绑。"""
+
+    async def make_invite(self):
+        row = await self.db.create_key({"name": "邀请-9", "token": "nai-invite-xyz", "daily_images": 1,
+                                        "monthly_anlas": 0, "daily_text_tokens": 0, "rpm": 5})
+        await self.db._db.execute("INSERT INTO key_tags(key_id, tag, note, by, ts) VALUES (?, '邀请', '', '站长', 0)",
+                                  (row["id"],))
+        await self.db._db.commit()
+        return row["id"]
+
+    async def test_invite_binds_even_when_closed_and_only_once(self):
+        kid = await self.make_invite()
+        await self.db.set_setting("register_open", "0")
+        self.assertTrue(await self.service.is_unbound_invite(kid))
+        with self.assertRaisesRegex(RegistrationError, "邀请 Key"):
+            await self.service.issue_direct("777", GUILD, username="bob", invite_key="nai-wrong")
+        res = await self.service.issue_direct("777", GUILD, username="bob", global_name="Bob", invite_key="nai-invite-xyz")
+        self.assertIn("已绑定", res["message"])
+        self.assertEqual(await self.count("api_keys"), 1)                         # 没有发新 Key
+        self.assertEqual((await self.service.key_row_for("777"))["id"], kid)
+        self.assertFalse(await self.service.is_unbound_invite(kid))
+        self.assertIn("bob", (await self.db.get_key(kid))["name"])                # 后台自动显示是谁
+        with self.assertRaises(RegistrationError):                                  # 别人不能再绑同一把
+            await self.service.issue_direct("888", GUILD, username="eve", invite_key="nai-invite-xyz")
+        with self.assertRaisesRegex(RegistrationError, "已经领取过"):               # 已绑过的人不能再绑
+            await self.service.issue_direct("777", GUILD, invite_key="nai-invite-xyz")
