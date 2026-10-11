@@ -259,8 +259,8 @@ async def _yesterday(db, day: str, members: list[int]) -> dict[str, int]:
                 seen.add(int(h))
         return len(seen)
     return {"used": used, "ceiling_hits": hits,
-            "hourly_blocks": await hours("%本小时出图量已达上限%", "%出图总量已达上限%"),
-            "base_blocks": await count("%保底%")}
+            "hourly_blocks": await hours("%本小时出图量已达上限%", "%出图总量已达上限%", "%按时段放行%"),
+            "base_blocks": await count("%保底%其他人在排队%")}
 
 
 async def _v5_used_equiv(db, day: str) -> float:

@@ -124,3 +124,13 @@ async def test_daily_review_sets_fair_base(tmp_path, monkeypatch):
 
 async def _async(v):
     return v
+
+
+def test_review_signals_count_paced_and_not_headroom():
+    import inspect
+    from app import main, quota_algo
+    src = inspect.getsource(quota_algo._yesterday)
+    assert "%按时段放行%" in src                                   # 按时段放行的拦截算拥挤
+    m = inspect.getsource(main.quota_image_check)
+    headroom_msg = m.split("paced_headroom", 1)[1]
+    assert "其他人在排队" not in headroom_msg.split("raise", 2)[1]  # 份额紧的拦截不算「有余量还被拦」
