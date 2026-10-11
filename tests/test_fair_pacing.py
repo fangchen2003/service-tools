@@ -190,3 +190,27 @@ async def test_simple_mode_one_number_for_everyone(tmp_path, monkeypatch):
         assert quota_algo.BORROW["open"] is False
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_live_reports_paced_block():
+    """回归（10-11）：按时段放行拦下全站时，首页还显示「运行正常 · 发了就画」。live 要带上拦截原因。"""
+    from types import SimpleNamespace
+    from app import live
+    g = _guard()
+    tok = SimpleNamespace(token_id="t", usable=True, disabled=False, admin_enabled=True, blocked_until=0, image_next_at=0)
+
+    class DB(_DB):
+        async def get_setting(self, k, d=None): return d
+        async def day_v5_total(self, day): return 0
+
+    def state(used):
+        return SimpleNamespace(db=DB(used), guard=g, nai=SimpleNamespace(pool=[tok]), day=lambda: "d",
+                               settings=SimpleNamespace(global_daily_v5=0, image_min_interval=15),
+                               image_cooldown_remaining=lambda: 0)
+    live._cache.update(at=0, body=None)
+    blocked = (await live.build(state(900), None, now=_at(10)))["guard"]["blocked"]
+    assert blocked["code"] == PACED and "分钟后" in blocked["text"]
+    live._cache.update(at=0, body=None)
+    assert (await live.build(state(100), None, now=_at(10)))["guard"]["blocked"] is None
+    live._cache.update(at=0, body=None)

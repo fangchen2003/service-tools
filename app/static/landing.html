@@ -706,14 +706,26 @@ function renderAnnouncement(has){
     if(cur && renderAnnouncement.refresh){ cur.src = '/announcement'; renderAnnouncement.refresh = false; }
   }
 }
+/* 实时数据说全站被站点规则拦下时（按时段放行 / 每日上限 / 熔断），顶部胶囊跟着改，不再显示「空闲」 */
+var siteBlocked = null;
+var BLOCK_TITLE = {paced: '暂停出图 · 按时段放行', daily_cap: '今日出图已满', breaker: '暂停出图 · 上游出错',
+  hourly_cap: '本小时出图已满', quiet_cap: '安静时段 · 出图已满', cap_3h: '近 3 小时出图已满'};
+function applyBlockedPill(){
+  var p = document.getElementById('upPill'); if(!p) return;
+  var base = (p.dataset.base || '').split('|');
+  var cls = siteBlocked ? 'pill warn' : base[0], txt = siteBlocked ? (BLOCK_TITLE[siteBlocked.code] || '暂停出图') : base[1];
+  if(p.className === cls && p.textContent === txt) return;
+  p.className = cls; p.textContent = ''; p.appendChild(el('span', 'dot')); p.appendChild(el('span', '', txt));
+  p.title = siteBlocked ? siteBlocked.text : '';
+}
 function renderStatus(d){
   setSite(d.site);
   var up = d.upstream || {}, reg = d.registration || {};
   var pills = $('pills'); pills.textContent = ''; pills.removeAttribute('aria-busy');
   var st = up.status;
-  if(st === 'ok') pills.appendChild(pill('ok', '服务正常', true));
-  else if(st === 'degraded') pills.appendChild(pill('warn', '服务不稳定', true));
-  else pills.appendChild(pill('ok', '服务正常 · 空闲', true));
+  var up0 = st === 'ok' ? pill('ok', '服务正常', true) : st === 'degraded' ? pill('warn', '服务不稳定', true) : pill('ok', '服务正常 · 空闲', true);
+  up0.id = 'upPill'; up0.dataset.base = up0.className + '|' + up0.textContent;
+  pills.appendChild(up0); applyBlockedPill();
   if(reg.open){
     var full = reg.slots_left === 0, rp = pill(full ? 'warn' : 'info', full ? '已满员' : '可领取', false);
     rp.title = full ? '名额已满，在 Discord 用 /register 可排候补' : '在 Discord 用 /register 领 Key' + (reg.slots_left != null ? '，剩余名额 ' + reg.slots_left : '');
@@ -936,13 +948,15 @@ function fmtDate(sec){
     else if(myPos){ $id('dMeK').textContent = '你的图'; $id('dMeV').textContent = '排第 ' + myPos.position + ' 位'; $id('dMeS').textContent = '约 ' + Math.max(5, myPos.eta) + ' 秒后开始画，画好直接回到客户端'; mark('queue'); }
     else {
       $id('dMeK').textContent = '现在发一张图';
+      var bk = g.blocked, bw = bk && /约 (\d+) 分钟/.exec(bk.text);
       if(g.cooldown){ $id('dMeV').textContent = '暂停 ' + g.cooldown + ' 秒'; $id('dMeS').textContent = 'NovelAI 限流，全站出图暂停，稍后自动恢复'; }
+      else if(bk){ $id('dMeV').textContent = bk.code === 'daily_cap' ? '明天 0 点恢复' : bw ? '约 ' + bw[1] + ' 分钟后' : '暂时不能出图'; $id('dMeS').textContent = bk.text; }
       else if(!w && !run){ $id('dMeV').textContent = '马上开始'; $id('dMeS').textContent = '没人在排队，发了就画'; }
       else {
         $id('dMeV').textContent = '约 ' + Math.round((w + run) * iv) + ' 秒后开始';
         $id('dMeS').textContent = '前面有 ' + (w + run) + ' 张（' + run + ' 张在画、' + w + ' 张在排），每张约 ' + iv + ' 秒';
       }
-      mark(g.cooldown ? 'pace' : '');
+      mark(g.cooldown || bk ? 'pace' : '');
     }
     /* 排队 */
     $id('dQ').textContent = w;
@@ -967,12 +981,14 @@ function fmtDate(sec){
     /* 运行情况：一句结论（按严重程度取第一条）+ 4 个关键数字 */
     var m = d.members || {}, hour = g.hour || 0, hcap = g.hour_cap || 0, qcap = r.queue_cap || 0, tone, txt, sub;
     if(g.cooldown){ tone = 'bad'; txt = '上游限流，全站暂停出图'; sub = '约 ' + g.cooldown + ' 秒后自动恢复，期间发的图会被拒绝，不用重试'; }
+    else if(g.blocked && g.blocked.code !== 'hourly_cap' && g.blocked.code !== 'quiet_cap'){ tone = g.blocked.code === 'breaker' ? 'bad' : 'warn'; txt = BLOCK_TITLE[g.blocked.code] || '暂时不能出图'; sub = g.blocked.text; }
     else if(hcap && hour >= hcap){ tone = 'warn'; txt = '本小时出图已满'; sub = '为了保护上游账号，每小时最多 ' + hcap + ' 张；最早那张满 60 分钟后就有空位，通常几分钟'; }
     else if(hcap && hour >= hcap * 0.95){ tone = 'warn'; txt = '本小时出图快满了'; sub = '每小时最多 ' + hcap + ' 张，已出 ' + hour + ' 张；满了要等几分钟才有空位'; }
     else if(qcap && w >= qcap){ tone = 'warn'; txt = '排队已满，请稍后再发'; sub = '队伍最多 ' + qcap + ' 张，新请求会被拒绝，过一会儿再试'; }
     else if(w + run > 0){ tone = 'busy'; txt = '正常出图 · 有人在排队'; sub = '现在发一张约 ' + Math.round((w + run) * iv) + ' 秒后开始画'; }
     else { tone = 'ok'; txt = '运行正常 · 发了就画'; sub = '没人在排队'; }
     if(tone !== 'bad' && tone !== 'warn' && hcap && hour >= hcap * 0.85) sub += '；本小时已出 ' + hour + ' / ' + hcap + ' 张，快到上限';
+    siteBlocked = g.blocked || null; applyBlockedPill();
     var vd = $id('verdict'); vd.dataset.tone = tone;
     $id('vText').textContent = txt; $id('vSub').textContent = sub;
     $id('kMem').textContent = m.active != null ? m.active : '—';
