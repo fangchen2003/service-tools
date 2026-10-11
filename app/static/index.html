@@ -281,8 +281,6 @@ td .tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
 .member-grid{display:block}
 @keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 50%,transparent)}70%,100%{box-shadow:0 0 0 7px transparent}}
 /* 每页标题下的一句话状态：圆点颜色 = 好 / 注意 / 要处理 */
-.mod-params{margin-top:10px}.mod-params>summary{list-style:none;display:inline-flex}.mod-params>summary::-webkit-details-marker{display:none}
-.mod-params[open]>summary .ic{transform:rotate(90deg)}.mod-params .table-wrap{margin-top:8px}
 .warn-text{color:var(--warn)}
 /* 状态码分布：2xx 绿、4xx 琥珀、5xx 红；每行一个状态码 + 次数 + 含义 + 占比 */
 .sc-list{display:flex;flex-direction:column;gap:4px}
@@ -405,6 +403,11 @@ tr.mx>td{background:var(--surface-2);padding:16px 18px 18px;cursor:default}
 .mtable tbody tr.mx:hover td{background:var(--surface-2)}
 tr.mr.open>td{background:var(--surface-2);border-bottom-color:transparent}
 .mod.off{opacity:.65}.mod-checks{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}.bad-text{color:var(--bad)}
+.mod-runs{display:flex;gap:2px;margin-top:4px}.mod-runs i{flex:1;max-width:14px;height:18px;border-radius:2px;background:var(--surface-3)}
+.mod-runs i.ok{background:var(--ok)}.mod-runs i.warn{background:var(--warn)}.mod-runs i.bad{background:var(--bad)}
+.mod-check{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline;padding:8px 0;border-top:1px solid var(--border);font-size:13.5px}
+.mod-check:first-of-type{margin-top:8px}.mod-ev{flex-basis:100%;font-size:12.5px;color:var(--text-2);white-space:pre-wrap}
+.mod-kv{margin-top:10px}.mod-kv dd .muted{margin-left:4px}
 .mod .kv{margin-bottom:6px}
 .share-ev h5{font-size:12px;font-weight:600;color:var(--muted);margin:4px 0 8px}.share-ev .table-wrap{max-height:280px;overflow:auto;margin-bottom:12px}
 .kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 14px;font-size:12.5px;margin:0}
@@ -758,7 +761,6 @@ td.note{min-width:220px}
       <button data-tab="audit" data-group="logs"><span data-ic="list"></span>日志<span class="nav-badge" id="navBugs" hidden></span></button>
       <div class="nav-label">监控</div>
       <button data-tab="up"><span data-ic="pulse"></span>上游</button>
-      <button data-tab="risk"><span data-ic="shield"></span>风险检查</button>
       <div class="nav-label">设置</div>
       <button data-tab="ops"><span data-ic="key"></span>领 Key 与功能</button>
       <button data-tab="limits"><span data-ic="sliders"></span>额度与保护</button>
@@ -841,13 +843,6 @@ td.note{min-width:220px}
               <p class="hint" style="margin:12px 0">充值、续费或在别处使用账号也会影响余额；核对不改用户积分。</p>
               <div class="table-wrap"><table class="rt"><thead><tr><th class="t">查询时间</th><th class="num">官方余额</th><th class="num">余额减少</th><th class="num">本站记录</th><th class="num">相差</th><th>说明</th></tr></thead><tbody id="reconHistory"></tbody></table></div>
             </details>
-          </div>
-        </section>
-        <!-- 风险检查 -->
-        <section id="tab-risk" hidden>
-          <div id="riskSummary"></div>
-          <div class="card panel">
-            <div id="riskBody"><div class="hint">正在检查…</div></div>
           </div>
         </section>
         <!-- Bug 追踪 -->
@@ -951,7 +946,7 @@ td.note{min-width:220px}
         </section>
         <section id="tab-limits" hidden>
           <div class="card panel" id="quotaAlgo">
-            <div class="panel-head"><h2>动态额度</h2><div class="desc">交给算法的成员共用一套额度，每 10 分钟重算，每天按拥挤程度微调</div></div>
+            <div class="panel-head"><h2>动态额度</h2><div class="desc">所有成员同一个数，每天 0 点按前一天的用量重算</div></div>
             <div id="qaBody"><div class="skel" style="height:80px"></div></div>
           </div>
           <details class="card panel fold" id="quotaShadow">
@@ -1427,7 +1422,7 @@ async function boot(){
 }
 
 /* ---------- tabs ---------- */
-const TABS = ['ov','members','ops','audit','up','risk','bugs','logs','actions','feedback','modules','limits','discord','set'];
+const TABS = ['ov','members','ops','audit','up','bugs','logs','actions','feedback','modules','limits','discord','set'];
 // 生成记录 / 用量日志 / 操作日志 / Bug 追踪 合并成边栏一项「日志」，页内用标签切换（10/10 站长：边栏太多）
 const LOG_TABS = [['audit','生成记录'],['logs','用量日志'],['actions','操作日志'],['bugs','Bug 追踪'],['feedback','成员反馈']];
 function logSubtabs(){
@@ -1454,7 +1449,6 @@ function tab(name){
   if(name==='set' || name==='limits') loadSettings();
   if(name==='limits'){ loadQuotaAlgo(); loadAutopilot(); loadQuotaShadow(); }
   if(name==='up'){ loadOverview(); loadReconciliation(); loadPerf(); loadShadow(); }
-  if(name==='risk') loadRisk();
   if(name==='bugs') loadBugs();
   if(name==='feedback') loadFeedback();
   if(name==='discord') loadBot();
@@ -1509,28 +1503,6 @@ async function loadPerf(){
     }
     $('#perfBody').innerHTML = rows.join('') || '<tr><td colspan="9" class="empty-cell">暂无出图记录</td></tr>';
   }catch(e){ $('#perfBody').innerHTML = '<tr><td colspan="9" class="empty-cell">读取失败</td></tr>'; }
-}
-async function loadRisk(){
-  const box = $('#riskBody'); if(!box) return;
-  try{
-    const d = await api('/admin/api/risk-check');
-    const s = d.summary || {};
-    const cls = st => st==='ok' ? 'ok' : st==='warn' ? 'warn' : st==='bad' ? 'bad' : 'info';
-    $('#riskSummary').innerHTML = '';      // 结论已经写在标题下面
-    const item = it => {
-      const ev = (it.evidence || []).map(e => `<div class="hint" style="margin:3px 0;white-space:pre-wrap">${esc(e)}</div>`).join('');
-      return `<div style="padding:12px 0;border-bottom:1px solid var(--border)">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b>${esc(it.title)}</b><span class="mf ${cls(it.status)}">${esc(it.label)}</span></div>
-        <div class="hint" style="margin:4px 0 2px">${esc(it.detail)}</div>${ev}</div>`;
-    };
-    // 先看要处理 / 值得留意的，正常和不适用的收起来
-    const hot = d.items.filter(it => it.status === 'bad' || it.status === 'warn').sort((a, b) => (a.status === 'bad' ? 0 : 1) - (b.status === 'bad' ? 0 : 1));
-    const rest = d.items.filter(it => !hot.includes(it));
-    box.innerHTML = (hot.map(item).join('') || '<div class="hint" style="padding:8px 0">没有要处理或值得留意的项。</div>')
-      + (rest.length ? `<details class="mod-params" style="margin-top:12px"><summary class="btn mini ghost">其余 ${rest.length} 项（正常 / 不适用） ${ic('chev')}</summary>${rest.map(item).join('')}</details>` : '');
-  }catch(e){
-    box.innerHTML = `<div class="notice-box bad">${ic('alert')}读取失败：${esc(e.message || e)}</div>`;
-  }
 }
 async function loadShadow(){
   const box = $('#shadowBody');
@@ -2088,7 +2060,8 @@ function memberIssues(m, now){
     out.push({lv: loud ? 'warn' : 'info', t: t.tag, d: t.note || `近 24 小时因此被拒 ${t.count} 次。是客户端设置的问题，本人改了就好${loud ? '；次数多，可能是客户端在自动重试' : ''}`, a: loud ? okBtn : '', need: loud}); });
   userTags(m).filter(t => /疑似|待查|观察/.test(t.tag)).forEach(t => out.push({lv:'warn', t:'站长标记：' + t.tag, d: (t.note || '') + (t.ts ? ` · ${rel(t.ts)}` : ''), a: `<button class="btn mini" type="button" data-act="tag-del" data-id="${id}" data-tag="${esc(t.tag)}">查完了，移除标记</button>`, need:true}));
   if(m.reset_today && m.reset_today.count >= 2) out.push({lv:'warn', t:`今天被手动重置额度 ${m.reset_today.count} 次`, d:'操作日志里能看到是谁重置的', a: okBtn, need:true});
-  return out;
+  // 点过「没问题」的 24 小时内，这些可确认的提醒不再出现（防分享等 bad 级别要单独处理，不受影响）
+  return acked(m, now) ? out.filter(x => !x.need || x.lv === 'bad') : out;
 }
 const needsAttention = (m, now) => m.enabled && !m.is_admin && memberIssues(m, now).some(x => x.lv === 'bad' || (x.need && !acked(m, now)));
 function memberFilters(now){
@@ -2156,7 +2129,7 @@ function memberPanel(m, now){
   const inf = n => n > 0 ? n : '不限';
   const head = `<div class="mx-v"><p class="mx-vt">${esc(v.t)}</p>${v.sub ? `<p class="mx-vs">${esc(v.sub)}</p>` : ''}</div>`;
   const todo = issues.length ? `<div class="mx-sec"><h4>${issues.some(x => x.lv !== 'info') ? '要处理' : '注意到'}</h4><div class="issues">${issues.map(x => `<div class="issue ${x.lv}"><div class="is-t"><b>${esc(x.t)}</b><span>${esc(x.d)}</span></div><div class="is-a">${x.a}</div></div>`).join('')}</div></div>` : '';
-  if(!k) return `<tr class="mx" data-mx="${m.id}"><td colspan="5">${head}<p class="muted sm">Key 信息读取失败，点右上角刷新重试</p></td></tr>`;
+  if(!k) return `<tr class="mx" data-mx="${m.id}"><td colspan="5">${head}<p class="muted sm">Key 信息读取失败，刷新页面重试</p></td></tr>`;
   const u = k.used, exp = k.expires_at ? new Date(k.expires_at*1000).toLocaleDateString('zh-CN') : '永久';
   const today = `<div><h4>今天</h4><div class="meters">
       ${m.is_admin ? `<p class="muted sm">站长 Key 不限额度，仍受全站保护</p>` : meter('V4.5', Math.max(0, m.today.images - (m.today.v5||0)), k.daily_images) + (k.image_model_scope === 'all' ? meter('V5', u.v5||0, k.daily_v5, 'v5') : '')}
@@ -2920,7 +2893,7 @@ function v5Derivation(v){
   return `<div class="notice-box" style="margin:10px 0 0;font-size:13px">全站 V5 = 恢复 <b>${f(v.rate)}%/天</b> × 14.2 张/1% × 系数 ${esc(v.k)} = <b>${esc(v.global)} 张</b>
     <div class="${cls}" style="margin-top:4px">恢复速度：接口读数 ${f(rc.api)} · 实测 ${f(rc.measured)} · 采用 ${f(rc.used)}（${esc(rc.status || '—')}）${(rc.notes||[]).length ? ' · ' + esc(rc.notes.join('；')) : ''}${rc.used != null && Math.abs(rc.used - v.rate) > 0.05 ? `<br>今天的方案是 0 点按 ${f(v.rate)}%/天定的（一天只定一次，不在当天降额），明天 0 点起按 ${f(rc.used)}%/天` : ''}</div></div>`;
 }
-/* 动态额度：结果 + 每日微调历史（数据来自 /admin/api/quota-algo，算法说明见 app/quota_algo.py） */
+/* 动态额度：结果 + 每天 0 点的调整记录（/admin/api/quota-algo，算法见 app/quota_policies.py） */
 const AP_NAME = {alt_link:'疑似同一人（只观察）', slots:'名额上限', breaker:'全站熔断', key_guard:'单个 Key 守护'};
 const AP_MODE = {observe:'<span class="tag warn">观察</span>', enforce:'<span class="tag on">执行</span>', off:'<span class="tag off">关闭</span>'};
 async function loadAutopilot(){
@@ -2934,26 +2907,28 @@ async function loadAutopilot(){
   }catch(e){ $('#apBody').innerHTML = '<div class="muted">读取失败</div>'; }
 }
 /* 模块（app/kernel.py / modules.py）：开关、运行结果、交叉校验、参数依据等级 */
-const BASIS_CLS = {A:'off', B:'', C:'on', D:'warn'};
+/* 模块：一句话问题 + 开关；运行条（最近 36 轮，每 10 分钟一轮，绿 / 黄 / 红）；校验结果（有问题的展开证据）；参数当前值 */
+const LV = {ok:'ok', warn:'warn', bad:'bad', na:''};
+const LV_TXT = {ok:'正常', warn:'注意', bad:'有问题', na:'不适用'};
 async function loadModules(){
   try{
     const d = await api('/admin/api/modules');
     let bad = 0;
     $('#modList').innerHTML = d.modules.map(m => {
-      const L = m.last || {}, checks = L.checks || [];
-      bad += checks.filter(c => !c.ok).length;
-      const run = !m.periodic ? '' : L.at ? `${L.ok ? '✓' : '✗'} ${esc(new Date(L.at*1000).toLocaleTimeString('zh-CN',{hour12:false}))} · ${esc(L.ok ? (L.summary||'完成') : L.error)}` : '等待下一轮（每 10 分钟）';
+      const L = m.last || {}, checks = L.checks || [], runs = L.runs || [];
+      bad += checks.filter(c => c.level === 'bad').length;
+      const strip = runs.length ? `<div class="mod-runs" title="最近 ${runs.length} 轮，每 10 分钟一轮">${runs.map(r => `<i class="${LV[r.level]||''}" title="${esc(new Date(r.at*1000).toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit'}))} · ${LV_TXT[r.level]||''}"></i>`).join('')}</div>` : '';
+      const lastLine = !m.enabled ? '已关闭' : L.ok === false ? `上次运行出错：${L.error}` : L.summary || (runs.length ? '' : '等待第一轮（每 10 分钟）');
+      const hot = checks.filter(c => c.level === 'bad' || c.level === 'warn');
+      const calm = checks.filter(c => !hot.includes(c));
+      const row = c => `<div class="mod-check"><span class="mf ${LV[c.level]||''}">${LV_TXT[c.level]||''}</span><b>${esc(c.name)}</b><span class="muted">${esc(c.detail)}</span>${(c.evidence||[]).length ? `<div class="mod-ev">${c.evidence.map(e => `<div>${esc(e)}</div>`).join('')}</div>` : ''}</div>`;
       return `<div class="card panel mod${m.enabled?'':' off'}">
         <div class="panel-head"><h2>${esc(m.title)}</h2>
-          <label class="switch"><input type="checkbox" data-mod="${esc(m.name)}" ${m.enabled?'checked':''} aria-label="启用 ${esc(m.title)}"><span></span></label><div class="desc">${esc(m.question)}</div></div>
-        <dl class="kv"><dt>现实依据</dt><dd>${esc(m.reality)}</dd><dt>数学原理</dt><dd>${esc(m.principle)}</dd>
-          ${run ? `<dt>最近运行</dt><dd class="${L.ok===false?'bad-text':''}">${run}</dd>` : ''}
-          ${m.hard_note ? `<dt>关闭后</dt><dd class="muted">${esc(m.hard_note)}</dd>` : ''}</dl>
-        ${checks.length ? `<div class="mod-checks">${checks.map(c => `<span class="mf ${c.ok?'ok':'bad'}" title="${esc(c.detail)}">${c.ok?'✓':'✗'} ${esc(c.name)}</span>`).join('')}</div>
-          ${checks.filter(c=>!c.ok).map(c => `<div class="bad-text sm">✗ ${esc(c.name)}：${esc(c.detail)}</div>`).join('')}` : ''}
-        ${m.params.length ? `<details class="mod-params"><summary class="btn mini ghost">参数 ${m.params.length} 个 ${ic('chev')}</summary><div class="table-wrap"><table class="rt"><thead><tr><th>参数</th><th class="num">当前值</th><th>依据</th><th>来源 / 说明</th></tr></thead><tbody>${
-          m.params.map(p => `<tr><td data-label="参数">${esc(p.name)}</td><td class="num" data-label="当前值">${esc(p.value)}</td><td data-label="依据"><span class="tag ${BASIS_CLS[p.basis]||''}">${esc(p.basis)} ${esc(p.basis_label)}</span>${p.private?' <span class="tag" title="值来自服务器 data/private_params.json，不在公开代码里">私密</span>':''}</td><td class="muted" data-label="来源">${esc([p.source, p.note].filter(Boolean).join(' · '))}</td></tr>`).join('')
-        }</tbody></table></div></details>` : ''}
+          <label class="switch" title="${esc(m.hard_note)}"><input type="checkbox" data-mod="${esc(m.name)}" ${m.enabled?'checked':''} aria-label="启用 ${esc(m.title)}"><span></span></label><div class="desc">${esc(m.question)}</div></div>
+        ${strip}${lastLine ? `<div class="sm ${L.ok===false?'bad-text':'muted'}" style="margin-top:6px">${esc(lastLine)}</div>` : ''}
+        ${hot.map(row).join('')}
+        ${calm.length ? `<div class="mod-checks">${calm.map(c => `<span class="mf ${LV[c.level]||''}" title="${esc(c.detail)}">${esc(c.name)}</span>`).join('')}</div>` : ''}
+        ${m.params.length ? `<dl class="kv mod-kv">${m.params.map(p => `<dt>${esc(p.name)}</dt><dd>${esc(p.value)}${p.note ? `<span class="muted">（${esc(p.note)}）</span>` : ''}</dd>`).join('')}</dl>` : ''}
       </div>`;
     }).join('');
     $('#navMods').hidden = !bad; $('#navMods').textContent = bad || '';
@@ -3007,16 +2982,16 @@ async function loadQuotaAlgo(){
     // V5 剩余：每天 0 点记一次；和前一天比的净变化 = 恢复 − 用掉
     const v5cell = (h, i) => { if(h.v5_pct == null) return '—'; const prev = hs[i-1]; const dlt = prev && prev.v5_pct != null ? h.v5_pct - prev.v5_pct : null;
       return `${Math.round(h.v5_pct)}%${dlt != null ? ` <span class="${dlt < 0 ? 'bad-text' : 'muted'}">${dlt >= 0 ? '+' : ''}${dlt.toFixed(1)}</span>` : ''}${h.v5_rate ? `<div class="muted sm">恢复 ${h.v5_rate}%/天</div>` : ''}`; };
-    const rows = hs.map((h, i) => [h, i]).slice(-7).reverse().map(([h, i]) => `<tr><td class="t" data-label="日期">${esc(h.day)}</td><td class="num" data-label="用量 / 账号日上限">${esc(h.used)} / ${esc(h.cap)}</td><td class="num" data-label="次日 0 点 V5 剩余">${v5cell(h, i)}</td><td class="num" data-label="每小时拦截">${esc(h.hourly_blocks)}</td><td class="num" data-label="顶格人数">${esc(h.ceiling_hits)}</td><td class="num" data-label="上限 · 保底（昨 → 今）">${esc(h.from[0])}→${esc(h.to[0])} · ${esc(h.from[1])}→${esc(h.to[1])}</td><td class="muted" data-label="理由">${esc((h.reasons||[]).join('；'))}</td></tr>`).join('');
+    const rows = hs.map((h, i) => [h, i]).slice(-7).reverse().map(([h, i]) => `<tr><td class="t" data-label="日期">${esc(h.day)}</td><td class="num" data-label="用量 / 账号日上限">${esc(h.used)} / ${esc(h.cap)}</td><td class="num" data-label="次日 0 点 V5 剩余">${v5cell(h, i)}</td><td class="num" data-label="每小时拦截">${esc(h.hourly_blocks)}</td><td class="num" data-label="顶格人数">${esc(h.ceiling_hits)}</td><td class="num" data-label="每人（昨 → 今）">${esc(h.from[0])}→${esc(h.to[0])}</td><td class="muted" data-label="理由">${esc((h.reasons||[]).join('；'))}</td></tr>`).join('');
     $('#qaBody').innerHTML = l.enabled === false ? '<div class="muted">动态额度已关闭</div>' : `
       <div class="cols-3">
-        <div><div class="muted sm">V4.5 每人每天</div><div class="num" style="font-size:22px;font-weight:700">${esc(l.ceiling ?? '—')} <span class="muted" style="font-size:13px">保底 ${esc(l.base ?? '—')}</span></div></div>
+        <div><div class="muted sm">V4.5 每人每天</div><div class="num" style="font-size:22px;font-weight:700">${esc(l.ceiling ?? '—')}</div></div>
         <div><div class="muted sm">V5 每人每天 / 全站</div><div class="num" style="font-size:22px;font-weight:700">${esc(v.each ?? '—')} <span class="muted" style="font-size:13px">/ ${esc(v.global ?? '—')}</span></div></div>
         <div><div class="muted sm">账号 V5 剩余 · 恢复</div><div class="num" style="font-size:22px;font-weight:700">${v.percent==null?'—':esc(Math.round(v.percent))+'%'} <span class="muted" style="font-size:13px">${esc(v.rate ?? '—')}%/天 · 系数 ${esc(v.k ?? '—')}</span></div></div>
       </div>
       ${v5Derivation(v)}
       <div class="muted sm" style="margin:8px 0">由算法管理 ${esc(l.members ?? 0)} 人 · V5 按 ${esc(v.people ?? '—')} 人分 · 更新于 ${l.updated_at?esc(fullTime(l.updated_at)):'—'}</div>
-      ${rows?`<div class="table-wrap"><table class="rt"><thead><tr><th class="t">日期</th><th class="num">用量 / 账号日上限</th><th class="num" title="每天 0 点记一次账号 V5 剩余；括号里是和前一天比的净变化（恢复 − 用掉）">次日 0 点 V5 剩余</th><th class="num">每小时拦截</th><th class="num">顶格人数</th><th class="num">上限 · 保底（昨 → 今）</th><th>理由</th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="muted sm">每日微调记录会在明天出现</div>'}`;
+      ${rows?`<div class="table-wrap"><table class="rt"><thead><tr><th class="t">日期</th><th class="num">用量 / 账号日上限</th><th class="num" title="每天 0 点记一次账号 V5 剩余；括号里是和前一天比的净变化（恢复 − 用掉）">次日 0 点 V5 剩余</th><th class="num">每小时拦截</th><th class="num">顶格人数</th><th class="num">每人（昨 → 今）</th><th>理由</th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="muted sm">每天 0 点的调整记录会出现在这里</div>'}`;
   }catch(e){ $('#qaBody').innerHTML = '<div class="muted">读取失败</div>'; }
 }
 async function loadAnlasPool(){
@@ -3236,14 +3211,13 @@ document.addEventListener('keydown', e=>{
   document.body.classList.remove('nav-open');
 });
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden && allowanceTimer) loadAllowance(); });
-// 当前页的数字每 30 秒自动刷新（10/11 站长：「有些变化跟不上」——原来只有切页或点刷新才更新）。
 // 有弹窗、下拉菜单打开、正在输入，或在带表单的设置页时不刷新，免得冲掉正在填的内容。
 /* 页面不放刷新按钮（10-11 站长）：看数据的页面每 15 秒自动刷新（标签页在后台、弹窗打开或正在输入时暂停）；
    成员、生成记录、领 Key、Discord、系统这几页是表单或长列表，自动刷新会冲掉没保存的输入和滚动位置，切换页面时重新读取。 */
 const AUTO_REFRESH = {
   ov: () => loadOverview(), up: () => { loadOverview(); loadPerf(); loadShadow(); },
   logs: () => loadLogs(),
-  actions: () => loadActions(), bugs: () => loadBugs(), feedback: () => loadFeedback(), risk: () => loadRisk(),
+  actions: () => loadActions(), bugs: () => loadBugs(), feedback: () => loadFeedback(),
   limits: () => { loadQuotaAlgo(); loadAutopilot(); loadQuotaShadow(); }, modules: () => loadModules(),
 };
 function currentTab(){ return TABS.find(t => !$('#tab-' + t).hidden); }

@@ -39,9 +39,9 @@ async def test_toggle_isolation_and_checks(state):
     async def failing_check(k):
         return [Check("两边对不上", False, "1 ≠ 2"), Check("对得上", True)]
 
-    k.register(Module("a", "A", "?", "", "", tick=ok_tick, params=[Param("p", lambda: 3, "C", "实测")]))
-    k.register(Module("b", "B", "?", "", "", tick=bad_tick, checks=failing_check))
-    k.register(Module("c", "C", "?", "", "", tick=ok_tick, default_enabled=False))
+    k.register(Module("a", "A", "?", tick=ok_tick, params=[Param("p", lambda: 3, "实测")]))
+    k.register(Module("b", "B", "?", tick=bad_tick, checks=failing_check))
+    k.register(Module("c", "C", "?", tick=ok_tick, default_enabled=False))
     last = await k.tick_all()
     assert ran == ["a"]                                        # c 默认关闭；b 出错不影响 a
     assert last["a"]["ok"] and not last["b"]["ok"] and "boom" in last["b"]["error"]
@@ -52,7 +52,7 @@ async def test_toggle_isolation_and_checks(state):
     await k.tick_all()
     assert ran == ["a"] and not (await k.enabled("a"))         # 这次跑的是 c（同一个函数）
     snap = await k.snapshot()
-    assert snap[0]["params"][0] == {"name": "p", "value": 3, "basis": "C", "basis_label": "实测", "source": "实测", "note": "", "private": False}
+    assert snap[0]["params"][0] == {"name": "p", "value": 3, "note": "实测"}
 
 
 @pytest.mark.asyncio
@@ -60,10 +60,11 @@ async def test_real_modules_build_tick_and_check(state):
     from app import modules
     bugs = []
     k = modules.build(state, bug=lambda src, exc=None, **kw: bugs.append((src, kw.get("title"))))
-    assert list(k.modules) == ["observation", "capacity", "allocation", "scheduling", "anlas", "autopilot", "integrity", "registration"]
+    assert list(k.modules) == ["observation", "capacity", "allocation", "scheduling", "anlas", "autopilot", "integrity", "risk", "registration"]
     await k.tick_all()
     snap = {m["name"]: m for m in await k.snapshot()}
-    assert snap["capacity"]["params"] and all(p["basis"] in "ABCD" for m in snap.values() for p in m["params"])
+    assert snap["capacity"]["params"] and all("读取失败" not in str(p["value"]) for m in snap.values() for p in m["params"])
+    assert snap["risk"]["last"]["runs"][-1]["level"] in ("ok", "warn", "bad")       # 风险检查并进模块，有运行记录
     assert not snap["registration"]["enabled"]                 # 领 Key 默认关闭
     await k.set_enabled("registration", True)
     assert await state.db.get_setting("register_open") == "1"
@@ -88,4 +89,4 @@ async def test_capacity_checks_run_with_a_token(state):
     k = modules.build(state, bug=lambda *a, **kw: None)
     bad = await k.check_all()
     names = [c.name for _, c in bad]
-    assert "校验本身出错" not in names
+    assert "校验本身出错" not in names, [(n, c.detail) for n, c in bad]

@@ -154,6 +154,7 @@ async def lifespan(app: FastAPI):
         STATE.on_registration_released = app.state.registrar.release_role
     from . import modules as _modules
     STATE.kernel = _modules.build(STATE, bug)
+    await STATE.kernel.load()
     STATE.kernel.extra["registrar"] = app.state.registrar
 
     async def _dm(key_id, text, reg=app.state.registrar):
@@ -183,7 +184,7 @@ async def lifespan(app: FastAPI):
         await STATE.db.close()
 
 
-__version__ = "2.20.0"
+__version__ = "2.21.0"
 
 app = FastAPI(title="猫头鹰公益站", version=__version__, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 

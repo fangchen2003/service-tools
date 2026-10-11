@@ -964,7 +964,7 @@ async def share_guard_put(request: Request):
 
 @router.get("/modules")
 async def modules_get(request: Request):
-    """模块：每个模块回答的问题、依据、数学原理、开关、最近一次运行、交叉校验、关键参数（依据等级）。"""
+    """模块：问题、开关、运行记录、交叉校验、关键参数当前值。"""
     require_admin(request)
     kernel = getattr(request.app.state.gate, "kernel", None)
     return {"modules": await kernel.snapshot() if kernel else []}
@@ -1017,16 +1017,6 @@ async def upstream_perf(request: Request):
     require_admin(request)
     from . import perf
     return await perf.collect(request.app.state.gate, time.time())
-
-
-@router.get("/risk-check")
-async def risk_check(request: Request):
-    """风险检查（只读）：出站指纹盘点（请求头 / TLS / 出口链路）与白嫖行为信号。
-
-    伪装类指标（TLS 指纹伪装、浏览器指纹、代理换出口）明确留空并说明原因，见 app/risk_check.py。"""
-    require_admin(request)
-    from . import risk_check
-    return await risk_check.collect(request.app.state.gate, time.time())
 
 
 @router.get("/guard")

@@ -1,20 +1,10 @@
-"""模块内核：整个系统的两个核心原理落在这里。
+"""模块内核：每个模块回答一个问题，每 10 分钟运行一次，然后用独立来源交叉核对结论。
 
-━━ 1. 模块化 ━━
-每个模块只回答一个问题（容量 / 分配 / 调度 / 诚信 / 注册 / ……），声明自己的：
-  · question  回答什么问题      · reality  依据哪些现实数据      · principle  用什么数学原理
-  · params    关键参数（值 + 依据等级 A 拍脑袋 / B 有参考 / C 实测 / D 多指标互证 + 来源）
-  · tick()    周期任务（每 10 分钟）· checks()  交叉校验
-模块可以在后台单独启用 / 关闭（设置 module_<名字>），新增模块只要写一个类并 register。
-关闭一个模块 = 停止它的自动调整，已经生效的数值保持不变；保护类的硬限制（每小时上限等）不随开关失效。
-
-━━ 2. 多重相互校验 ━━
-每轮 tick 之后跑所有模块的 checks()：用另一个独立来源核对这个模块的结论，比如
-  · 内存里的每小时计数 ↔ 用量日志（10-10 发现重启会清零，就是这类检查本该抓到的）
-  · 分配给所有人的 V5 总和 ↔ 容量模块给出的全站 V5
-  · 领 Key 默认额度 ↔ 算法当前给出的额度
-不一致就记进 Bug 追踪并在后台标红。会处罚成员的决定要有强证据：由 share_guard 落实（辅助证据只在 72 小时内
-出现过「网络 + 客户端」强证据时才计分），诚信模块的校验「每个处罚都有强证据」再独立核对一遍。
+· Module：title / question（回答什么）/ params（关键参数的当前值）/ tick（周期任务）/ checks（交叉校验）。
+· 模块可在后台单独开关（设置 module_<名字>，或用 get_enabled / set_enabled 对接已有设置）。
+  关闭只停止自动调整，已生效的数值保持；保护类硬限制（每小时上限等）不随开关失效。
+· 每轮把运行结果记进 kernel_last，并保留最近 RUNS 轮（后台画运行条）。
+· 校验不通过记进 Bug 追踪；level 为 warn 的校验只在后台标黄，不记 Bug（风险检查用）。
 """
 from __future__ import annotations
 
@@ -24,18 +14,15 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-BASIS = {"A": "拍脑袋", "B": "有参考", "C": "实测", "D": "多指标互证"}
 STATE_KEY = "kernel_last"
+RUNS = 36                       # 每个模块保留最近 36 轮（6 小时）
 
 
 @dataclass
 class Param:
     name: str
-    value: Callable[[], Any]          # 读当前生效值（可能来自设置或常量）
-    basis: str                        # A / B / C / D
-    source: str = ""                  # 依据：文档链接、实测日期、互证的指标
+    value: Callable[[], Any]          # 读当前生效值
     note: str = ""
-    key: str = ""                     # 私密参数键名（params.py）；有私密值时后台标「私密」
 
 
 @dataclass
@@ -43,6 +30,8 @@ class Check:
     name: str
     ok: bool
     detail: str = ""
+    level: str = ""                   # 空 = 按 ok 判断；ok / warn / bad / na（风险检查用）
+    evidence: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -50,16 +39,14 @@ class Module:
     name: str
     title: str
     question: str
-    reality: str
-    principle: str
     default_enabled: bool = True
     params: list[Param] = field(default_factory=list)
     tick: Optional[Callable[["Kernel"], Any]] = None
     checks: Optional[Callable[["Kernel"], Any]] = None
-    # 有的模块的开关就是已有的设置（例如领 Key 开关 = register_open），用这两个钩子对接
     get_enabled: Optional[Callable[["Kernel"], Any]] = None
     set_enabled: Optional[Callable[["Kernel", bool], Any]] = None
-    hard_note: str = ""               # 关闭后哪些东西仍然生效（给站长看）
+    hard_note: str = ""               # 关闭后还有什么仍然生效
+    report_bugs: bool = True          # 校验失败时记进 Bug 追踪
 
 
 class Kernel:
@@ -71,6 +58,13 @@ class Kernel:
 
     def register(self, module: Module) -> None:
         self.modules[module.name] = module
+
+    async def load(self) -> None:
+        """启动时读回上次的运行记录，运行条不会因为重启清空。"""
+        try:
+            self.last = json.loads(await self.db.get_setting(STATE_KEY, "{}") or "{}")
+        except (TypeError, ValueError):
+            self.last = {}
 
     async def enabled(self, name: str) -> bool:
         m = self.modules[name]
@@ -87,11 +81,13 @@ class Kernel:
             await self.db.set_setting("module_" + name, "1" if on else "0")
 
     async def tick_all(self) -> dict[str, dict]:
-        """周期任务：按登记顺序运行启用的模块，然后做交叉校验。单个模块出错不影响其他模块。"""
+        """按登记顺序运行启用的模块，再做交叉校验；每个模块记一轮运行结果。单个模块出错不影响其他模块。"""
+        now = time.time()
         for name, m in self.modules.items():
             entry = self.last.setdefault(name, {})
             on = await self.enabled(name)
             entry["enabled"] = on
+            entry.pop("checks", None)
             if not on or m.tick is None:
                 continue
             t0 = time.time()
@@ -103,6 +99,14 @@ class Kernel:
                 entry.update(at=t0, ok=False, error=f"{type(exc).__name__}: {exc}"[:300])
                 self.bug("module:" + name, exc)
         await self.check_all()
+        for name in self.modules:
+            entry = self.last[name]
+            if not entry.get("enabled"):
+                continue
+            checks = entry.get("checks") or []
+            level = ("bad" if entry.get("ok") is False or any(c["level"] == "bad" for c in checks)
+                     else "warn" if any(c["level"] == "warn" for c in checks) else "ok")
+            entry["runs"] = (entry.get("runs") or [])[-(RUNS - 1):] + [{"at": now, "level": level}]
         await self.db.set_setting(STATE_KEY, json.dumps(self.last, ensure_ascii=False, default=str))
         return self.last
 
@@ -116,12 +120,15 @@ class Kernel:
             except Exception as exc:
                 checks = [Check("校验本身出错", False, f"{type(exc).__name__}: {exc}"[:200])]
                 traceback.print_exc()
+            for c in checks:
+                c.level = c.level or ("ok" if c.ok else "bad")
             self.last.setdefault(name, {})["checks"] = [c.__dict__ for c in checks]
             for c in checks:
                 if not c.ok:
                     bad.append((name, c))
-                    self.bug(f"check:{name}:{c.name}", title=f"交叉校验不一致：{m.title} · {c.name}：{c.detail}"[:200],
-                             level="warn")
+                    if m.report_bugs:
+                        self.bug(f"check:{name}:{c.name}", title=f"交叉校验不一致：{m.title} · {c.name}：{c.detail}"[:200],
+                                 level="warn")
         return bad
 
     async def snapshot(self) -> list[dict[str, Any]]:
@@ -134,11 +141,8 @@ class Kernel:
                     v = await v if hasattr(v, "__await__") else v
                 except Exception as exc:
                     v = f"读取失败：{exc}"
-                from . import params as _params
-                private = bool(p.key) and _params.overridden(p.key)
-                params.append({"name": p.name, "value": v, "basis": p.basis, "basis_label": BASIS.get(p.basis, p.basis),
-                               "source": p.source, "note": p.note, "private": private})
-            out.append({"name": name, "title": m.title, "question": m.question, "reality": m.reality,
-                        "principle": m.principle, "enabled": await self.enabled(name), "hard_note": m.hard_note,
-                        "periodic": m.tick is not None, "last": self.last.get(name, {}), "params": params})
+                params.append({"name": p.name, "value": v, "note": p.note})
+            out.append({"name": name, "title": m.title, "question": m.question, "enabled": await self.enabled(name),
+                        "hard_note": m.hard_note, "periodic": m.tick is not None, "last": self.last.get(name, {}),
+                        "params": params})
         return out
