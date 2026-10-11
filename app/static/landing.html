@@ -337,6 +337,10 @@ footer{max-width:960px;margin:0 auto;padding:24px 16px 40px;text-align:center;co
 .lh-left{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-width:0}
 .head-key{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}
 .head-key code{font-family:var(--mono);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 9px;font-size:13px;white-space:nowrap}
+.share-check{margin-top:12px;padding:12px;border:1px solid var(--warn);border-radius:10px;display:grid;gap:6px}
+.share-check b{display:flex;align-items:center;gap:6px;font-size:14px}
+.share-check-btns{display:grid;gap:6px}
+.share-check-btns .btn{justify-content:flex-start;text-align:left;white-space:normal;height:auto;padding:8px 10px}
 .me-export{margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}
 .me-export p{margin-top:4px}
 .me-empty{font-size:14px;color:var(--text-2);margin:4px 0}
@@ -833,12 +837,14 @@ function renderMe(d){
       + '<div><span>今日 V5（张）</span><b' + (lim5 === '不限' ? ' title="个人不限额度，仍受全站日上限约束"' : '') + '>' + (t.v5 || 0) + ' / ' + lim5 + '</b></div>'
       + '<div><span>出图状态</span><b>' + pos + '</b></div>'
       + '<div><span>有效期</span><b>' + (d.expires_at ? '至 ' + fmtDate(d.expires_at) : '长期') + '</b></div></div>'
+      + shareCheckHtml(d.share_check)
       + couponsHtml(d.coupons || [])
       + '<div class="me-export"><div class="me-export-h">' + icon('archive') + '作品备份<span class="beta">beta</span></div>'
       + expBlock
       + '</div>';
     var ck = $('copyKeyBtn'); if(ck) ck.onclick = function(){ copyText(d.key, '已复制 Key'); };
     bindCoupons(me);
+    bindShareCheck(me);
     Array.prototype.forEach.call(me.querySelectorAll('a.exp'), function(a){
       a.onclick = function(){
         if(a.getAttribute('aria-disabled') === 'true') return false;
@@ -853,6 +859,26 @@ function renderMe(d){
   hydrate(me);
 }
 /* 重置券：站长 / 奶妹发的，7 天内自己点一下就能重置今天的 V5 额度（先在页面里确认一次，不弹窗） */
+/* 网络确认：被检测标记过的成员才会看到；只记录回答，不改额度、不处罚 */
+function shareCheckHtml(sc){
+  if(!sc || !sc.options) return '';
+  var btns = Object.keys(sc.options).map(function(k){
+    return '<button class="btn mini sc-ans" type="button" data-ans="' + esc(k) + '">' + esc(sc.options[k]) + '</button>';
+  }).join('');
+  return '<div class="share-check"><b>' + icon('info') + '确认一下你的网络情况</b>'
+    + '<p class="muted sm">系统看到你的 Key 最近在几个不同的网络之间切换（常见原因是开了 VPN / 代理，节点自动切换）。请选一个最符合的，只用来核对检测有没有误判，不会因此扣额度或封号。</p>'
+    + '<div class="share-check-btns">' + btns + '</div></div>';
+}
+function bindShareCheck(root){
+  Array.prototype.forEach.call(root.querySelectorAll('.sc-ans'), function(b){
+    b.onclick = function(){
+      Array.prototype.forEach.call(root.querySelectorAll('.sc-ans'), function(x){ x.disabled = true; });
+      fetch('/public/me/share-confirm', {method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body:JSON.stringify({answer:b.dataset.ans})})
+        .then(function(r){ if(!r.ok) throw 0; toast('收到，谢谢！'); var box = root.querySelector('.share-check'); if(box) box.remove(); })
+        .catch(function(){ toast('没提交成功，请稍后再试'); Array.prototype.forEach.call(root.querySelectorAll('.sc-ans'), function(x){ x.disabled = false; }); });
+    };
+  });
+}
 function couponsHtml(list){
   if(!list.length) return '';
   return '<div class="me-coupons">' + list.map(function(c){
