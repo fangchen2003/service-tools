@@ -811,7 +811,7 @@ function renderMe(d){
     var expBlock = retDays === 0
       ? '<p class="muted sm">当前未开启原图备份功能（出图不保存原图）。</p>'
       : (d.images_stored
-        ? '<p class="muted sm">服务器上有你最近 ' + d.images_stored + ' 张原图，只保留 ' + retDays + ' 天，到期自动删除。喜欢的请及时打包带走；打包较重，每分钟限 1 次。</p>'
+        ? '<p class="muted sm">可以打包你最近 ' + retDays + ' 天的 ' + d.images_stored + ' 张原图，用来找回客户端里误删的图。这不是长期相册，请自己保存好；打包较重，每分钟限 1 次。</p>'
           + '<div class="me-export-btns"><a class="btn exp" href="/public/my-export?format=epub">' + icon('book') + '<span>EPUB 画册<small>一图一页，附提示词和参数，手机、电脑的图书 App 都能打开</small></span></a>'
           + '<a class="btn exp" href="/public/my-export?format=zip">' + icon('image') + '<span>原图 ZIP<small>PNG 原图 + prompts.txt，适合存档或二次编辑</small></span></a></div>'
         : '<p class="muted sm">最近 ' + retDays + ' 天还没有可备份的原图。出图后会出现在这里。</p>');

@@ -907,13 +907,13 @@ class Database:
             return bytes(row["image"]), (row["image_type"] or "image/png")
         return None, ""
 
-    async def audit_images_for(self, key_id: int, max_bytes: int = 0):
+    async def audit_images_for(self, key_id: int, max_bytes: int = 0, since: float = 0.0):
         """导出用：某成员带原图的记录，产出 (id, ts, image_type, prompt, negative, extra, image)。
         max_bytes>0 时只取最新的、原图合计不超过这么多字节的那些（防止一次打包把内存撑爆）。"""
         if max_bytes > 0:
             sizes = await self._db.execute_fetchall(
-                "SELECT id, length(image) FROM generation_audit WHERE key_id=? AND image IS NOT NULL ORDER BY ts DESC",
-                (key_id,))
+                "SELECT id, length(image) FROM generation_audit WHERE key_id=? AND image IS NOT NULL AND ts>=? "
+                "ORDER BY ts DESC", (key_id, since))
             keep, total = [], 0
             for rid, size in sizes:
                 if total + int(size or 0) > max_bytes and keep:
@@ -928,13 +928,43 @@ class Database:
                 f"WHERE id IN ({marks}) ORDER BY ts", tuple(keep))
         rows = await self._db.execute_fetchall(
             "SELECT id, ts, image_type, prompt, negative, extra, image FROM generation_audit "
-            "WHERE key_id=? AND image IS NOT NULL ORDER BY ts", (key_id,))
+            "WHERE key_id=? AND image IS NOT NULL AND ts>=? ORDER BY ts", (key_id, since))
         return rows
 
-    async def audit_image_count(self, key_id: int) -> int:
+    async def audit_image_count(self, key_id: int, since: float = 0.0) -> int:
         r = await self._db.execute_fetchall(
-            "SELECT COUNT(*) FROM generation_audit WHERE key_id=? AND image IS NOT NULL", (key_id,))
+            "SELECT COUNT(*) FROM generation_audit WHERE key_id=? AND image IS NOT NULL AND ts>=?", (key_id, since))
         return int(r[0][0])
+
+    async def audit_image_bytes(self) -> int:
+        r = await self._db.execute_fetchall(
+            "SELECT COALESCE(SUM(LENGTH(image)), 0) FROM generation_audit WHERE image IS NOT NULL")
+        return int(r[0][0])
+
+    async def purge_audit_images_to_cap(self, cap_bytes: int, low_water: float = 0.9) -> int:
+        """原图总量超过 cap_bytes 时，从最旧的开始清（只置空 BLOB），清到 cap 的 90% 以下（留余量，避免每 5 分钟清一点）。"""
+        total = await self.audit_image_bytes()
+        if cap_bytes <= 0 or total <= cap_bytes:
+            return 0
+        target = total - int(cap_bytes * low_water)
+        freed, cutoff = 0, None
+        cur = await self._db.execute(
+            "SELECT id, LENGTH(image) FROM generation_audit WHERE image IS NOT NULL ORDER BY id")
+        async for row_id, size in cur:
+            freed += int(size or 0)
+            cutoff = row_id
+            if freed >= target:
+                break
+        await cur.close()
+        if cutoff is None:
+            return 0
+        return await self.purge_audit_images_before_id(cutoff + 1)
+
+    async def purge_audit_images_before_id(self, before_id: int) -> int:
+        cur = await self._db.execute(
+            "UPDATE generation_audit SET image=NULL, image_type='' WHERE image IS NOT NULL AND id<?", (before_id,))
+        await self._db.commit()
+        return cur.rowcount or 0
 
     async def purge_audit_images(self, older_than: float) -> int:
         """只清原图 BLOB（置空），保留缩略图、提示词、参数。"""

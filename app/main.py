@@ -63,7 +63,7 @@ from .policy import ECONOMY_STEPS, REFERENCE_FIELDS, economy_trim
 from . import status_stats, quota_algo
 from .key_sources import RETENTION_SECONDS as KEY_SOURCE_RETENTION
 from .action_log import RETENTION_DAYS as ADMIN_ACTION_RETENTION_DAYS, log_action
-from .audit import audit_flags, audit_disclosure, audit_image_days, capture_prompts, full_image
+from .audit import audit_flags, audit_disclosure, audit_image_cap_mb, capture_prompts, full_image
 from .upstream_errors import upstream_error_message, text_stream_events
 from .sse import encode_sse
 
@@ -184,7 +184,7 @@ async def lifespan(app: FastAPI):
         await STATE.db.close()
 
 
-__version__ = "2.17.0"
+__version__ = "2.17.1"
 
 app = FastAPI(title="猫头鹰公益站", version=__version__, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
@@ -495,7 +495,7 @@ async def audit_generation(key, kind: str, model: str, status: str, body: dict, 
     try:
         prompt, negative, extra = capture_prompts(body) if want_prompts else ("", "", "")
         thumb, image, image_type = None, None, ""
-        if want_thumbs and content and status == "ok" and await audit_image_days(STATE.db) > 0:
+        if want_thumbs and content and status == "ok":           # 「记录生成结果」开关就是存原图的开关
             image, image_type = await anyio.to_thread.run_sync(full_image, content)
         await STATE.db.add_audit(key["id"], key["name"], kind, model, status, prompt, negative, thumb,
                                  extra=extra, image=image, image_type=image_type)
@@ -533,11 +533,13 @@ async def maintenance_loop() -> None:
         await STATE.db._db.commit()
         if getattr(STATE, "bugs", None) is not None:
             await STATE.bugs.purge(time.time() - 30 * 86400)
-        # 原图只保留最近几天（缩略图、提示词、参数长期留）；天数可在设置里调
+        # 原图不按天数删（2026-10-11 站长）：只在总量超过容量上限时删最旧的；站长也可以在后台手动清空
         try:
-            days = await audit_image_days(STATE.db)
-            if days > 0:
-                await STATE.db.purge_audit_images(time.time() - days * 86400)
+            cap_mb = await audit_image_cap_mb(STATE.db)
+            if cap_mb > 0:
+                n = await STATE.db.purge_audit_images_to_cap(cap_mb * 1024 * 1024)
+                if n:
+                    print(f"[audit] 原图超过容量上限 {cap_mb} MB，已清掉最旧的 {n} 张", flush=True)
         except Exception as exc:
             bug("audit_image_purge", exc)
 

@@ -121,7 +121,8 @@
 | `global_monthly_anlas` | float | `.env global_monthly_anlas` | 0–1e+06 | 额度 / Anlas 池 | 全站每月 Anlas 预算（0 = 不限） |
 | `guard_base_daily_images` | int | 100 | 0–100000 | guard（注册私信也读） | V4.5 每人每天保底张数 |
 | `algo_notice` | str | '' |  | quota_algo → 首页 | 首页显示的今日额度说明 |
-| `audit_image_retention_days` | int | 3 | 0–365 | audit | 原图保留天数（0 = 不保存原图） |
+| `audit_image_retention_days` | int | 3 | 0–365 | audit | （已停用，2026-10-11 起原图按容量上限清理） |
+| `audit_image_cap_mb` | int | 8192 | 0–500000 | audit | 原图占用上限（MB）：超过后自动删掉最旧的原图；0 = 不限 |
 | `share_guard_mode` | choice | 'observe' | enforce / observe / off | share_guard | 防分享：enforce 处罚 / observe 只记录 / off |
 
 ## 退群回收（v2.15.0 起）

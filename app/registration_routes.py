@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from . import site_flags
 from .action_log import log_action
-from .audit import audit_disclosure, audit_image_days
+from .audit import MEMBER_DOWNLOAD_DAYS, audit_disclosure, audit_image_days
 from .policy import gen_key
 from .registration import KEY_SESSION_PREFIX, RegistrationError
 
@@ -471,7 +471,8 @@ async def public_me(request: Request):
                           "daily_images": key["daily_images"], "daily_v5": key["daily_v5"]},
                    queue=qv.get("mine", []),
                    coupons=await gate.db.list_coupons(key["id"]),
-                   images_stored=await gate.db.audit_image_count(key["id"]), image_retention_days=img_days)
+                   images_stored=await gate.db.audit_image_count(key["id"], since=_time.time() - img_days * 86400),
+                   image_retention_days=img_days)
     return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
 
@@ -525,9 +526,10 @@ async def my_export(request: Request, format: str = "zip"):
         raise HTTPException(429, "有人正在打包，请过半分钟再试")
     async with _EXPORT_LOCK:
         db = request.app.state.gate.db
-        rows = await db.audit_images_for(key["id"], max_bytes=EXPORT_MAX_BYTES)
+        rows = await db.audit_images_for(key["id"], max_bytes=EXPORT_MAX_BYTES,
+                                         since=_t.time() - MEMBER_DOWNLOAD_DAYS * 86400)
         if not rows:
-            raise HTTPException(404, "暂时没有可打包的原图（原图只保留最近几天）")
+            raise HTTPException(404, "最近 2 天没有可打包的原图（打包只用来找回最近误删的图）")
         _EXPORT_AT[discord_id] = now
         who = key["name"] or "我的作品"
         if format == "epub":

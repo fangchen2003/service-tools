@@ -1459,21 +1459,37 @@ async def test_source_signals_reach_autopilot_without_alerter():
 
 
 @pytest.mark.asyncio
-async def test_audit_disclosure_covers_full_images_and_zero_means_none():
-    """披露要写明原图及其保留天数；原图保留天数 0 = 不保存原图（不能被 `or 3` 吞掉变回 3）。"""
+async def test_audit_disclosure_and_image_cap_purge():
+    """2026-10-11 站长：原图不按天数删，只按容量上限删最旧的；成员只能打包最近 2 天（找回误删）。"""
+    import time as _t
     from types import SimpleNamespace
-    from app.audit import audit_disclosure, audit_image_days
+    from app.audit import MEMBER_DOWNLOAD_DAYS, audit_disclosure, audit_image_cap_mb, audit_image_days
     with tempfile.TemporaryDirectory() as tmp:
         db = Database(str(Path(tmp) / "g.sqlite"))
         await db.connect()
         cfg = SimpleNamespace(audit_prompts=True, audit_thumbs=True, audit_retention_days=14)
-        assert await audit_image_days(db) == 3                       # 未设置：默认 3
+        assert await audit_image_days(db) == MEMBER_DOWNLOAD_DAYS == 2
+        assert await audit_image_cap_mb(db) == 8192
         text = await audit_disclosure(db, cfg)
-        assert "原图（3 天后自动删除" in text and "提示词（14 天后自动删除）" in text
+        assert "最近 2 天" in text and "最旧" in text and "提示词（14 天后自动删除）" in text
         assert "缩略图" not in text and "测试" not in text
-        await db.set_setting("audit_image_retention_days", 0)
-        assert await audit_image_days(db) == 0
-        assert "原图" not in await audit_disclosure(db, cfg)
+        assert "原图" not in await audit_disclosure(db, SimpleNamespace(audit_prompts=True, audit_thumbs=False,
+                                                                       audit_retention_days=14))
+        now = _t.time()
+        for i, age in enumerate((5, 4, 3, 1, 0)):              # 5 张，每张 100 字节，天数各不相同
+            await db.add_audit(1, "k", "image", "m", "ok", "p", "", None, image=bytes([i]) * 100, image_type="image/png")
+            await db._db.execute("UPDATE generation_audit SET ts=? WHERE id=(SELECT MAX(id) FROM generation_audit)",
+                                 (now - age * 86400,))
+        await db._db.commit()
+        assert await db.audit_image_bytes() == 500
+        assert await db.audit_image_count(1, since=now - 2 * 86400) == 2           # 成员只看得到最近 2 天
+        assert len(await db.audit_images_for(1, since=now - 2 * 86400)) == 2
+        assert await db.purge_audit_images_to_cap(1000) == 0                       # 没超上限：一张不删（不按天数）
+        assert await db.purge_audit_images_to_cap(300) == 3                        # 超了：删最旧的，删到 90% 以下
+        assert await db.audit_image_bytes() == 200
+        left = await db._db.execute_fetchall("SELECT ts FROM generation_audit WHERE image IS NOT NULL")
+        assert min(r[0] for r in left) >= now - 1 * 86400 - 5
+        assert await db.purge_audit_images_before_id(2 ** 62) == 2                 # 站长手动清空
         await db.close()
 
 

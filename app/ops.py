@@ -163,23 +163,24 @@ async def set_global_features(db, flags: dict) -> dict[str, bool]:
 
 async def set_audit(state, body: dict) -> dict:
     """保存记录开关与保留天数；记录范围变化且 notify 为真时，在成员公告频道说明（文案与首页同源）。"""
-    from .audit import IMAGE_RETENTION_KEY, audit_image_days, audit_notice
+    from .audit import IMAGE_CAP_KEY, MEMBER_DOWNLOAD_DAYS, audit_image_cap_mb, audit_notice
     prompts, thumbs, days = await audit_flags(state.db, state.settings)
-    image_days = await audit_image_days(state.db)
-    before = (prompts, thumbs, days, image_days)
+    image_days = MEMBER_DOWNLOAD_DAYS
+    cap_mb = await audit_image_cap_mb(state.db)
+    before = (prompts, thumbs, days)
     if "prompts" in body:
         prompts = bool(body["prompts"])
     if "thumbs" in body:
         thumbs = bool(body["thumbs"])
     if "retention_days" in body:
         days = max(0, min(int(body["retention_days"]), 3650))      # 0 = 长期保留
-    if "image_retention_days" in body:
-        image_days = max(0, min(int(body["image_retention_days"]), 365))   # 0 = 不保存原图
+    if "image_cap_mb" in body:
+        cap_mb = max(0, min(int(body["image_cap_mb"]), 500_000))   # 0 = 不限
     await state.db.set_settings_bulk({"audit_prompts": "1" if prompts else "0",
                                       "audit_thumbs": "1" if thumbs else "0",
                                       "audit_retention_days": days,
-                                      IMAGE_RETENTION_KEY: image_days})
-    if body.get("notify", True) and (prompts, thumbs, days, image_days) != before:
+                                      IMAGE_CAP_KEY: cap_mb})
+    if body.get("notify", True) and (prompts, thumbs, days) != before:
         announcer = getattr(state, "announcer", None)
         if announcer is not None:
             if prompts or thumbs:
@@ -187,4 +188,5 @@ async def set_audit(state, body: dict) -> dict:
             else:
                 text = "📢 **数据记录说明**：站长已关闭生成记录，不再保存新的提示词和原图（已有记录到期自动删除）。"
             announcer.post(text)
-    return {"prompts": prompts, "thumbs": thumbs, "retention_days": days, "image_retention_days": image_days}
+    return {"prompts": prompts, "thumbs": thumbs, "retention_days": days, "image_retention_days": image_days,
+            "image_cap_mb": cap_mb}
