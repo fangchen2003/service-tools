@@ -64,6 +64,7 @@ def test_repeated_resets_preserve_month_global_and_history(tmp_path):
             assert await db.month_anlas(1, '2026-09') == 50.5
             assert await db.month_anlas_all('2026-09') == 50.5
             assert await db.day_v5_total('2026-09-22') == 3
+            assert await db.day_anlas_total('2026-09-22') == 42.5
             overview = await db.overview('2026-09-22', ['2026-09-21', '2026-09-22'])
             assert overview['today']['anlas'] == 42.5 and overview['today']['v5'] == 3
             assert overview['month']['anlas'] == 50.5

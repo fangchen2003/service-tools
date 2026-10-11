@@ -806,6 +806,15 @@ class Database:
         row = await cur.fetchone()
         return int(row["c"] or 0)
 
+    async def day_anlas_total(self, day: str) -> float:
+        """全站当日消耗的 Anlas 总数。"""
+        cur = await self._db.execute(
+            "SELECT COALESCE(SUM(anlas), 0) AS a FROM counters WHERE day=?",
+            (day,),
+        )
+        row = await cur.fetchone()
+        return float(row["a"] or 0.0) if row else 0.0
+
     async def month_anlas_all(self, month: str) -> float:
         """全站所有 Key 本月的 Anlas 消耗（用于全站预算总闸）。"""
         cur = await self._db.execute(

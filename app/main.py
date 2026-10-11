@@ -184,7 +184,7 @@ async def lifespan(app: FastAPI):
         await STATE.db.close()
 
 
-__version__ = "2.22.0"
+__version__ = "2.22.1"
 
 app = FastAPI(title="猫头鹰公益站", version=__version__, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
@@ -445,7 +445,7 @@ def _share_callbacks(request: Request) -> dict:
 
 
 async def require_feature(key, name: str) -> None:
-    reason = await features.check(STATE.db, key, name)
+    reason = await features.check(STATE.db, key, name, STATE.settings)
     if reason:
         raise err(403, reason)
 
@@ -885,8 +885,22 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
             if total + sum(r.v5 for r in global_day if not r.exclude_global_v5) + est["v5"] > g:
                 raise err(402, f"全站今日 V5 额度已用完（{int(g)} 张/天），明天再来")
     if est["anlas"] > 0:
-        if not key["allow_anlas"]:
+        is_vibe = bool(est.get("is_vibe"))
+        vibe_daily_cap = await site_flags.get(STATE.db, site_flags.GLOBAL_DAILY_ANLAS, STATE.settings)
+        if is_vibe and not key["allow_anlas"]:
+            if vibe_daily_cap <= 0:
+                raise err(402, "该请求会消耗 Anlas，全站 Vibe 每日额度暂未开放")
+            day_used = await STATE.db.day_anlas_total(STATE.day())
+            in_flight = sum(r.anlas for r in global_day)
+            if day_used + in_flight + est["anlas"] > vibe_daily_cap:
+                raise err(402, f"全站今日 Vibe 额度已抢完（{int(vibe_daily_cap)} Anlas/天），明日 0 点恢复")
+        elif not key["allow_anlas"]:
             raise err(402, "该请求会消耗 Anlas，此 Key 未开通付费额度权限")
+        elif vibe_daily_cap > 0:
+            day_used = await STATE.db.day_anlas_total(STATE.day())
+            in_flight = sum(r.anlas for r in global_day)
+            if day_used + in_flight + est["anlas"] > vibe_daily_cap:
+                raise err(402, f"全站今日 Anlas 额度已抢完（{int(vibe_daily_cap)} Anlas/天），明日 0 点恢复")
         # 2026-10-10 站长：放开 Anlas。只用于 NovelAI 一定按 Anlas 收费的操作（超规格尺寸 / 步数、一次多张、
         # Vibe、放大、导演工具）：这些不占 V5 免费额度（官方 FAQ #38），也不影响 V4.5（Opus 不限）。每人仍受每日 Anlas 上限约束。
         if key["daily_anlas"] > 0 and c["anlas"] + sum(r.anlas for r in own_day) + est["anlas"] > key["daily_anlas"]:
@@ -1149,7 +1163,7 @@ async def encode_vibe(request: Request):
     model = body["model"]
     payload = {"image": body["image"], "model": model,
                "information_extracted": body["informationExtracted"]}
-    estimate = {"anlas": VIBE_ENCODING_ANLAS, "v5": 0}
+    estimate = {"anlas": VIBE_ENCODING_ANLAS, "v5": 0, "is_vibe": True}
     await quota_image_check(key, estimate)
 
     async def record_encoding_429(retry_after: float) -> None:
@@ -1305,6 +1319,8 @@ async def _generate_image(request: Request, *, streaming: bool):
     legacy_free_images = (
         1 if model_tier == "legacy" and legacy_normal_free_eligible(body) else 0
     )
+    if any(p.get(name) for name in REFERENCE_FIELDS):
+        est["is_vibe"] = True
     if not est["v5"]:
         await quota_image_check(key, est, legacy_free_images=legacy_free_images)
 
@@ -1746,7 +1762,7 @@ async def _feature_view(key) -> list[dict]:
     """该 Key 当前各项功能是否可用（已计入全局开关）。"""
     view = []
     for name, label in features.FEATURES.items():
-        on = await features.check(STATE.db, key, name) is None
+        on = await features.check(STATE.db, key, name, STATE.settings) is None
         if name == "voice" and not key["is_admin"]:
             on = False                  # 语音合成目前仅管理员 Key 可用（见 generate_voice）
         view.append({"id": name, "label": label, "on": on})

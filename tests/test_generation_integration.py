@@ -84,6 +84,9 @@ class FakeDB:
     async def day_v5_total(self, *_):
         return sum(row["v5"] for _, row in self.charges)
 
+    async def day_anlas_total(self, *_):
+        return sum(row.get("anlas", 0) for _, row in self.charges)
+
     async def add_log(self, *args, **kwargs):
         self.logs.append((args, kwargs))
 
