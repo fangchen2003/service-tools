@@ -184,7 +184,7 @@ async def lifespan(app: FastAPI):
         await STATE.db.close()
 
 
-__version__ = "2.16.25"
+__version__ = "2.17.0"
 
 app = FastAPI(title="猫头鹰公益站", version=__version__, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
@@ -838,9 +838,15 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
         base = guard.values["base_daily_images"] if guard is not None else 0
         if base and base < key["daily_images"] and used_legacy + legacy_free_images > base:
             tokens = [t.token_id for t in getattr(STATE.nai, "pool", []) if t.usable]
+            # 按时段放行时，超出保底的部分只能用「这个时段放出来、还剩得多」的份额：至少留半小时的量给保底内的人
+            reserve = guard.values["account_daily_cap"] / 48 * len(tokens)
             if not guard.site_idle(key["id"], tokens):
                 raise err(429, f"今天的保底 {base} 张已用完。全站空闲时可以继续用到 {key['daily_images']} 张，"
                                "现在有其他人在排队或用量较高，请过几分钟再试")
+            if await guard.paced_headroom(STATE.db, tokens, STATE.day()) <= reserve:
+                # 文案不能含「其他人在排队」：每日复盘按它数 base_blocks（「有余量还被拦」），这里是份额紧（Sonnet 审查 P1）
+                raise err(429, f"今天的保底 {base} 张已用完。这个时段放出的出图份额所剩不多，先留给还没用到保底的成员；"
+                               f"份额充裕时可以继续用到 {key['daily_images']} 张，请稍后再试")
     if est["v5"] > 0:
         # V5 周额度是账户级共享资源，用全站日计数镜像（恢复量 ~190 张/天）
         borrow = quota_algo.borrow_for(key["id"]) if key["daily_v5"] > 0 else 0    # 账号快满时的空闲借用
