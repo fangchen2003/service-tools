@@ -605,7 +605,8 @@ async def patch_key(request: Request, key_id: int):
         fields["expires_at"] = (time.time() + d * 86400) if d > 0 else None
     before = await st.db.get_key(key_id)
     if quota == "auto":
-        fields.update(exclude_global_v5=False, features=None)
+        # Anlas 也交给算法：先收回手动授权，再由 anlas_pool 按条件分配（Sonnet 审查 P1：否则手动的 150/天永久保留）
+        fields.update(exclude_global_v5=False, features=None, allow_anlas=False, daily_anlas=0.0)
     if quota is not None:
         fields["v5_pinned"] = None                  # 手动就是填的值，不再有「基础值 + 不低于普通成员」的中间状态
     if quota is None and "daily_v5" in fields and "v5_pinned" not in fields and fields["daily_v5"] != before["daily_v5"]:
