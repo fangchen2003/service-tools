@@ -220,6 +220,7 @@ async def test_quota_two_modes_auto_and_manual(env):
     assert r.status_code == 200
     assert (row['quota_auto'], row['anlas_auto'], row['v5_pinned'], row['features'], row['exclude_global_v5']) == (1, 0, None, None, 0)
     assert row['daily_images'] != 999                                                        # 算法模式忽略填的数字
+    assert (row['allow_anlas'], row['daily_anlas']) == (0, 0.0)                              # 手动的 Anlas 授权收回，交给算法
     assert (await client.patch(f"/admin/api/keys/{key['id']}", json={'quota': 'half'})).status_code == 422
     listed = {k['id']: k for k in (await client.get('/admin/api/keys')).json()['keys']}
     assert listed[key['id']]['quota_auto'] is True

@@ -2586,7 +2586,7 @@ function openEdit(id){
   $('#f_is_test').checked = !!k.is_test;
   $('#f_notify').checked = false;
   setFeatForm(k.features == null ? null : k.features);
-  setQuotaMode(k.quota_auto ? 'auto' : 'manual');
+  setQuotaMode(k.quota_auto && !k.is_test ? 'auto' : 'manual');      // 测试 Key 不归算法管，只能手动
   $('#modalErr').textContent=''; openOverlay('#modal');
 }
 function closeModal(){ closeOverlay('#modal'); }

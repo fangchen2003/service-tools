@@ -421,8 +421,9 @@ async def login_with_key(request: Request, body: KeyLogin):
     reg = await gate.db._db.execute_fetchall(
         "SELECT discord_id FROM discord_registrations WHERE key_id=?", (row["id"],)) if row is not None else []
     # 没走 /register 的 Key（站长后台手动发的、测试 Key）也能登录：会话用 "key:<id>" 代替 discord_id。站长 Key 不行。
-    unbound = row is not None and not reg and row["enabled"] and not row["is_admin"]
-    if not reg and not unbound:
+    usable = row is not None and row["enabled"] and not row["is_admin"]
+    unbound = usable and not reg
+    if not usable:
         fails.append(now)
         _KEY_LOGIN_FAILS[ip] = fails
         raise HTTPException(401, "Key 不对，或这个 Key 已停用")
@@ -514,8 +515,8 @@ async def my_export(request: Request, format: str = "zip"):
         raise HTTPException(429, "打包有点重，请 1 分钟后再试")
     service = getattr(request.app.state, "registrar", None)
     key = await service.key_row_for(discord_id) if service is not None else None
-    if key is None:
-        raise HTTPException(404, "你还没有领取 Key")
+    if key is None or not key["enabled"]:
+        raise HTTPException(404, "你还没有可用的 Key")
     global _EXPORT_LOCK
     import asyncio as _asyncio
     if _EXPORT_LOCK is None:
