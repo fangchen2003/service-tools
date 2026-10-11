@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import time
 
@@ -46,14 +47,24 @@ async def sync_loop(client: discord.Client) -> None:
     """每分钟：拉配置、报心跳（后台据此显示在线状态）。"""
     ready_at = time.time()
     while not client.is_closed():
-        cfg = await bridge("GET", "/config")
-        if isinstance(cfg, dict):
-            CONFIG.update({k: v for k, v in cfg.items() if k in CONFIG})
-        g = client.get_guild(int(os.environ["DISCORD_GUILD_ID"]))
-        guild = g.name if g else ""
-        await bridge("POST", "/report", {"status": {
-            "user": str(client.user), "guild": guild, "latency_ms": round(client.latency * 1000),
-            "ready_at": ready_at, "ai_ready": gallery_praise.enabled(), "ai_today": gallery_praise.used_today()}})
+        try:
+            cfg = await bridge("GET", "/config")
+            if isinstance(cfg, dict):
+                CONFIG.update({k: v for k, v in cfg.items() if k in CONFIG})
+            g = client.get_guild(int(os.environ["DISCORD_GUILD_ID"]))
+            guild = g.name if g else ""
+            latency = 0
+            try:
+                lat = float(getattr(client, "latency", 0.0) or 0.0)
+                if math.isfinite(lat):
+                    latency = round(lat * 1000)
+            except Exception:
+                latency = 0
+            await bridge("POST", "/report", {"status": {
+                "user": str(client.user), "guild": guild, "latency_ms": latency,
+                "ready_at": ready_at, "ai_ready": gallery_praise.enabled(), "ai_today": gallery_praise.used_today()}})
+        except Exception as exc:
+            print(f"[sync_loop] heart-beat warning: {exc}", flush=True)
         await asyncio.sleep(60)
 
 

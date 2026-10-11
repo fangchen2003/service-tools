@@ -235,22 +235,23 @@ IMPACT_COLOR = {"none": "#333333", "minor": "#FAA72A", "major": "#E86235", "crit
 STATUS_TEXT = {0: "#76AD2A", 1: "#FAA72A", 2: "#E86235", 3: "#E04343"}
 
 CSS = """
+*, *::before, *::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background-color:#FAF9F5;color:#141413;font-family:"Atlassian Sans","Helvetica Neue",Helvetica,Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
-font-weight:400;font-size:16px;line-height:24px;-webkit-font-smoothing:antialiased}
+font-weight:400;font-size:16px;line-height:24px;-webkit-font-smoothing:antialiased;overflow-x:hidden}
 a{color:inherit;text-decoration:none}
 small{font-size:.875rem;line-height:1.334375rem;color:#87867F}
-.layout-content{width:90%;max-width:850px;margin:0 auto;padding-bottom:3rem}
+.layout-content{width:100%;max-width:850px;margin:0 auto;padding:0 20px 3rem}
 .font-regular{font-size:1rem;line-height:1.5rem}
 .font-large{font-weight:500;font-size:1.25rem;line-height:1.8125rem}
 .font-largest{font-weight:500;font-size:1.75rem;line-height:2.3625rem}
-.masthead{padding-top:70px;margin-bottom:70px;display:flex;align-items:center;justify-content:space-between;gap:16px}
-.logo{display:flex;align-items:center;gap:.5rem;font-family:"Copernicus","Tiempos Headline",Georgia,"Songti SC","STSong",serif;
-font-size:2.6rem;line-height:1;letter-spacing:-.02em;color:#141413;white-space:nowrap}
-.logo .mark{font-size:2.2rem}
-.show-updates-dropdown{background:#141413;color:#fff;border-radius:4px;padding:.8rem 1.6rem;font-size:.8125rem;font-weight:600;letter-spacing:.14em;white-space:nowrap}
-.page-status{font-weight:500;border-radius:4px;border:1px solid rgba(0,0,0,.1);text-shadow:0 1px 0 rgba(0,0,0,.1);margin-bottom:70px;padding:.75rem 1.25rem;background:#76AD2A;color:#fff;font-size:1.25rem;line-height:1.8125rem}
-.unresolved-incidents{margin-bottom:70px}
+.masthead{padding-top:60px;margin-bottom:50px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.logo{display:inline-flex;align-items:center;gap:.5rem;font-family:"Copernicus","Tiempos Headline",Georgia,"Songti SC","STSong",serif;
+font-size:2.4rem;line-height:1;letter-spacing:-.02em;color:#141413;white-space:nowrap}
+.logo .mark{font-size:2rem}
+.show-updates-dropdown{background:#141413;color:#fff;border-radius:4px;padding:.75rem 1.5rem;font-size:.8125rem;font-weight:600;letter-spacing:.14em;white-space:nowrap;display:inline-block}
+.page-status{font-weight:500;border-radius:4px;border:1px solid rgba(0,0,0,.1);text-shadow:0 1px 0 rgba(0,0,0,.1);margin-bottom:60px;padding:.75rem 1.25rem;background:#76AD2A;color:#fff;font-size:1.25rem;line-height:1.8125rem}
+.unresolved-incidents{margin-bottom:60px}
 .unresolved-incident{margin-top:25px}.unresolved-incident:first-of-type{margin-top:0}
 .unresolved-incident .incident-title{text-shadow:0 1px 0 rgba(0,0,0,.2);padding:.85rem 1.25rem .75rem;color:#fff;display:flex;justify-content:space-between;gap:1rem;border-radius:4px 4px 0 0}
 .unresolved-incident .incident-title .subscribe{font-size:1rem;font-weight:500;white-space:nowrap}
@@ -258,20 +259,20 @@ font-size:2.6rem;line-height:1;letter-spacing:-.02em;color:#141413;white-space:n
 .update{margin-bottom:20px;overflow-wrap:break-word}.update:last-of-type{margin-bottom:0}
 .whitespace-pre-wrap{white-space:pre-wrap}
 .components-uptime-link{text-align:right;font-size:.85em;color:#87867F;margin-bottom:.4rem}
-.components-section{margin-bottom:70px}
-.component-container{padding:1.1rem 1.25rem 1rem;border:1px solid #DEDCD1;border-top-width:0}
+.components-section{margin-bottom:60px}
+.component-container{padding:1.1rem 1.25rem 1rem;border:1px solid #DEDCD1;border-top-width:0;width:100%;overflow:hidden}
 .component-container:first-child{border-top-width:1px;border-radius:4px 4px 0 0}
 .component-container:last-child{border-radius:0 0 4px 4px}
 .component-inner-container{display:flex;justify-content:space-between;align-items:baseline;gap:1rem}
 .component-container .name{font-weight:500;color:rgba(20,20,19,.8);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:75%}
 .component-container .component-status{font-size:.875rem;white-space:nowrap}
-.uptime-90-days-wrapper{padding-top:5px;margin-bottom:-2px}
+.uptime-90-days-wrapper{padding-top:5px;margin-bottom:-2px;width:100%;overflow:hidden}
 .uptime-90-days-wrapper svg{display:block;margin:0;padding:0;height:34px;width:100%;overflow:hidden}
 .uptime-90-days-wrapper svg rect:hover{fill:#5e6c84}
-.legend{display:flex;flex-direction:row;justify-content:space-between;position:relative;top:-2px}
+.legend{display:flex;flex-direction:row;justify-content:space-between;position:relative;top:-2px;flex-wrap:wrap;gap:4px}
 .legend .legend-item{flex:0 0 auto;font-size:.875rem;color:#87867f}
-.legend .spacer{flex:1;margin:.75rem 1rem 0 1rem;height:1px;background:#87867f;opacity:.3}
-.incidents-list{margin-top:70px}
+.legend .spacer{flex:1;margin:.75rem .5rem 0;height:1px;background:#87867f;opacity:.3;min-width:20px}
+.incidents-list{margin-top:60px}
 .incidents-list h2{margin:0}
 .status-day{margin-top:35px}.status-day:nth-child(2){margin-top:20px}
 .status-day .date{font-weight:500;border-bottom:1px solid #DEDCD1;padding-bottom:3px;margin:0 0 10px}
@@ -283,10 +284,11 @@ font-size:2.6rem;line-height:1;letter-spacing:-.02em;color:#141413;white-space:n
 .incident-title.impact-major a{color:#E86235}.incident-title.impact-critical a{color:#E04343}
 .updates-container .update{margin:0 0 1rem}
 .page-footer{margin-top:3rem;border-top:1px solid #DEDCD1;padding-top:1rem;display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
-@media(max-width:768px){.masthead{padding-top:60px;margin-bottom:60px}.page-status,.unresolved-incidents,.components-section{margin-bottom:60px}
-.incidents-list{margin-top:60px}.font-largest{font-size:1.375rem;line-height:1.959375rem}.font-large{font-size:1.125rem;line-height:1.659375rem}
-.component-container{padding:.85rem 1rem .75rem}.logo{font-size:2rem}.logo .mark{font-size:1.7rem}}
-@media(max-width:450px){.masthead{padding-top:50px;margin-bottom:50px;flex-direction:column;align-items:center}.page-status,.unresolved-incidents,.components-section{margin-bottom:50px}
+@media(max-width:768px){.masthead{padding-top:40px;margin-bottom:40px;gap:12px}.page-status,.unresolved-incidents,.components-section{margin-bottom:40px}
+.incidents-list{margin-top:40px}.font-largest{font-size:1.375rem;line-height:1.959375rem}.font-large{font-size:1.125rem;line-height:1.659375rem}
+.component-container{padding:.85rem 1rem .75rem}.logo{font-size:1.85rem}.logo .mark{font-size:1.6rem}}
+@media(max-width:480px){.layout-content{padding:0 12px 2.5rem}.masthead{padding-top:30px;margin-bottom:30px;flex-direction:column;align-items:flex-start}
+.logo{font-size:1.55rem}.logo .mark{font-size:1.35rem}.show-updates-dropdown{padding:.55rem 1.1rem;font-size:.75rem}
 .font-regular{font-size:.875rem;line-height:1.334375rem}.font-large{font-size:1rem;line-height:1.5rem}small{font-size:.75rem}
 .component-container{padding:.6rem .75rem .5rem}.unresolved-incident .updates{padding:.75rem}.components-uptime-link{text-align:center}
 .unresolved-incident .incident-title{padding:.65rem .75rem .55rem}}

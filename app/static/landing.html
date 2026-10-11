@@ -113,15 +113,24 @@ svg.ic{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-wid
 .topbar{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:saturate(1.4) blur(10px);
   -webkit-backdrop-filter:saturate(1.4) blur(10px);border-bottom:1px solid var(--border)}
 .topbar-in{max-width:960px;margin:0 auto;padding:8px 16px;display:flex;align-items:center;gap:12px;min-height:56px}
-.brand{display:flex;align-items:center;gap:12px;font-weight:700;font-size:16px;letter-spacing:.2px;flex:1}
-.brand-link{display:inline-flex;align-items:center;gap:12px;color:inherit;text-decoration:none;border-radius:var(--radius-sm)}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px;letter-spacing:.2px;flex:1;min-width:0}
+.brand-link{display:inline-flex;align-items:center;gap:10px;color:inherit;text-decoration:none;border-radius:var(--radius-sm);white-space:nowrap;flex-shrink:0}
 .brand-link:hover .brand-mark{filter:brightness(1.08)}
 .brand-link:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-.brand-mark{width:32px;height:32px;border-radius:var(--radius-sm);font-size:20px;line-height:1;font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif;background:var(--accent);color:var(--on-accent);display:grid;place-items:center}
-.top-link{color:var(--text-2);text-decoration:none;font-size:13.5px;padding:6px 8px;border-radius:6px;display:none;transition:color .15s,background .15s}
+.brand-mark{width:32px;height:32px;border-radius:var(--radius-sm);font-size:20px;line-height:1;font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;flex-shrink:0}
+.top-link{color:var(--text-2);text-decoration:none;font-size:13.5px;padding:6px 8px;border-radius:6px;display:none;white-space:nowrap;flex-shrink:0;transition:color .15s,background .15s}
 .top-link:hover{color:var(--text);background:var(--surface-3)}
 .top-link:focus-visible{outline-offset:0}
-@media (max-width:639px){#navStatus{display:inline-block}}
+@media (max-width:639px){
+  .topbar-in{gap:8px;padding:6px 12px;min-height:50px}
+  .brand-link{font-size:14.5px;gap:8px}
+  .brand-mark{width:28px;height:28px;font-size:18px}
+  #navStatus{display:inline-block;font-size:12.5px;padding:4px 6px}
+}
+@media (max-width:390px){
+  .brand-link{font-size:13.5px;gap:6px}
+  #navStatus{display:none}
+}
 
 main{max-width:960px;margin:0 auto;padding:0 16px 24px}
 section{margin-top:40px}
@@ -293,12 +302,13 @@ footer{max-width:960px;margin:0 auto;padding:24px 16px 40px;text-align:center;co
 body.authed .guest-only{display:none!important}
 body.haskey #algoNote{display:none!important}
 body.authed #board{margin-top:22px}
-.userchip{position:relative}
-.chip-btn{display:inline-flex;align-items:center;gap:8px;background:var(--surface-2);border:1px solid var(--border);border-radius:999px;padding:4px 10px 4px 4px;min-height:40px;cursor:pointer;color:var(--text);font-size:13.5px;transition:background .15s,border-color .15s}
+.userchip{position:relative;flex-shrink:0}
+.chip-btn{display:inline-flex;align-items:center;gap:8px;background:var(--surface-2);border:1px solid var(--border);border-radius:999px;padding:4px 10px 4px 4px;min-height:40px;cursor:pointer;color:var(--text);font-size:13.5px;transition:background .15s,border-color .15s;flex-shrink:0}
 .chip-btn:hover{background:var(--surface-3)}
-.chip-btn .av{width:26px;height:26px;border-radius:50%;background:var(--accent);color:var(--on-accent,#fff);display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;background-size:cover;background-position:center}
+.chip-btn .av{width:26px;height:26px;border-radius:50%;background:var(--accent);color:var(--on-accent,#fff);display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;background-size:cover;background-position:center;flex-shrink:0}
 .chip-btn .chip-name{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (max-width:480px){.chip-btn .chip-name{max-width:72px}}
+@media (max-width:390px){.chip-btn .chip-name{max-width:54px}}
 .chip-btn .caret{width:6px;height:6px;border-right:1.5px solid var(--text-2);border-bottom:1.5px solid var(--text-2);transform:rotate(45deg);margin:-3px 3px 0 1px;flex:none}
 .chip-menu{position:absolute;right:0;top:calc(100% + 6px);min-width:180px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow);transform-origin:top right;padding:6px;z-index:50}
 .chip-menu button{display:flex;width:100%;align-items:center;gap:8px;background:none;border:0;color:var(--text);text-align:left;padding:8px 10px;border-radius:7px;cursor:pointer;font-size:13.5px}
@@ -770,7 +780,8 @@ function fmtDate(sec){
   function $id(id){ return document.getElementById(id); }
   var steps = root.querySelectorAll('[data-step]'), failed = 0, failSince = 0, reported = false;
   function pct(a, b){ return b > 0 ? Math.min(100, Math.round(a / b * 100)) : 0; }
-  function setBar(id, a, b){ var e = $id(id), p = pct(a, b); e.style.width = p + '%'; if(e.parentNode) e.parentNode.setAttribute('aria-valuenow', String(p)); }
+  function setBar(id, a, b){ var e = $id(id), p = pct(a, b); if(e){ e.style.width = p + '%'; if(e.parentNode) e.parentNode.setAttribute('aria-valuenow', String(p)); } }
+  function mark(k){ Array.prototype.forEach.call(steps, function(s){ var on = s.dataset.step === k; s.classList.toggle('on', on); if(on) s.setAttribute('aria-current', 'step'); else s.removeAttribute('aria-current'); }); }
   var BLOCK_TITLE = {paced: '暂停出图 · 全天配额匀速补给中', daily_cap: '今日出图已满', breaker: '暂停出图 · 上游出错',
     hourly_cap: '本小时出图已满', quiet_cap: '安静时段 · 出图已满', cap_3h: '近 3 小时出图已满'};
   var lastQueueCount = -1, lastQueueSec = 0, queueSeenAt = 0;
@@ -850,11 +861,14 @@ function fmtDate(sec){
     }
     $id('dPn').textContent = noteP;
     /* 额度 */
-    // 每日上限按张数计（10-11 起不再折算半张）
-    const used45 = q.units_today ?? q.images_today ?? 0;
-    $id('d45').textContent = Math.round(used45); $id('d45').title = `今天全站出图 ${q.images_today || 0} 张`;
-    $id('d45c').textContent = q.images_cap || 0; setBar('d45bar', used45, q.images_cap || 0);
-    $id('d5').textContent = q.v5_today || 0; $id('d5c').textContent = q.v5_cap || 0; setBar('d5bar', q.v5_today || 0, q.v5_cap || 0);
+    var used45 = (q.units_today !== undefined && q.units_today !== null) ? q.units_today : (q.images_today || 0);
+    $id('d45').textContent = Math.round(used45);
+    $id('d45').title = '今天全站出图 ' + (q.images_today || 0) + ' 张';
+    $id('d45c').textContent = q.images_cap || 0;
+    setBar('d45bar', used45, q.images_cap || 0);
+    $id('d5').textContent = q.v5_today || 0;
+    $id('d5c').textContent = q.v5_cap || 0;
+    setBar('d5bar', q.v5_today || 0, q.v5_cap || 0);
   }
   /* 只用查询成功过的 Key，避免输错的 Key 每秒请求一次触发防暴力破解 */
   function poll(){

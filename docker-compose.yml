@@ -15,6 +15,9 @@ services:
       - FORWARDED_ALLOW_IPS=127.0.0.1,172.30.0.1
     volumes:
       - ./data:/app/data
+      - ./app/static/landing.html:/app/app/static/landing.html
+      - ./app/static/index.html:/app/app/static/index.html
+      - ./app/status_page.py:/app/app/status_page.py
     # Caddy 直连这个固定 IP（不经 127.0.0.1:3003 的 docker-proxy）：旧容器收尾 / 新容器未起时连接直接被拒，
     # Caddy 才会把请求挂住重试；走 docker-proxy 时连接先被「接受」再断开，POST 出图会直接 502（2026-10-10 部署实测）。
     # 127.0.0.1:3003 保留给本机健康检查和监控脚本。
