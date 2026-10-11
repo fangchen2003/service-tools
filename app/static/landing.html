@@ -883,7 +883,8 @@ function bindCoupons(root){
 }
 /* NAI 工作台（内测）：Caddy 只放行站长会话，其他人会被重定向；能直接拿到工作台的健康检查才显示入口 */
 function loadWorkbenchLink(){
-  fetch('/api/health', {cache:'no-store', credentials:'include', redirect:'manual'}).then(function(r){
+  /* /workbench 只有站长后台登录后才放行（Caddy forward_auth），其他人会被 302 走；/api/health 对所有人公开，不能拿来判断 */
+  fetch('/workbench', {cache:'no-store', credentials:'include', redirect:'manual'}).then(function(r){
     if(r.ok && r.type !== 'opaqueredirect'){ var a = document.getElementById('navWorkbench'); if(a){ a.hidden = false; var s = a.querySelector('[data-ic]'); if(s) s.outerHTML = icon('brush'); } }
   }, function(){});
 }
