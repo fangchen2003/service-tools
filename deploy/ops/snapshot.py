@@ -10,7 +10,7 @@ import sys
 
 SRC = "/app/data/nai_gate.db"
 OUT = sys.argv[1]
-SKIP = {"generation_audit": ("image", "image_type")}
+SKIP = {"generation_audit": ("image", "image_type", "image_file", "image_size")}   # 原图（BLOB 或文件）不进备份
 
 dst = sqlite3.connect(f"file:{OUT}", uri=True, isolation_level=None)
 dst.execute("ATTACH DATABASE ? AS s", (f"file:{SRC}?mode=ro",))

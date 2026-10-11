@@ -109,7 +109,7 @@ IMAGE_CAP_KEY = "audit_image_cap_mb"                  # 原图占用上限（MB�
 MEMBER_DOWNLOAD_DAYS = 2      # 成员只能打包下载最近 2 天的原图：只用来找回客户端里误删的图
 
 
-def audit_notice(prompts: bool, thumbs: bool, days: int, image_days: int = 0) -> str:
+def audit_notice(prompts: bool, thumbs: bool, days: int, image_days: int = 0, keep_hours: int = 24) -> str:
     """向成员披露记录范围（提示词、原图各自保留多久）；未开启记录则返回空串。
     「记录生成结果」开关只保存原图（不再另存缩略图），保留天数单独设置；0 天 = 不存图。"""
     keep = (lambda d: f"{d} 天后自动删除" if d > 0 else "长期保存")
@@ -117,16 +117,24 @@ def audit_notice(prompts: bool, thumbs: bool, days: int, image_days: int = 0) ->
     if prompts:
         parts.append(f"图片提示词（{keep(days)}）")
     if thumbs:
-        parts.append(f"生成的原图（最近 {MEMBER_DOWNLOAD_DAYS} 天的可在首页打包下载，用来找回误删的图；"
-                     "服务器空间满了会自动删掉最旧的）")
+        keep_txt = (f"{keep_hours} 小时后自动删除" if keep_hours > 0 else "服务器空间满了会自动删掉最旧的")
+        win = (f"{keep_hours} 小时" if 0 < keep_hours < image_days * 24 else f"{image_days} 天")
+        parts.append(f"生成的原图（{keep_txt}" + (f"；在这之前可在首页打包下载最近 {win} 的，用来找回误删的图"
+                                                 if image_days > 0 else "") + "）")
     if not parts:
         return ""
     return "为防止滥用和优化调度，本站会保留你的" + "、".join(parts) + "，仅站长可见。"
 
 
 async def audit_image_days(db) -> int:
-    """成员能打包下载最近几天的原图（固定 2 天）。原图本身不再按天数删，只按容量上限清理。"""
-    return MEMBER_DOWNLOAD_DAYS
+    """成员能打包下载最近几天的原图：开了下载就是 2 天，关了是 0（首页显示「未开启」，下载接口拒绝）。"""
+    from . import site_flags
+    return MEMBER_DOWNLOAD_DAYS if await site_flags.get(db, site_flags.MEMBER_DOWNLOAD) else 0
+
+
+async def audit_image_keep_hours(db) -> int:
+    from . import site_flags
+    return await site_flags.get(db, site_flags.IMAGE_KEEP_HOURS)
 
 
 async def audit_image_cap_mb(db) -> int:
@@ -137,7 +145,7 @@ async def audit_image_cap_mb(db) -> int:
 async def audit_disclosure(db, settings) -> str:
     """所有给成员看的「本站记录了什么」都走这一个函数，避免各处文案再各写一套。"""
     prompts, thumbs, days = await audit_flags(db, settings)
-    return audit_notice(prompts, thumbs, days, MEMBER_DOWNLOAD_DAYS)
+    return audit_notice(prompts, thumbs, days, await audit_image_days(db), await audit_image_keep_hours(db))
 
 
 async def audit_flags(db, settings) -> tuple[bool, bool, int]:

@@ -163,11 +163,13 @@ async def set_global_features(db, flags: dict) -> dict[str, bool]:
 
 async def set_audit(state, body: dict) -> dict:
     """保存记录开关与保留天数；记录范围变化且 notify 为真时，在成员公告频道说明（文案与首页同源）。"""
-    from .audit import IMAGE_CAP_KEY, MEMBER_DOWNLOAD_DAYS, audit_image_cap_mb, audit_notice
+    from . import site_flags
+    from .audit import IMAGE_CAP_KEY, audit_image_cap_mb, audit_image_days, audit_image_keep_hours, audit_notice
     prompts, thumbs, days = await audit_flags(state.db, state.settings)
-    image_days = MEMBER_DOWNLOAD_DAYS
     cap_mb = await audit_image_cap_mb(state.db)
-    before = (prompts, thumbs, days)
+    keep_hours = await audit_image_keep_hours(state.db)
+    download = bool(await audit_image_days(state.db))
+    before = (prompts, thumbs, days, keep_hours, download)
     if "prompts" in body:
         prompts = bool(body["prompts"])
     if "thumbs" in body:
@@ -176,17 +178,24 @@ async def set_audit(state, body: dict) -> dict:
         days = max(0, min(int(body["retention_days"]), 3650))      # 0 = 长期保留
     if "image_cap_mb" in body:
         cap_mb = max(0, min(int(body["image_cap_mb"]), 500_000))   # 0 = 不限
+    if "image_keep_hours" in body:
+        keep_hours = max(0, min(int(body["image_keep_hours"]), 8760))   # 0 = 只按容量上限
+    if "member_download" in body:
+        download = bool(body["member_download"])
+    await site_flags.put(state.db, site_flags.IMAGE_KEEP_HOURS, keep_hours)
+    await site_flags.put(state.db, site_flags.MEMBER_DOWNLOAD, download)
+    image_days = await audit_image_days(state.db)
     await state.db.set_settings_bulk({"audit_prompts": "1" if prompts else "0",
                                       "audit_thumbs": "1" if thumbs else "0",
                                       "audit_retention_days": days,
                                       IMAGE_CAP_KEY: cap_mb})
-    if body.get("notify", True) and (prompts, thumbs, days) != before:
+    if body.get("notify", True) and (prompts, thumbs, days, keep_hours, download) != before:
         announcer = getattr(state, "announcer", None)
         if announcer is not None:
             if prompts or thumbs:
-                text = "📢 **数据记录说明**：" + audit_notice(prompts, thumbs, days, image_days)
+                text = "📢 **数据记录说明**：" + audit_notice(prompts, thumbs, days, image_days, keep_hours)
             else:
                 text = "📢 **数据记录说明**：站长已关闭生成记录，不再保存新的提示词和原图（已有记录到期自动删除）。"
             announcer.post(text)
     return {"prompts": prompts, "thumbs": thumbs, "retention_days": days, "image_retention_days": image_days,
-            "image_cap_mb": cap_mb}
+            "image_cap_mb": cap_mb, "image_keep_hours": keep_hours, "member_download": download}

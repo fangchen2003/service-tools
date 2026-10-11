@@ -123,6 +123,8 @@
 | `algo_notice` | str | '' |  | quota_algo → 首页 | 首页显示的今日额度说明 |
 | `audit_image_retention_days` | int | 3 | 0–365 | audit | （已停用，2026-10-11 起原图按容量上限清理） |
 | `audit_image_cap_mb` | int | 8192 | 0–500000 | audit | 原图占用上限（MB）：超过后自动删掉最旧的原图；0 = 不限 |
+| `audit_image_keep_hours` | int | 24 | 0–8760 | audit | 原图在服务器上保存几小时，到点自动删；0 = 只按容量上限删 |
+| `member_image_download` | flag | False |  | audit | 成员在首页打包下载自己最近的原图（10-11 站长：先关） |
 | `share_guard_mode` | choice | 'observe' | enforce / observe / off | share_guard | 防分享：enforce 处罚 / observe 只记录 / off |
 
 ## 退群回收（v2.15.0 起）

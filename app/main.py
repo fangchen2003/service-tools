@@ -63,7 +63,7 @@ from .policy import ECONOMY_STEPS, REFERENCE_FIELDS, economy_trim
 from . import status_stats, quota_algo
 from .key_sources import RETENTION_SECONDS as KEY_SOURCE_RETENTION
 from .action_log import RETENTION_DAYS as ADMIN_ACTION_RETENTION_DAYS, log_action
-from .audit import audit_flags, audit_disclosure, audit_image_cap_mb, capture_prompts, full_image
+from .audit import audit_flags, audit_disclosure, audit_image_cap_mb, audit_image_keep_hours, capture_prompts, full_image
 from .upstream_errors import upstream_error_message, text_stream_events
 from .sse import encode_sse
 
@@ -184,7 +184,7 @@ async def lifespan(app: FastAPI):
         await STATE.db.close()
 
 
-__version__ = "2.18.10"
+__version__ = "2.19.0"
 
 app = FastAPI(title="猫头鹰公益站", version=__version__, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
@@ -533,8 +533,14 @@ async def maintenance_loop() -> None:
         await STATE.db._db.commit()
         if getattr(STATE, "bugs", None) is not None:
             await STATE.bugs.purge(time.time() - 30 * 86400)
-        # 原图不按天数删（2026-10-11 站长）：只在总量超过容量上限时删最旧的；站长也可以在后台手动清空
+        # 原图：保存 N 小时后删（10-11 站长定 24 小时），另外总量超过容量上限时删最旧的；站长也可以在后台手动清空
         try:
+            keep_h = await audit_image_keep_hours(STATE.db)
+            if keep_h > 0:
+                n = await STATE.db.purge_audit_images(time.time() - keep_h * 3600)
+                if n:
+                    print(f"[audit] 原图保存超过 {keep_h} 小时，已删 {n} 张", flush=True)
+            await STATE.db.sweep_orphan_images(time.time() - 3600)
             cap_mb = await audit_image_cap_mb(STATE.db)
             if cap_mb > 0:
                 n = await STATE.db.purge_audit_images_to_cap(cap_mb * 1024 * 1024)
