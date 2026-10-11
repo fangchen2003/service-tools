@@ -291,10 +291,16 @@ td .tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
 .warn-text{color:var(--warn)}
 /* 状态码分布：2xx 绿、4xx 琥珀、5xx 红；每行一个状态码 + 次数 + 含义 + 占比 */
 .sc-list{display:flex;flex-direction:column;gap:4px}
-.sc-row{display:grid;grid-template-columns:56px minmax(0,1fr) auto;gap:4px 14px;align-items:center;padding:8px 4px;border-bottom:1px solid var(--border)}
+.sc-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.seg{display:inline-flex;padding:2px;gap:2px;border:1px solid var(--border);border-radius:9px;background:var(--surface-2)}
+.seg button{appearance:none;border:0;background:transparent;color:var(--muted);font:inherit;font-size:12.5px;line-height:1;padding:6px 10px;border-radius:7px;cursor:pointer;white-space:nowrap}
+.seg button:hover{color:var(--text)}
+.seg button.on{background:var(--accent-soft);color:var(--accent-text);font-weight:600}
+.sc-list.busy{opacity:.55;transition:opacity .15s}
+.sc-row{display:grid;grid-template-columns:76px minmax(0,1fr) auto;gap:4px 14px;align-items:center;padding:8px 4px;border-bottom:1px solid var(--border)}
 .sc-row:last-child{border-bottom:0}
-.sc-pill{justify-self:start;min-width:48px;text-align:center;font:600 13px var(--mono);padding:4px 10px;border-radius:999px;font-variant-numeric:tabular-nums}
-.sc-pill.c2{background:var(--ok);color:#fff}.sc-pill.c4{background:var(--warn);color:#fff}.sc-pill.c5{background:var(--bad);color:#fff}
+.sc-pill{justify-self:start;min-width:48px;white-space:nowrap;line-height:15px;text-align:center;font:600 13px var(--mono);padding:4px 10px;border-radius:999px;font-variant-numeric:tabular-nums}
+.sc-pill.c2{background:var(--ok);color:#fff}.sc-pill.c3{background:var(--surface-3);color:var(--text-2)}.sc-pill.c4{background:var(--warn);color:#fff}.sc-pill.c5{background:var(--bad);color:#fff}
 :root[data-theme="dark"] .sc-pill.c2,:root[data-theme="dark"] .sc-pill.c4,:root[data-theme="dark"] .sc-pill.c5{color:#10131c}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .sc-pill.c2,:root:not([data-theme="light"]) .sc-pill.c4,:root:not([data-theme="light"]) .sc-pill.c5{color:#10131c}}
 .sc-main{min-width:0}
@@ -793,9 +799,9 @@ td.note{min-width:220px}
           <div class="stats" id="ovCards"></div>
           <div class="card panel" id="scPanel">
             <div class="panel-head"><div><h2>状态码分布</h2><div class="desc" id="scSum">成员接口（出图、查额度等）返回的 HTTP 状态码</div></div>
-              <div class="seg-ic" role="group" aria-label="时间范围">
-                <button class="btn mini on" data-scv="gw" title="网关返回给成员客户端的">网关→成员</button><button class="btn mini" data-scv="up" title="NovelAI 实际返回给网关的">NovelAI→网关</button>
-                <button class="btn mini" data-sc="1">1 小时</button><button class="btn mini on" data-sc="24">24 小时</button><button class="btn mini" data-sc="168">7 天</button></div></div>
+              <div class="sc-tools">
+                <div class="seg" role="group" aria-label="看哪一段"><button class="on" data-scv="gw" title="网关返回给成员客户端的">网关→成员</button><button data-scv="up" title="NovelAI 实际返回给网关的">NovelAI→网关</button></div>
+                <div class="seg" role="group" aria-label="时间范围"><button data-sc="1">1 小时</button><button class="on" data-sc="24">24 小时</button><button data-sc="168">7 天</button></div></div></div>
             <div class="sc-list" id="scList"><div class="skel" style="height:160px"></div></div>
           </div>
           <div class="card panel"><div class="panel-head"><div><h2 id="chartLabel">今日生成图片</h2>
@@ -1780,25 +1786,39 @@ async function renderOverviewTop(d){
 
 /* 状态码分布（/admin/api/status-codes） */
 let scHours = 24, scView = 'gw';
-async function loadStatusCodes(){
+const scCache = {};
+let scSeq = 0;
+async function loadStatusCodes(fresh = true){
+  document.querySelectorAll('[data-sc]').forEach(b => b.classList.toggle('on', +b.dataset.sc === scHours));
+  document.querySelectorAll('[data-scv]').forEach(b => b.classList.toggle('on', b.dataset.scv === scView));
+  const hours = scHours, seq = ++scSeq;
+  if(scCache[hours]) renderStatusCodes(scCache[hours]);
+  if(!fresh && scCache[hours]) return;
+  $('#scList').classList.add('busy');
   try{
-    const d = await api('/admin/api/status-codes?hours=' + scHours);
+    const d = await api('/admin/api/status-codes?hours=' + hours);
+    scCache[hours] = d;
+    if(seq === scSeq) renderStatusCodes(d);       /* 连点时只画最后一次 */
+  }catch(e){ if(seq === scSeq && !scCache[hours]) $('#scList').innerHTML = '<div class="muted sm">读取失败</div>'; }
+  finally{ if(seq === scSeq) $('#scList').classList.remove('busy'); }
+}
+function renderStatusCodes(d){
+  {
     const up = scView === 'up', codes = up ? (d.upstream || []) : d.codes, total = up ? d.upstream_total : d.total;
     const ok = (codes.find(c => c.code === 200) || {}).pct || 0;
     const sent = up ? codes.filter(c => c.code).reduce((a, c) => a + c.n, 0) : 0;
     $('#scSum').textContent = !total ? '这段时间还没有请求'
-      : up ? `出图 / 工具请求共 ${fmtNum(total)} 次，其中 ${fmtNum(sent)} 次发到了 NovelAI（0 = 网关自己拦下，没发出去）`
+      : up ? `出图 / 工具请求共 ${fmtNum(total)} 次，其中 ${fmtNum(sent)} 次发到了 NovelAI（「未发出」= 网关自己拦下，没发出去）`
            : `成员接口共 ${fmtNum(total)} 次请求，成功 ${ok}%（这里的 429 / 402 等是网关返回的，切到「NovelAI→网关」看上游）`;
     document.querySelectorAll('[data-scv]').forEach(b => b.classList.toggle('on', b.dataset.scv === scView));
     $('#scList').innerHTML = codes.length ? codes.map(c => { const k = 'c' + (c.code ? String(c.code)[0] : '4');
       return `<div class="sc-row"><span class="sc-pill ${k}">${c.code || '未发出'}</span><div class="sc-main"><span class="sc-n">${fmtNum(c.n)} 次</span><span class="sc-m">${esc(c.meaning)}</span></div>
         <span class="sc-pct">${c.pct}%</span><div class="sc-bar"><i class="${k}" style="width:${c.pct}%"></i></div></div>`; }).join('')
       : '<div class="muted sm">还没有数据</div>';
-    document.querySelectorAll('[data-sc]').forEach(b => b.classList.toggle('on', +b.dataset.sc === scHours));
-  }catch(e){ $('#scList').innerHTML = '<div class="muted sm">读取失败</div>'; }
+  }
 }
 document.addEventListener('click', e => { const b = e.target.closest('[data-sc]'); if(b){ scHours = +b.dataset.sc; loadStatusCodes(); } });
-document.addEventListener('click', e => { const b = e.target.closest('[data-scv]'); if(b){ scView = b.dataset.scv; loadStatusCodes(); } });
+document.addEventListener('click', e => { const b = e.target.closest('[data-scv]'); if(b){ scView = b.dataset.scv; loadStatusCodes(false); } });
 
 async function loadStatus(){
   const box = $('#statusPanel');
