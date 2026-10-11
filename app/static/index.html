@@ -2118,14 +2118,15 @@ function memberIssues(m, now){
   const out = [], k = m.k, nets = memberMeta.share_alert_nets || 3, id = k ? k.id : m.id;
   const btn = (act, label, extra='') => `<button class="btn mini" type="button" data-act="${act}" data-id="${id}"${extra}>${label}</button>`;
   const okBtn = btn('mark-ok', '没问题');
+  const scA = m.share_confirm ? ` · 成员自述：${m.share_confirm.label}（${shortTime(m.share_confirm.answered_at)}）` : '';
   if(m.share && m.share.paused_until > now)
-    out.push({lv:'bad', t:'防分享暂停中', d:`到 ${shortTime(m.share.paused_until)} 自动恢复 · 违规 ${m.share.strikes} 次`, a: btn('share-view','查看证据') + btn('share-clear','误判，解除')});
+    out.push({lv:'bad', t:'防分享暂停中', d:`到 ${shortTime(m.share.paused_until)} 自动恢复 · 违规 ${m.share.strikes} 次${scA}`, a: btn('share-view','查看证据') + btn('share-clear','误判，解除')});
   else if(shareHot(m))
-    out.push({lv:'bad', t:`疑似分享 Key · 风险 ${Math.round(m.share.score)}`, d:`违规 ${m.share.strikes} 次。先看来源，确认是一个人换网络就点误判`, a: btn('share-view','查看证据') + btn('share-clear','误判，清除')});
+    out.push({lv:'bad', t:`疑似分享 Key · 风险 ${Math.round(m.share.score)}`, d:`违规 ${m.share.strikes} 次${scA}。先看来源，确认是一个人换网络就点误判`, a: btn('share-view','查看证据') + btn('share-clear','误判，清除')});
   else if(k && !m.is_admin && (k.sources_24h||[]).length >= nets){
     // 只看网段数误伤多（手机流量、代理切换）：≥ 阈值 + 2 才进「需要处理」，否则只在详情里提一句
     const many = k.sources_24h.length >= nets + 2;
-    out.push({lv: many ? 'warn' : 'info', t:`24 小时内从 ${k.sources_24h.length} 个网段使用`, d:'手机加电脑通常是 2 个；更多可能是分享，也可能只是开了代理或用手机流量', a: btn('share-view','查看来源') + (many ? okBtn : ''), need: many});
+    out.push({lv: many ? 'warn' : 'info', t:`24 小时内从 ${k.sources_24h.length} 个网段使用`, d:'手机加电脑通常是 2 个；更多可能是分享，也可能只是开了代理或用手机流量' + scA, a: btn('share-view','查看来源') + (many ? okBtn : ''), need: many});
   }
   if(m.expires_at && m.expires_at < now) out.push({lv:'bad', t:'Key 已过期', d:'成员现在用不了', a: btn('edit-key','改到期时间')});
   else if(m.expires_at && m.expires_at - now < 3*D) out.push({lv:'warn', t:`${Math.max(1, Math.ceil((m.expires_at-now)/D))} 天后到期`, d:shortTime(m.expires_at), a: btn('edit-key','改到期时间') + okBtn, need:true});

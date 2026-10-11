@@ -1336,6 +1336,28 @@ AUTO_TAG_PATTERNS = (
 TAG_MAX_LEN, TAG_NOTE_MAX = 12, 200
 
 
+@router.get("/share-confirm")
+async def share_confirm_report(request: Request):
+    """核对误判：最近被标记的 Key、当前风险分、成员自述。"""
+    require_admin(request)
+    from . import share_confirm
+    from .share_guard import decayed
+    st = request.app.state.gate
+    now = time.time()
+    ans = await share_confirm.answers(st.db)
+    out = []
+    for kid in await share_confirm.flagged_keys(st.db, now):
+        k = await st.db.get_key(kid)
+        r = await st.db._db.execute_fetchall("SELECT score, score_ts, strikes FROM share_state WHERE key_id=?", (kid,))
+        ev = await st.db._db.execute_fetchall(
+            "SELECT kind, COUNT(*) FROM share_evidence WHERE key_id=? AND ts>=? GROUP BY kind", (kid, now - share_confirm.LOOKBACK))
+        out.append({"key_id": kid, "name": k["name"] if k else f"#{kid}",
+                    "score": round(decayed(r[0][0], r[0][1], now), 1) if r else 0, "strikes": r[0][2] if r else 0,
+                    "evidence": dict(ev), "answer": ans.get(kid)})
+    return {"flagged": out, "answered": sum(1 for o in out if o["answer"]),
+            "by_answer": {a: sum(1 for o in out if o["answer"] and o["answer"]["answer"] == a) for a in share_confirm.ANSWERS}}
+
+
 @router.put("/keys/{key_id}/tags")
 async def put_key_tag(request: Request, key_id: int):
     """给成员打 / 改手动标签（只在后台显示）。body: {tag, note}"""
@@ -1413,6 +1435,11 @@ async def members(request: Request):
     out = []
     from .share_guard import decayed
     share_map = {}
+    try:
+        from . import share_confirm as _sc
+        confirm_map = await _sc.answers(st.db)
+    except Exception:
+        confirm_map = {}
     for kid, score, ts, strikes, paused in await st.db._db.execute_fetchall(
             "SELECT key_id, score, score_ts, strikes, paused_until FROM share_state"):
         share_map[kid] = {"score": round(decayed(score, ts, time.time()), 1), "strikes": strikes,
@@ -1461,6 +1488,7 @@ async def members(request: Request):
             "rejected_why": milestones.get(row["id"], {}).get("rejected_why", []),
             "sources_24h": len(sources.get(row["id"], [])),
             "share": share_map.get(row["id"]),
+            "share_confirm": confirm_map.get(row["id"]),
             "reset_today": reset_map.get(row["id"]),
             "tags": manual_tags.get(row["id"], []),
             "auto_tags": auto_tags.get(row["id"], []),

@@ -473,6 +473,12 @@ async def public_me(request: Request):
                    coupons=await gate.db.list_coupons(key["id"]),
                    images_stored=await gate.db.audit_image_count(key["id"], since=_time.time() - img_days * 86400),
                    image_retention_days=img_days)
+        try:
+            from . import share_confirm
+            if await share_confirm.pending(gate.db, key["id"]):
+                out["share_check"] = {"options": share_confirm.ANSWERS}
+        except Exception:
+            pass
     return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
 
@@ -492,6 +498,30 @@ async def use_my_coupon(request: Request, coupon_id: int):
         raise HTTPException(409, "这张券已经用过或过期了")
     await gate.db.reset_daily_image_quota(key["id"], gate.day())
     await log_action(gate.db, f"Discord:{discord_id}", "成员使用重置券", key["name"], f"券 #{coupon_id}" + (f"（{c['note']}）" if c.get("note") else ""))
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+
+
+@member_router.post("/public/me/share-confirm")
+async def share_confirm_answer(request: Request):
+    """成员回答「是不是在用 VPN / 代理」。只记录，不改任何处罚；站长在后台核对。"""
+    from . import share_confirm
+    discord_id = await _member_session(request)
+    if discord_id is None:
+        raise HTTPException(401, "请先登录")
+    service = getattr(request.app.state, "registrar", None)
+    key = await service.key_row_for(discord_id) if service is not None else None
+    if key is None or not key["enabled"]:
+        raise HTTPException(404, "你还没有可用的 Key")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    answer = str((body or {}).get("answer") or "")
+    if answer not in share_confirm.ANSWERS:
+        raise HTTPException(422, "请选一个选项")
+    gate = request.app.state.gate
+    await share_confirm.record(gate.db, key["id"], answer, str((body or {}).get("note") or ""))
+    await log_action(gate.db, f"Discord:{discord_id}", "成员确认网络情况", key["name"], share_confirm.ANSWERS[answer])
     return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
 
 
