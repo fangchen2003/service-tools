@@ -15,34 +15,6 @@ from .audit import audit_flags
 
 
 
-async def economy_enabled(db) -> bool:
-    return await site_flags.get(db, site_flags.ECONOMY)
-
-
-async def set_economy(db, on: bool, state=None, *, by: str = "站长") -> bool:
-    """开 / 关节约模式（全站免费档统一 14 步 + Euler-a，Anlas 约省 40%）。
-    发生变化时写操作日志，并在成员公告频道通知（无论算法还是站长触发都公告）。返回是否发生变化。"""
-    cur = await site_flags.get(db, site_flags.ECONOMY)
-    if cur == bool(on):
-        return False
-    await site_flags.put(db, site_flags.ECONOMY, bool(on))
-    await log_action(db, by, "节约模式", "", "开启" if on else "关闭")
-    if state is not None and getattr(state, "nai", None) is not None:
-        # V5 额度跟着节约模式放大 / 回落：立刻重算一次，不等 10 分钟一次的定时任务
-        try:
-            from . import quota_algo
-            await quota_algo.run(state)
-        except Exception as exc:
-            print(f"[warn] quota recalc after economy toggle failed: {type(exc).__name__}", flush=True)
-    announcer = getattr(state, "announcer", None) if state is not None else None
-    if announcer is not None:
-        if on:
-            announcer.post("⚙️ **节约模式已开启**：当前使用人较多，为了让更多人都能出到图，暂时统一用 14 步快速出图"
-                           "（更快、更省额度）。V5 Full 会自动换成官方 Medium 档，画质接近正常，但自定义负面词暂时不生效"
-                           "（可在正面提示词里写 -2::xx:: 排除）。空闲后会恢复正常高质量模式。")
-        else:
-            announcer.post("✅ **节约模式已关闭**：已恢复正常步数和采样器，高质量出图。")
-    return True
 
 
 def env_audit_defaults() -> SimpleNamespace:

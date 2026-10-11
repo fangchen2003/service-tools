@@ -1118,7 +1118,6 @@ async def overview(request: Request):
     data["v5_limit"] = await site_flags.get(st.db, site_flags.GLOBAL_DAILY_V5, st.settings)
     data["feature_usage"] = await _feature_usage(st)
     data["log_since"] = (await st.db._db.execute_fetchall("SELECT MIN(ts) FROM usage_log"))[0][0]
-    data["economy"] = await ops.economy_enabled(st.db)
     return data
 
 
@@ -1717,16 +1716,6 @@ async def ops_set_features(request: Request):
     return await _ops_snapshot(request)
 
 
-@router.put("/ops/economy")
-async def ops_set_economy(request: Request):
-    """站长手动开 / 关节约模式（全站免费档 14 步 + Euler-a）。变化会在成员公告频道通知。"""
-    require_admin(request)
-    body = await read_json_body(request)
-    on = str(body.get("on")).strip().lower() in ("1", "true", "yes", "on") if not isinstance(body.get("on"), bool) else body["on"]
-    if on:   # 2026-10-11 停用：取消打折后它只降画质、不多出图（见首页算法说明 ⑦）
-        raise HTTPException(410, "节约模式已停用，只能关闭")
-    changed = await ops.set_economy(request.app.state.gate.db, on, request.app.state.gate, by="站长")
-    return {"economy": on, "changed": changed}
 
 
 @router.put("/ops/audit")

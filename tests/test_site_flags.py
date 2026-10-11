@@ -28,7 +28,7 @@ def test_specs_are_unique_and_documented():
     assert len({s.key for s in sf.ALL}) == len(sf.ALL)
     for s in sf.ALL:
         assert s.owner and s.doc
-        assert s.kind in ("flag", "onoff", "int", "float", "str", "choice")
+        assert s.kind in ("flag", "int", "float", "str", "choice")
         if s.kind == "choice":
             assert s.default in s.choices
 
@@ -59,15 +59,14 @@ async def test_parse_clamps_and_falls_back():
     assert await sf.get(db, sf.GLOBAL_DAILY_V5, env) == 190                 # 缺省：.env
     assert await sf.get(db, sf.IMAGE_RETENTION) == 3
     db.kv.update(global_daily_v5="abc", audit_image_retention_days="0", share_guard_mode="nuke",
-                 issue_hourly_cap="9999", web_login_paused="0", economy_mode="on")
+                 issue_hourly_cap="9999", web_login_paused="0")
     assert await sf.get(db, sf.GLOBAL_DAILY_V5, env) == 190                 # 坏值回到默认
     assert await sf.get(db, sf.IMAGE_RETENTION) == 0                        # 0 是有效值（不保存原图）
     assert await sf.get(db, sf.SHARE_MODE) == "observe"                     # 不认识的模式 → 不处罚
     assert await sf.get(db, sf.ISSUE_HOURLY_CAP) == 500                     # 夹到上限
     assert await sf.get(db, sf.WEB_LOGIN_PAUSED) is False
-    assert await sf.get(db, sf.ECONOMY) is True
-    await sf.put(db, sf.ECONOMY, False)
-    assert db.kv["economy_mode"] == "off"
+    await sf.put(db, sf.WEB_LOGIN_PAUSED, True)
+    assert db.kv["web_login_paused"] == "1"
     with pytest.raises(ValueError):
         await sf.put(db, sf.SHARE_MODE, "nuke")
 

@@ -794,7 +794,7 @@ td.note{min-width:220px}
         <!-- 总览 -->
         <section id="tab-ov">
           <div class="page-head"><div class="ttl"><h1>总览</h1></div>
-            <div class="tools"><button class="btn" id="econBtn" data-act="toggle-economy" hidden title="节约模式：全站免费档统一 14 步 + Euler-a，V5 Full 改走 Medium 档（画质接近正常，省约 42% 额度、出图更快）；开 / 关都会在公告频道通知成员">节约模式</button><button class="btn rf" data-act="refresh-ov" aria-label="刷新" title="刷新"><span data-ic="refresh"></span><span class="lbl">刷新</span></button></div></div>
+            <div class="tools"><button class="btn rf" data-act="refresh-ov" aria-label="刷新" title="刷新"><span data-ic="refresh"></span><span class="lbl">刷新</span></button></div></div>
           <div class="card panel ovv" id="ovVerdict"><div class="skel" style="height:64px"></div></div>
           <div class="stats" id="ovCards"></div>
           <div class="card panel" id="scPanel">
@@ -1701,7 +1701,6 @@ async function loadOverview(){
         <td class="num" data-label="近 7 天">${cnt(f.week)}</td><td data-label="近 7 天产出">${esc(out(f.week))}</td></tr>`;
     }).join('');
     ovData = d; drawChart();
-    const eb=$('#econBtn'); if(eb){ eb.textContent='节约模式 · '+(d.economy?'已开启':'已关闭'); eb.setAttribute('aria-pressed', d.economy?'true':'false'); eb.classList.toggle('primary', !!d.economy); }
     const pool = d.pool.length ? d.pool : [];
     $('#pool').innerHTML = (!d.pool_configured)
       ? `<span class="tag warn">未配置上游 Token —— 请点「添加 Token」</span>`
@@ -1763,13 +1762,11 @@ async function renderOverviewTop(d){
   const dk = st.disk; if(dk && dk.total_mb){ const free = dk.free_mb / dk.total_mb; if(free < 0.2) add(free < 0.1 ? 'bad' : 'warn', `磁盘只剩 ${Math.round(free*100)}%`, '原图和日志会越来越多', 'set'); }
   if((d.today.unconfirmed_anlas||0) > 0) add('warn', `失败请求可能扣了 ${d.today.unconfirmed_anlas} Anlas`, `今天 ${d.today.unconfirmed_requests} 笔，去上游页对一下官方余额`, 'up');
   if(d.anlas_budget > 0 && d.month.anlas >= d.anlas_budget * 0.8) add('warn', `本月 Anlas 用了 ${Math.round(d.month.anlas / d.anlas_budget * 100)}%`, `${fmtNum(d.month.anlas)} / ${fmtNum(d.anlas_budget)}`, 'limits');
-  const eco = ap && ap.last && ap.last.rules && ap.last.rules.economy;
-  if(eco && eco.mode === 'observe' && !!eco.value !== !!d.economy) add('info', `自动驾驶建议${eco.value ? '开启' : '关闭'}节约模式`, eco.why, 'act:toggle-economy', eco.value ? '开启' : '关闭');
   const g = live && live.guard || {}, q = live && live.quota || {};
   const active = (membersCache||[]).filter(m => !m.is_admin && !m.is_test && m.today.requests > 0).length;
   const serious = items.filter(x => x.lv !== 'info').length;
   const head = serious ? `有 ${serious} 件事要处理` : '一切正常';
-  const sub = `今天出了 ${fmtNum(d.today.images)} 张图${active ? `，${active} 个成员在用` : ''}${d.economy ? ' · 节约模式开着' : ''}${serious ? '' : '，没有要处理的事'}`;
+  const sub = `今天出了 ${fmtNum(d.today.images)} 张图${active ? `，${active} 个成员在用` : ''}${serious ? '' : '，没有要处理的事'}`;
   const tone = items.some(x => x.lv === 'bad') ? 'bad' : serious ? 'warn' : 'ok';
   $('#ovVerdict').dataset.tone = tone;
   $('#ovVerdict').innerHTML = `<div class="ovv-h"><i aria-hidden="true"></i><div><h2>${esc(head)}</h2><p>${esc(sub)}</p></div></div>
@@ -2968,7 +2965,7 @@ function v5Derivation(v){
   if(!v || v.global == null) return '';
   const rc = v.rate_check || v.rate_info || {}, f = x => x == null ? '—' : (+x).toFixed(1);
   const cls = rc.status === '对不上' ? 'bad-text' : rc.status === '未核对' ? 'warn-text' : 'muted';
-  return `<div class="notice-box" style="margin:10px 0 0;font-size:13px">全站 V5 = 恢复 <b>${f(v.rate)}%/天</b> × 14.2 张/1% × 系数 ${esc(v.k)}${v.economy ? ` × 节约 ${esc(v.economy)}` : ''} = <b>${esc(v.global)} 张</b>
+  return `<div class="notice-box" style="margin:10px 0 0;font-size:13px">全站 V5 = 恢复 <b>${f(v.rate)}%/天</b> × 14.2 张/1% × 系数 ${esc(v.k)} = <b>${esc(v.global)} 张</b>
     <div class="${cls}" style="margin-top:4px">恢复速度：接口读数 ${f(rc.api)} · 实测 ${f(rc.measured)} · 采用 ${f(rc.used)}（${esc(rc.status || '—')}）${(rc.notes||[]).length ? ' · ' + esc(rc.notes.join('；')) : ''}${rc.used != null && Math.abs(rc.used - v.rate) > 0.05 ? `<br>今天的方案是 0 点按 ${f(v.rate)}%/天定的（一天只定一次，不在当天降额），明天 0 点起按 ${f(rc.used)}%/天` : ''}</div></div>`;
 }
 function limitsVerdict(){
@@ -2981,14 +2978,14 @@ function limitsVerdict(){
   setPV('limits', low ? 'warn' : 'ok', (low ? `账号 V5 只剩 ${Math.round(w.percent)}% · ` : '') + parts.join(' · '));
 }
 /* 动态额度：结果 + 每日微调历史（数据来自 /admin/api/quota-algo，算法说明见 app/quota_algo.py） */
-const AP_NAME = {alt_link:'疑似同一人（只观察）', slots:'名额上限', breaker:'全站熔断', key_guard:'单个 Key 守护', economy:'节约模式'};
+const AP_NAME = {alt_link:'疑似同一人（只观察）', slots:'名额上限', breaker:'全站熔断', key_guard:'单个 Key 守护'};
 const AP_MODE = {observe:'<span class="tag warn">观察</span>', enforce:'<span class="tag on">执行</span>', off:'<span class="tag off">关闭</span>'};
 async function loadAutopilot(){
   try{
     const d = await api('/admin/api/autopilot'), r = (d.last || {}).rules || {};
     apLast = r; limitsVerdict();
     const val = (k, v) => k === 'alt_link' ? (v.length ? v.length + ' 对' : '—') : k === 'key_guard' ? (v.length ? v.map(x => `${esc(x.name)}：${x.action==='reset'?'重置':'暂停'}`).join('；') : '—')
-      : k === 'breaker' ? (v ? '暂停 5 分钟' : '正常') : k === 'economy' ? (v ? '建议开启' : '保持关闭') : esc(v);
+      : k === 'breaker' ? (v ? '暂停 5 分钟' : '正常') : esc(v);
     $('#apBody').innerHTML = Object.keys(r).length ? `<div class="table-wrap"><table class="rt"><thead><tr><th>规则</th><th>模式</th><th>判断</th><th>理由</th></tr></thead><tbody>${
       Object.entries(r).map(([k, v]) => `<tr><td data-label="规则">${esc(AP_NAME[k]||k)}</td><td data-label="模式">${AP_MODE[v.mode]||esc(v.mode)}</td><td data-label="判断">${val(k, v.value)}</td><td class="muted" data-label="理由">${esc(v.why)}</td></tr>`).join('')
     }</tbody></table></div><div class="muted sm" style="margin-top:8px">更新于 ${esc(fullTime(d.last.at))}</div>` : '<div class="muted">还没有运行记录（每 10 分钟一次）</div>';
@@ -3167,18 +3164,6 @@ document.addEventListener('click', ev=>{
   switch(el.dataset.act){
     case 'refresh-ov': loadOverview(); loadAllowance(); break;
     case 'ov-go': { const [t, f] = el.dataset.go.split(':'); if(t === 'members' && f){ memberFilter = f; memberFilterAuto = false; } tab(t); break; }
-    case 'toggle-economy': {
-      const on = !(ovData && ovData.economy);
-      askConfirm(on
-        ? '开启节约模式？全站免费档将统一用 14 步 + Euler-a，V5 Full 改走官方 Medium 档（画质接近正常、更省额度、出图更快），并在公告频道通知成员。'
-        : '关闭节约模式？恢复正常步数和采样器，并在公告频道通知成员。', on?'开启':'关闭').then(ok=>{
-        if(!ok) return;
-        api('/admin/api/ops/economy',{method:'PUT',body:JSON.stringify({on})})
-          .then(()=>{ toast(on?'节约模式已开启，已公告':'节约模式已关闭，已公告','ok'); loadOverview(); })
-          .catch(toastErr);
-      });
-      break;
-    }
     case 'feat-logs': $('#logFeature').value = el.dataset.feat; $('#logFilter').value = ''; logPage = 1; tab('logs'); break;
     case 'refresh-members': membersCache=null; loadMembers(); break;
     case 'refresh-audit': loadAuditSettings(); loadAudit(); break;

@@ -303,45 +303,6 @@ def test_text_host_routing():
                                             "https://api.novelai.net")
 
 
-def test_economy_mode_clamps_steps_and_sampler():
-    out, notes, err = clamp_image_params(
-        img_payload(model="nai-diffusion-4-5-full", w=832, h=1216, steps=28, sampler="k_dpmpp_2m"),
-        max_pixels=1048576, max_steps=28, allow_img2img=False, economy=True)
-    assert err is None
-    assert out["parameters"]["steps"] == 14
-    assert out["parameters"]["sampler"] == "k_euler_ancestral"
-    assert any("节约" in n for n in notes)
-
-
-def test_economy_off_keeps_steps_and_sampler():
-    out, notes, err = clamp_image_params(
-        img_payload(model="nai-diffusion-4-5-full", steps=28, sampler="k_dpmpp_2m"),
-        max_pixels=1048576, max_steps=28, allow_img2img=False, economy=False)
-    assert err is None
-    assert out["parameters"]["steps"] == 28 and out["parameters"]["sampler"] == "k_dpmpp_2m"
-
-
-def test_to_medium_switches_v5_full_and_applies_official_fixed_settings():
-    # 10/10：节约模式原来把 V5 Full（High）压到 14 步，没换成官方 Medium 档——用量差不多，画质差很多
-    from app.policy import to_medium, V5_MEDIUM_UC
-    body = {"model": "nai-diffusion-5-full", "input": "1girl", "parameters": {
-        "steps": 28, "sampler": "k_dpmpp_2m", "cfg_rescale": 0.6, "negative_prompt": "hat",
-        "v4_negative_prompt": {"caption": {"base_caption": "hat", "char_captions": [{"char_caption": "x", "centers": []}]}},
-        "characterPrompts": [{"prompt": "a", "uc": "b"}]}}
-    out, notes = to_medium(body)
-    p = out["parameters"]
-    assert out["model"] == "nai-diffusion-5-full-medium" and body["model"] == "nai-diffusion-5-full"
-    assert (p["steps"], p["sampler"], p["cfg_rescale"], p["ucPreset"]) == (14, "k_euler_ancestral", 0, 0)
-    assert p["negative_prompt"] == V5_MEDIUM_UC and p["v4_negative_prompt"]["caption"]["base_caption"] == V5_MEDIUM_UC
-    assert p["v4_negative_prompt"]["caption"]["char_captions"][0]["char_caption"] == ""
-    assert p["characterPrompts"][0]["uc"] == "" and any("负面词" in n for n in notes)
-    inp, _ = to_medium({"model": "nai-diffusion-5-full-inpainting", "parameters": {}})
-    assert inp["model"] == "nai-diffusion-5-full-medium-inpainting"
-    for model in ("nai-diffusion-5-curated", "nai-diffusion-4-5-full"):       # Medium 只有 V5 Full 有
-        same, n = to_medium({"model": model, "parameters": {"steps": 28}})
-        assert same["model"] == model and same["parameters"]["steps"] == 28 and n == []
-
-
 def test_medium_is_v5_tier():
     from app.policy import image_model_tier, is_v5_medium
     assert image_model_tier("nai-diffusion-5-full-medium") == "v5" and is_v5_medium("nai-diffusion-5-full-medium")

@@ -49,8 +49,8 @@ async def test_public_status_exposes_only_safe_fields(env):
     assert [f["id"] for f in data["default_features"]] == ["image"]                   # 与后台新建 Key 默认一致
     assert set(data) == {"site", "upstream", "registration", "default_features", "audit_notice", "algo_notice",
                          "discord_invite", "has_announcement", "key_inactivity_delete_days", "image_jobs", "stability",
-                         "limits", "web_login", "economy"}   # limits 只含排队数、保底张数和安静时段，不含用量
-    assert data["web_login"] is False and data["economy"] is False  # 默认：网页登录暂停（fail-closed）、节约模式关
+                         "limits", "web_login"}   # limits 只含排队数、保底张数和安静时段，不含用量
+    assert data["web_login"] is False                                 # 默认：网页登录暂停（fail-closed）
 
 
 @pytest.mark.asyncio

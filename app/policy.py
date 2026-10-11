@@ -525,19 +525,13 @@ def fit_size(width: int, height: int, max_pixels: int) -> Tuple[int, int]:
     return w2, h2
 
 
-ECONOMY_STEPS = 14                       # 节约模式固定步数（镜像 NovelAI「节约模式」）
-ECONOMY_SAMPLER = "k_euler_ancestral"    # 低步数下收敛快、质量稳，官方节约模式也锁这个
-
-
 def clamp_image_params(payload: dict, *, max_pixels: int, max_steps: int,
-                       allow_img2img: bool, economy: bool = False) -> Tuple[dict, list[str], Optional[str]]:
+                       allow_img2img: bool) -> Tuple[dict, list[str], Optional[str]]:
     """把请求改写进「V5 额度条件 / 老模型免费档」的形状。
 
     返回 (新payload, 变更说明列表, 错误)。
     错误非 None 表示该请求被拒绝（例如 img2img 未开放）。
     对 V5：钳制后可走周额度（不烧 Anlas）；对老模型：钳制后直接免费。
-    economy=True（节约模式）：步数封顶 14、采样器锁 k_euler_ancestral，Anlas 约省 40%（我们计价按步数线性，
-    V5 周额度按 (A+B·14)/(A+B·23) 自动少扣）；保留用户的负面词，只动步数和采样器。
     """
     notes: list[str] = []
     # 只改写 parameters 的顶层字段：浅拷贝即可，避免对大请求体做 deepcopy（内存/CPU 放大数倍）。
@@ -558,11 +552,10 @@ def clamp_image_params(payload: dict, *, max_pixels: int, max_steps: int,
         p["n_samples"] = 1
         notes.append("n_samples 已限制为 1，避免额外图片产生 Anlas")
 
-    # steps -> 上限（节约模式再压到 14）
-    eff_max_steps = min(max_steps, ECONOMY_STEPS) if economy else max_steps
-    if int(p.get("steps", 0) or 0) > eff_max_steps:
-        p["steps"] = eff_max_steps
-        notes.append(f"steps 已钳制到 {eff_max_steps}" + ("（节约模式）" if economy else ""))
+    # steps -> 上限
+    if int(p.get("steps", 0) or 0) > max_steps:
+        p["steps"] = max_steps
+        notes.append(f"steps 已钳制到 {max_steps}")
 
     # 老模型保留免费面积内的自定义尺寸；V5 继续使用预设边界。
     w = int(p.get("width", 0) or 0)
@@ -585,11 +578,6 @@ def clamp_image_params(payload: dict, *, max_pixels: int, max_steps: int,
         p["sm_dyn"] = False
         notes.append("SMEA 已按安全钳制规则关闭")
 
-    # 节约模式：锁采样器（低步数下更稳），不动负面词
-    if economy and p.get("sampler") and p.get("sampler") != ECONOMY_SAMPLER:
-        p["sampler"] = ECONOMY_SAMPLER
-        notes.append(f"节约模式：采样器已设为 {ECONOMY_SAMPLER}")
-
     # ControlNet / 角色参考（额外计费）
     if p.get("controlnet_model") or p.get("controlnet_condition"):
         return out, notes, "本站未开放 ControlNet（该功能会消耗 Anlas）"
@@ -598,24 +586,6 @@ def clamp_image_params(payload: dict, *, max_pixels: int, max_steps: int,
         notes.append("已移除角色参考（精确参考会消耗 Anlas）")
 
     return out, notes, None
-
-
-def economy_trim(payload: dict) -> Tuple[dict, list[str]]:
-    """节约模式下给「算法自动分到 Anlas」的 Key 用：只压步数和采样器，不动尺寸（尺寸超出免费档时照常扣 Anlas）。
-
-    这些 Key 不走免费档钳制（要能用 Anlas 出超规格图），以前节约模式也一起跳过了，人多时它们仍按 28 步出图。
-    """
-    notes: list[str] = []
-    out = dict(payload)
-    p = dict(out["parameters"]) if isinstance(out.get("parameters"), dict) else {}
-    out["parameters"] = p
-    if int(p.get("steps", 0) or 0) > ECONOMY_STEPS:
-        p["steps"] = ECONOMY_STEPS
-        notes.append(f"steps 已钳制到 {ECONOMY_STEPS}（节约模式）")
-    if p.get("sampler") and p.get("sampler") != ECONOMY_SAMPLER:
-        p["sampler"] = ECONOMY_SAMPLER
-        notes.append(f"节约模式：采样器已设为 {ECONOMY_SAMPLER}")
-    return out, notes
 
 
 # ------------------------------------------------------------ V4 结构化提示词 ----
@@ -698,15 +668,6 @@ def medium_normalize(payload: dict) -> Tuple[dict, list[str]]:
     if isinstance(p.get("characterPrompts"), list):
         p["characterPrompts"] = [{**c, "uc": ""} if isinstance(c, dict) else c for c in p["characterPrompts"]]
     return out, notes
-
-
-def to_medium(payload: dict) -> Tuple[dict, list[str]]:
-    """V5 Full（High）→ Medium：节约模式用。省的用量和「High 压到 14 步」差不多，但 Medium 是专为 14 步训练的，画质好得多。"""
-    model = str(payload.get("model", "")).strip().lower()
-    if model not in V5_MEDIUM_OF:
-        return payload, []
-    out, notes = medium_normalize({**payload, "model": V5_MEDIUM_OF[model]})
-    return out, ["节约模式：V5 Full 已切到官方 Medium 档（14 步，画质接近 High）"] + notes
 
 
 # ------------------------------------------------------------ 文本钳制 ----

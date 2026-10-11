@@ -105,35 +105,6 @@ async def test_key_guard_enforce_pauses_only_rejects_branch(tmp_path):
         await db.close()
 
 
-def test_economy_rule():
-    assert autopilot.economy_rule(False, 8, 8)[0] is True       # 拥挤 → 开
-    assert autopilot.economy_rule(False, 3, 3)[0] is False      # 不够拥挤 → 保持关
-    assert autopilot.economy_rule(True, 5, 0)[0] is False       # 空闲 → 关
-    assert autopilot.economy_rule(True, 5, 5)[0] is True        # 还拥挤 → 保持开
-    assert autopilot.economy_rule(False, 20, 20, keys_15m=1)[0] is False   # 一个客户端刷出来的拒绝不算全站拥挤
-
-
-@pytest.mark.asyncio
-async def test_economy_is_never_turned_on_by_autopilot(tmp_path):
-    db = Database(str(tmp_path / "e.sqlite"))
-    await db.connect()
-    try:
-        await db.set_setting("autopilot_economy", "enforce")
-        for i in range(8):
-            await db.add_log(1 + i % 3, "m", "image", "x", "rejected",
-                             detail="当前排队的人太多（全站最多同时排 8 张），请稍后再试", reason="queue_full")
-        posts = []
-        ann = SimpleNamespace(post=lambda t: posts.append(t))
-        st = SimpleNamespace(db=db, guard=None, share=None, announcer=ann, sources=SimpleNamespace(events=[]))
-        now = time.time()
-        out = await autopilot.run(st, None, now=now)
-        # 2026-10-11 节约模式停用：算法仍会给出「建议开」，但自动驾驶不再执行
-        assert out["rules"]["economy"]["value"] is True and not out["rules"]["economy"].get("applied")
-        assert (await db.get_setting("economy_mode")) != "on" and not posts
-    finally:
-        await db.close()
-
-
 @pytest.mark.asyncio
 async def test_upgrade_backfills_reason_codes_for_recent_rejections(tmp_path):
     # 原因码上线前的拒绝只有中文 detail：升级时回填最近 2 天，节约模式 / Key 限流 / AIMD 不会因为升级漏数

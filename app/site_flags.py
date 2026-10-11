@@ -19,7 +19,7 @@ from typing import Any, Optional
 @dataclass(frozen=True)
 class Spec:
     key: str
-    kind: str                       # flag（"1"/"0"）· onoff（"on"/"off"）· int · float · str · choice
+    kind: str                       # flag（"1"/"0"）· int · float · str · choice
     default: Any
     owner: str
     doc: str
@@ -31,7 +31,6 @@ class Spec:
 
 WEB_LOGIN_PAUSED = Spec("web_login_paused", "flag", True, "registration_routes",
                         "网页 Discord OAuth 登录暂停（申诉期间）。Key 登录不受影响")
-ECONOMY = Spec("economy_mode", "onoff", False, "ops / autopilot", "节约模式：免费档统一 14 步 + Euler-a")
 DM_ENABLED = Spec("dm_enabled", "flag", False, "registration", "私信总闸门（关 = 任何私信都不发）")
 WAITLIST_DM = Spec("waitlist_dm", "flag", False, "registration", "有名额时私信候补成员（关 = 只在公告频道发一条汇总）")
 ISSUE_HOURLY_CAP = Spec("issue_hourly_cap", "int", 12, "registration", "每小时最多发放的新 Key", 0, 500)
@@ -55,7 +54,7 @@ WAITLIST = Spec("waitlist_enabled", "flag", False, "registration",
                 "候补排队（关 = 名额满了直接提示，有空位先到先得；机器人不能私信时候补只会空占名额）")
 MEMBER_SWEEP = Spec("member_sweep", "flag", True, "registration", "退群回收：每人每天核对一次是否还在服务器，不在就删 Key")
 
-ALL = (WAITLIST, MEMBER_SWEEP, WEB_LOGIN_PAUSED, ECONOMY, DM_ENABLED, WAITLIST_DM, ISSUE_HOURLY_CAP, REGISTER_OPEN,
+ALL = (WAITLIST, MEMBER_SWEEP, WEB_LOGIN_PAUSED, DM_ENABLED, WAITLIST_DM, ISSUE_HOURLY_CAP, REGISTER_OPEN,
        GLOBAL_DAILY_V5, GLOBAL_MONTHLY_ANLAS, GUARD_BASE, ALGO_NOTICE, IMAGE_RETENTION, IMAGE_CAP_MB, IMAGE_KEEP_HOURS, MEMBER_DOWNLOAD, SHARE_MODE)
 
 
@@ -74,8 +73,6 @@ def parse(spec: Spec, raw: Any, fallback: Any = None) -> Any:
         low = s.lower()
         if spec.kind == "flag":         # 认不出的写法回到默认值（fail-closed），不能当成「关」
             return True if low in ("1", "true", "yes", "on") else False if low in ("0", "false", "no", "off") else fallback
-        if spec.kind == "onoff":
-            return True if low in ("on", "1", "true") else False if low in ("off", "0", "false") else fallback
         if spec.kind == "choice":
             return s if s in spec.choices else fallback
         if spec.kind == "str":
@@ -100,8 +97,6 @@ async def get(db, spec: Spec, settings=None) -> Any:
 def encode(spec: Spec, value: Any) -> str:
     if spec.kind == "flag":
         return "1" if value else "0"
-    if spec.kind == "onoff":
-        return "on" if value else "off"
     if spec.kind == "choice":
         if value not in spec.choices:
             raise ValueError(f"{spec.key} 只能是 {' / '.join(spec.choices)}")
