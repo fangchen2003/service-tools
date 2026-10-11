@@ -6,6 +6,13 @@
   开始记录之前的日子是灰色「无数据」，不编造。
 · 历史事件按天列出最近 15 天，没有事件的日子写「当天没有事件」。
 站长 2026-10-10：后续所有 bug 按标准修复，修复进度发在这里。
+
+事件写法（10-11 站长：照 status.claude.com，要专业、不泄露隐私）：
+· 标题 = 受影响的功能 + 现象，例如「出图接口请求超时」「部分 V5 出图画质下降」。不写原因。
+· 正文只写成员能感知到的影响、时间段和进展。不写内部原因细节、数据量、版本号、配置名、
+  存了什么数据、哪个成员、哪把 Key。
+· 不确定写什么时，正文留空，自动用下面 STANDARD_BODY 的标准句式；已解决时补一句影响时段。
+· 只影响官网 / Discord 的事件不上状态页（见 SHOWN）。
 """
 from __future__ import annotations
 
@@ -214,6 +221,13 @@ async def snapshot(db, now: Optional[float] = None) -> dict[str, Any]:
 # （2026-10-10 站长：字体、结构、文案都要照它）。文案用 Statuspage 自带的中文本地化措辞。
 STATUS_LABEL = {"investigating": "调查中", "identified": "已确定", "update": "更新",
                 "monitoring": "监控中", "resolved": "已解决"}
+STANDARD_BODY = {          # Statuspage 标准句式（中文本地化）
+    "investigating": "我们正在调查此问题。",
+    "identified": "问题已定位，正在实施修复。",
+    "update": "我们正在继续处理此问题。",
+    "monitoring": "修复已上线，我们正在观察结果。",
+    "resolved": "此事件已解决。",
+}
 IMPACT_COMPONENT = {0: "运行正常", 1: "性能下降", 2: "部分中断", 3: "严重中断"}
 BAR = {None: "#B3BAC5", 0: "#76AD2A", 1: "#FAA72A", 2: "#E86235", 3: "#E04343"}
 IMPACT_COLOR = {"none": "#333333", "minor": "#FAA72A", "major": "#E86235", "critical": "#E04343"}
@@ -395,9 +409,9 @@ admin_router = APIRouter(prefix="/admin/api")
 
 def _check(body: dict, need_title: bool) -> tuple[str, str]:
     status = str(body.get("status", ""))
-    text = str(body.get("body", "")).strip()
-    if status not in STATUS_LABEL or not text:
-        raise HTTPException(422, "status 必须是 investigating / identified / update / monitoring / resolved，body 不能为空")
+    if status not in STATUS_LABEL:
+        raise HTTPException(422, "status 必须是 investigating / identified / update / monitoring / resolved")
+    text = str(body.get("body", "")).strip() or STANDARD_BODY[status]      # 留空 = 标准句式
     if need_title and not str(body.get("title", "")).strip():
         raise HTTPException(422, "需要 title")
     return status, text[:2000]
