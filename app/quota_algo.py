@@ -151,10 +151,19 @@ def v5_plan(percent: Optional[float], rate: Optional[float], active: int, *,
 
 
 def daily_adjust(a: int, b: int, *, used: int, cap: int, hourly_blocks: int, ceiling_hits: int,
-                 base_blocks: int, cfg: dict) -> tuple[int, int, list[str]]:
-    """前一天的结果 → 新的 A、B 和调整理由（纯函数，方便测试和审核）。"""
+                 base_blocks: int, cfg: dict, paced: bool = False) -> tuple[int, int, list[str]]:
+    """前一天的结果 → 新的 A、B 和调整理由（纯函数，方便测试和审核）。
+    paced=True（每日上限按时段放行，2026-10-11 起）：拥挤由按时段放行 + 保底平分处理，不再每天下调上限 A；
+    保底 B 由 fair_base 按需求平分，这里只保留「有余量且有人顶格 → 放宽 A」。"""
     util = used / cap if cap else 0.0
     reasons: list[str] = []
+    if paced:
+        a2 = a
+        if util < P("allocation.slack_util", 0.6) and ceiling_hits > 0:
+            a2 = min(cfg["quota_ceiling_max"], a + cfg["quota_step"])
+        reasons.append(f"有余量（用量 {util:.0%}），{ceiling_hits} 人顶到上限：上限 {a}→{a2}" if a2 != a
+                       else f"用量 {util:.0%}：按时段放行，上限不变")
+        return a2, min(b, a2), reasons
     # 拥挤看两样：全天用量 ≥ 85%，或有 ≥ 3 个不同的小时出现过「每小时上限」拦截。
     # 只按小时数算：一次几分钟的扎堆（2026-10-09 23:04 一次 10 连拦）不算拥挤，那是每小时上限本身在起作用。
     if util >= P("allocation.congested_util", 0.85) or hourly_blocks >= P("allocation.congested_hours", 3):
@@ -198,7 +207,7 @@ async def fair_base(db, day: str, cap: int, *, lo: int, hi: int) -> Optional[int
     """按前一天每个成员的 V4.5 用量算保底（只看算法管理的成员，不含测试 / 站长 Key）。"""
     rows = await db._db.execute_fetchall(
         "SELECT c.legacy_free_images FROM counters c JOIN api_keys k ON k.id=c.key_id "
-        "WHERE c.day=? AND k.is_test=0 AND k.is_admin=0 AND c.legacy_free_images>0", (day,))
+        "WHERE c.day=? AND k.is_test=0 AND k.is_admin=0 AND k.quota_auto=1 AND c.legacy_free_images>0", (day,))
     usage = [int(r[0]) for r in rows]
     if not usage:
         return None
@@ -259,7 +268,8 @@ async def _yesterday(db, day: str, members: list[int]) -> dict[str, int]:
                 seen.add(int(h))
         return len(seen)
     return {"used": used, "ceiling_hits": hits,
-            "hourly_blocks": await hours("%本小时出图量已达上限%", "%出图总量已达上限%", "%按时段放行%"),
+            # 只数「每小时上限」：按时段放行 / 每日上限是总量本来就这么多，不说明每人给多了（否则上限 A 每天 −25，几天后 A=保底）
+            "hourly_blocks": await hours("%本小时出图量已达上限%"),
             "base_blocks": await count("%保底%其他人在排队%")}
 
 
@@ -390,7 +400,7 @@ async def run(state, now: Optional[float] = None) -> dict[str, Any]:
         if covered < P("allocation.min_coverage_hours", 20):
             a2, b2, reasons = a, b, [f"昨天只有 {covered:.1f} 小时数据（不足 20 小时），不调整"]
         else:
-            a2, b2, reasons = daily_adjust(a, b, cap=cap, cfg=cfg, **stats)
+            a2, b2, reasons = daily_adjust(a, b, cap=cap, cfg=cfg, paced=bool(guard and guard.values.get("daily_burst")), **stats)
         fair = await fair_base(db, yday, cap, lo=cfg["quota_base_min_fair"], hi=a2) if covered >= P("allocation.min_coverage_hours", 20) else None
         if fair is not None and fair != b2:
             reasons.append(f"保底按昨天的实际需求平分 {int(FAIR_SHARE * 100)}% 的账号日上限：{b2}→{fair}")
@@ -477,12 +487,7 @@ async def run(state, now: Optional[float] = None) -> dict[str, Any]:
         await db._db.commit()
     # 手动定了 V5 基础值的 Key：实际 = max(基础值 × 节约倍数, 普通成员的值)——手动的人不会比大家少，节约模式一样放大。
     # 测试 Key 也照样应用：测试标记只影响统计，站长明确定的数字必须生效（2026-10-10 站长自己的 Key 是测试 Key，定了 50 没生效）
-    pinned = await db._db.execute(
-        "UPDATE api_keys SET daily_v5=MAX(CAST(v5_pinned * ? AS INTEGER), ?) "
-        "WHERE quota_auto=-1 AND v5_pinned IS NOT NULL AND image_model_scope='all' AND is_admin=0 "
-        "AND daily_v5<>MAX(CAST(v5_pinned * ? AS INTEGER), ?)", (mult, v5["each"], mult, v5["each"]))
-    if pinned.rowcount:
-        await db._db.commit()
+    # 手动 Key 填多少就是多少（2026-10-11）：不再按 v5_pinned 把 daily_v5 抬到「不低于普通成员」。旧数据启动时清掉 v5_pinned。
     settings = {"global_daily_v5": v5["global"], "register_daily_images": a, "register_daily_v5": v5["each"],
                 "register_image_scope": "all"}
     if guard is not None and guard.values.get("base_daily_images") != b:

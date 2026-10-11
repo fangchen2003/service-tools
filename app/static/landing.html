@@ -390,6 +390,7 @@ body.authed #board{margin-top:22px}
     <a class="top-link guest-only" href="#rules">须知</a>
     <a class="top-link" href="#board">运行情况</a>
     <a class="top-link" href="#algo">算法</a>
+    <a class="top-link" href="/workbench" id="navWorkbench" hidden title="NAI 工作台（内测，只有站长能打开）"><span data-ic="brush"></span>工作台</a>
     <button class="btn ghost icon" id="themeBtn" type="button" aria-label="切换明暗主题" title="切换明暗主题"><span data-ic="theme"></span></button>
     <div class="userchip" id="userChip" hidden>
       <button class="chip-btn" id="chipBtn" type="button" aria-haspopup="true" aria-expanded="false">
@@ -541,11 +542,10 @@ body.authed #board{margin-top:22px}
     <article class="mcard" id="m-aimd">
       <div class="math">
         <div class="m-k">③ 每日微调 · 加减步长</div>
-        <h3>V4.5 上限 A 和保底 B 看昨天挤不挤</h3>
-        <div class="eq">拥挤：<i>U</i> ≥ 0.85 ∨ <i>H</i> ≥ 3 ⇒ <i>A</i>−25，<i>B</i>−10</div>
-        <div class="eq">余量：<i>U</i> &lt; 0.6 ∧ 有人顶到 <i>A</i> ⇒ <i>A</i>+25</div>
-        <div class="eq">余量：<i>U</i> &lt; 0.6 ∧ 有人超过保底时被「全站不空闲」拦下 ⇒ <i>B</i>+10</div>
-        <p class="m-note"><i>U</i> = 昨天出图总量 ÷ 日上限 <span id="mDaily">1000</span>；<i>H</i> = 昨天有几个<b>不同的小时</b>出现每小时上限拦截（只算成员）。中间区不动，避免来回抖；范围 50 ≤ <i>B</i> ≤ <i>A</i> ≤ 300。</p>
+        <h3>保底 B 按昨天的需求平分，上限 A 只在有余量时放宽</h3>
+        <div class="eq">保底：Σ min(用量<sub>i</sub>, <i>B</i>) = 0.6 × 日上限 <span id="mDaily">1500</span></div>
+        <div class="eq">余量：<i>U</i> &lt; 0.6 ∧ 有人顶到 <i>A</i> ⇒ <i>A</i>+25（最多 300）</div>
+        <p class="m-note">保底用<b>最大最小公平</b>：昨天用得少的人用多少算多少，剩下的平分给用得多的人，10 ≤ <i>B</i> ≤ <i>A</i>。人多时总量由「按时段放行」管（见 ④），所以不再因为拥挤每天调低 <i>A</i>。<i>U</i> = 昨天出图总量 ÷ 日上限。</p>
         <div class="m-read"><div><span>现在的上限 A</span><b id="rA">150</b></div><div><span>现在的保底 B</span><b id="rB">100</b></div><div><span>今天至今 U</span><b id="rU">—</b></div></div>
         <p class="m-prior">同类做法：<b>AIMD</b>，TCP 拥塞控制的加性增、乘性减。</p>
       </div>
@@ -557,8 +557,9 @@ body.authed #board{margin-top:22px}
         <div class="m-k">④ 速率闸门 · 滑动窗口（近 60 分钟）</div>
         <h3 id="mHourT">每小时最多 150 张</h3>
         <div class="eq" id="mHourEq">放行 ⇔ <i>n</i><sub>h</sub> &lt; <i>C</i>，<i>C</i> = <span class="hl">150</span></div>
-        <div class="eq">借用 ⇔ 无人排队 ∧ <i>n</i><sub>h</sub> &lt; 0.6 · <i>C</i></div>
-        <p class="m-note" id="mHourN">超过个人保底 B 以后，只有全站空闲（第二行）才能继续用到上限 A。</p>
+        <div class="eq">按时段放行 ⇔ 今天已用 &lt; 150 + 日上限 × 已过去的时间 / 24 小时</div>
+        <div class="eq">借用 ⇔ 无人排队 ∧ 这个时段放出的份额还剩半小时以上的量</div>
+        <p class="m-note" id="mHourN">每天的总量平均分到 24 小时放出，没用完的留到后面，晚来的人也有图出。超过个人保底 B 以后，只有全站空闲（第三行）才能继续用到上限 A。</p>
         <p class="m-now" id="mHourNow" hidden></p>
         <p class="m-prior">同类做法：<b>滑动窗口限流</b>（不是整点清零，最早一张滑出 60 分钟就空出一个位置）。</p>
       </div>
@@ -593,11 +594,11 @@ body.authed #board{margin-top:22px}
 
     <article class="mcard" id="m-econ">
       <div class="math">
-        <div class="m-k">⑦ 节约模式 · 成本与步数成正比</div>
-        <h3>人多时统一 14 步，同样的额度多出约 70% 的图</h3>
+        <div class="m-k">⑦ 节约模式 · 已停用（2026-10-11）</div>
+        <h3>每张图都按 1 张算，节约模式不再自动开启</h3>
         <div class="eq">成本 ∝ <i>a</i> + <i>b</i>·<i>s</i>，　<i>c</i>(14) / <i>c</i>(28) = <span class="hl">0.58</span></div>
         <div class="eq">建议开 ⇔ 排队满<sub>15m</sub> ≥ 8；建议关 ⇔ 排队满<sub>30m</sub> ≤ 1；两次切换 ≥ 1 小时</div>
-        <p class="m-note">每张图的成本 = 固定部分 + 每一步的部分。步数从 28 降到 14，成本降到约 58%（省约 42%，按本站计价公式算，与 NovelAI 官方公布的「约少 42%」相符），同样的额度能出约 1.7 倍的图。采样器换成低步数下更稳的 Euler Ancestral，负面词保留。目前算法只给建议，由站长手动开关；开关都会在公告频道通知。</p>
+        <p class="m-note">每张图的成本 = 固定部分 + 每一步的部分。步数从 28 降到 14，成本降到约 58%（省约 42%，按本站计价公式算，与 NovelAI 官方公布的「约少 42%」相符），不过本站已经取消打折（每张都按 1 张计），出图间隔又是从上一张开始算 15 秒，降步数既不多给额度也不多出图，只会降低画质，所以 10-11 起停用，正常 28 步出图。站长手动开关时仍会在公告频道通知。</p>
         <p class="m-now" id="mEconNow" hidden></p>
         <p class="m-prior">同类做法：NovelAI 官方「节约模式」（Medium，14 步）。</p>
       </div>
@@ -630,7 +631,8 @@ var P = {
   ban:'<circle cx="12" cy="12" r="9"/><path d="M5.7 5.7l12.6 12.6"/>',
   info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.01"/>',
   book:'<path d="M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2V5z"/><path d="M4 19a2 2 0 012-2h13"/>',
-  archive:'<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 001 1h12a1 1 0 001-1V8M10 12h4"/>'
+  archive:'<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 001 1h12a1 1 0 001-1V8M10 12h4"/>',
+  brush:'<path d="M14 4l6 6-8.5 8.5a3 3 0 01-2.1.9H6v-3.4a3 3 0 01.9-2.1L14 4z"/><path d="M12 6l6 6M3 21c1.5 0 3-1 3-2.5"/>'
 };
 function icon(n){ return '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">' + (P[n] || '') + '</svg>'; }
 function hydrate(root){ (root || document).querySelectorAll('[data-ic]').forEach(function(el){ if(!el.firstChild) el.innerHTML = icon(el.getAttribute('data-ic')); }); }
@@ -867,6 +869,13 @@ function bindCoupons(root){
     idle();
   });
 }
+/* NAI 工作台（内测）：Caddy 只放行站长会话，其他人会被重定向；能直接拿到工作台的健康检查才显示入口 */
+function loadWorkbenchLink(){
+  fetch('/api/health', {cache:'no-store', credentials:'include', redirect:'manual'}).then(function(r){
+    if(r.ok && r.type !== 'opaqueredirect'){ var a = document.getElementById('navWorkbench'); if(a){ a.hidden = false; var s = a.querySelector('[data-ic]'); if(s) s.outerHTML = icon('brush'); } }
+  }, function(){});
+}
+loadWorkbenchLink();
 function loadMe(){ fetch('/public/me', {cache:'no-store', credentials:'include'}).then(function(r){ return r.ok ? r.json() : null; }).then(renderMe, function(){ renderMe(null); }); }
 (function(){
   var f = $('keyLogin'); if(!f) return;
@@ -951,9 +960,9 @@ function fmtDate(sec){
     var nx = Number(g.next_in) || 0;
     $id('dPn').textContent = g.hour_cap && (g.hour || 0) >= g.hour_cap ? '近 60 分钟已满，最早那张满 60 分钟后就有空位' : (nx > 0 ? '下一张约 ' + Math.ceil(nx) + ' 秒后可以发' : '上游空着，随时可以发');
     /* 额度 */
-    // 每日上限按算力折算（节约模式 14 步的图算半张），进度条和数字用折算值；悬停可看实际张数
+    // 每日上限按张数计（10-11 起不再折算半张）
     const used45 = q.units_today ?? q.images_today ?? 0;
-    $id('d45').textContent = Math.round(used45); $id('d45').title = `实际出图 ${q.images_today || 0} 张（节约模式的图按半张计入额度）`;
+    $id('d45').textContent = Math.round(used45); $id('d45').title = `今天全站出图 ${q.images_today || 0} 张`;
     $id('d45c').textContent = q.images_cap || 0; setBar('d45bar', used45, q.images_cap || 0);
     $id('d5').textContent = q.v5_today || 0; $id('d5c').textContent = q.v5_cap || 0; setBar('d5bar', q.v5_today || 0, q.v5_cap || 0);
     $id('dAn').textContent = r.borrow_open ? '全站空闲：用完保底后也能继续出图' : '全站较忙：用完保底后要等空闲才能继续';

@@ -615,8 +615,8 @@ async def patch_key(request: Request, key_id: int):
         fields.update(exclude_global_v5=False, features=None, allow_anlas=False, daily_anlas=0.0)
     if quota is not None:
         fields["v5_pinned"] = None                  # 手动就是填的值，不再有「基础值 + 不低于普通成员」的中间状态
-    if quota is None and "daily_v5" in fields and "v5_pinned" not in fields and fields["daily_v5"] != before["daily_v5"]:
-        fields["v5_pinned"] = fields["daily_v5"] or None      # 编辑窗口里手填的 V5 张数也作为手动基础值
+    if "daily_v5" in fields and "v5_pinned" not in fields:
+        fields["v5_pinned"] = None                  # 手填的 V5 就是精确值，不再当「基础值」
     await st.db.update_key(key_id, fields)
     quota_mode = body.get("quota_mode") or ("auto" if quota == "auto" else None)
     if quota == "manual":

@@ -644,7 +644,7 @@ async def test_economy_log_detail_keeps_size_steps_and_cost(state):
 
 @pytest.mark.asyncio
 async def test_economy_images_carry_half_cost_weight_to_upstream(state):
-    # 账号每日上限按算力折算：节约模式钳到 14 步的图计 0.5 张，正常 28 步计 1 张
+    # 不打折（2026-10-11）：节约模式 14 步的图也按 1 张计入账号每日上限
     from app.nai import IMAGE_COST_WEIGHT
     seen = []
     orig = state.nai.request
@@ -657,7 +657,7 @@ async def test_economy_images_carry_half_cost_weight_to_upstream(state):
     assert (await post("/ai/generate-image", image_body())).status_code == 200
     state.db.kv = {"economy_mode": "on"}
     assert (await post("/ai/generate-image", image_body())).status_code == 200
-    assert seen == [1.0, 0.5]
+    assert seen == [1.0, 1.0]
 
 
 @pytest.mark.asyncio

@@ -114,18 +114,21 @@ async def test_economy_mode_does_not_change_v5(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_pinned_manual_v5_never_below_members_and_ignores_economy(tmp_path):
+async def test_manual_v5_is_exact_and_pinned_rows_are_cleared(tmp_path):
+    # 2026-10-11：手动 Key 填多少就是多少；旧的 v5_pinned（「不低于普通成员」）启动时清掉，算法不再改手动 Key
     from app import ops
     db = Database(str(tmp_path / "p.sqlite"))
     await db.connect()
     try:
-        base = {"daily_images": 150, "daily_anlas": 0, "daily_v5": 0, "monthly_anlas": 0, "daily_text_tokens": 0,
+        base = {"daily_images": 150, "daily_anlas": 0, "daily_v5": 5, "monthly_anlas": 0, "daily_text_tokens": 0,
                 "rpm": 10, "allow_anlas": True, "allow_img2img": False, "exclude_global_v5": True, "image_model_scope": "all"}
-        low = await db.create_key({"name": "熟人-低", "token": "nai-low", **base})
-        high = await db.create_key({"name": "熟人-高", "token": "nai-high", **base})
+        low = await db.create_key({"name": "手动-低", "token": "nai-low", **base})
         await db._db.execute("UPDATE api_keys SET quota_auto=-1, v5_pinned=5 WHERE id=?", (low["id"],))
-        await db._db.execute("UPDATE api_keys SET quota_auto=-1, v5_pinned=50, is_test=1 WHERE id=?", (high["id"],))   # 测试 Key 也要生效
         await db._db.commit()
+        await db.close()
+        db = Database(str(tmp_path / "p.sqlite"))
+        await db.connect()                                                    # 重启：清掉旧基础值
+        assert (await db.get_key(low["id"]))["v5_pinned"] is None
 
         class Allow:
             async def snapshot(self, pool):
@@ -133,14 +136,23 @@ async def test_pinned_manual_v5_never_below_members_and_ignores_economy(tmp_path
         st = SimpleNamespace(db=db, guard=Guard(db), announcer=None,
                              nai=SimpleNamespace(pool=[SimpleNamespace(usable=True)], allowance=Allow()))
         each = (await quota_algo.run(st))["v5"]["each"]
-        assert (await db.get_key(low["id"]))["daily_v5"] == each          # 手动定得比大家少：抬到普通成员的值
-        assert (await db.get_key(high["id"]))["daily_v5"] == 50
+        assert each > 5 and (await db.get_key(low["id"]))["daily_v5"] == 5   # 不再被抬到普通成员的值
         await ops.set_economy(db, True, st)
-        assert (await db.get_key(low["id"]))["daily_v5"] == each
-        assert (await db.get_key(high["id"]))["daily_v5"] == 50           # 节约模式不放大
-        assert (await db.get_key(high["id"]))["v5_pinned"] == 50          # 基础值不被改写
+        assert (await db.get_key(low["id"]))["daily_v5"] == 5
     finally:
         await db.close()
+
+
+def test_daily_adjust_paced_never_ratchets_ceiling_down():
+    # 按时段放行后每天用量都接近 100%：上限 A 不能每天 −25 直到等于保底（Sonnet 审查 P1）
+    a, b = 125, 30
+    for _ in range(10):
+        a, b, why = quota_algo.daily_adjust(a, b, used=1500, cap=1500, hourly_blocks=5, ceiling_hits=0,
+                                            base_blocks=0, cfg=CFG, paced=True)
+    assert (a, b) == (125, 30) and "上限不变" in why[0]
+    a, _, why = quota_algo.daily_adjust(125, 30, used=500, cap=1500, hourly_blocks=0, ceiling_hits=3,
+                                        base_blocks=0, cfg=CFG, paced=True)
+    assert a == 150
 
 
 @pytest.mark.asyncio
