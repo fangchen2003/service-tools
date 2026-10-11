@@ -951,12 +951,15 @@ class Database:
         rows = await self._db.execute_fetchall(
             f"SELECT id, image_file FROM generation_audit WHERE {HAS_IMAGE} AND {where}", args)
         ids = [r[0] for r in rows]
-        for i in range(0, len(ids), 500):
-            part = ids[i:i + 500]
+        # 每批单独提交：老记录的 BLOB 置空要改写整页（Debian 版 SQLite 默认 secure_delete），一次改几 GB 会把唯一的
+        # 数据库连接占住十几分钟，全站请求排队无响应（10-11 18:16 事故）。小批 + 让出事件循环，请求能插进来。
+        for i in range(0, len(ids), 50):
+            part = ids[i:i + 50]
             await self._db.execute(
                 "UPDATE generation_audit SET image=NULL, image_file=NULL, image_size=NULL, image_type='' "
                 f"WHERE id IN ({','.join('?' * len(part))})", part)
-        await self._db.commit()
+            await self._db.commit()
+            await asyncio.sleep(0)
         files = [r[1] for r in rows if r[1]]
         if files:
             await asyncio.to_thread(self._unlink_images, files)

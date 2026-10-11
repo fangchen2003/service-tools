@@ -34,8 +34,22 @@ async def test_incident_lifecycle_banner_bars_and_history(tmp_path):
         await sp.add_update(db, b, "resolved", "复盘结果正确", now)
         page = sp.render(await sp.snapshot(db, now + 1))
         assert "所有系统运行正常" in page and "过去的事件" in page
-        bot = next(c for c in (await sp.snapshot(db, now + 1))["components"] if c["key"] == "bot")
-        assert bot["status"] == "运行正常" and bot["uptime"] == 100.0
+        # 10-11 站长：只看生图——上游在最前，官网 / Discord 不上状态页，只影响它们的事件也不显示
+        c = await sp.create_incident(db, "Discord 应用受限", "minor", ["bot", "web"], "identified", "申诉中", now - 100)
+        snap = await sp.snapshot(db, now + 1)
+        assert [x["key"] for x in snap["components"]] == ["upstream", "api"]
+        assert c not in [i["id"] for i in snap["active"]] and "Discord 应用受限" not in sp.render(snap)
+        # 上游颜色按真实发到 NovelAI 的结果：今天 20 次里 5 次 500 → 25% 失败
+        for i in range(20):
+            await db._db.execute("INSERT INTO usage_log (ts, key_id, key_name, kind, model, status, up_status) VALUES (?,1,'k','image','m',?,?)",
+                                 (now - 120, "ok" if i >= 5 else "error", 200 if i >= 5 else 500))
+        await db._db.execute("INSERT INTO usage_log (ts, key_id, key_name, kind, model, status, up_status) VALUES (?,1,'k','image','m','rejected',0)", (now - 120,))
+        await db._db.commit()
+        await db.set_setting(sp.OFFICIAL_KEY, '{"image": "Operational", "image_code": 100}')
+        snap = await sp.snapshot(db, now)
+        up = snap["components"][0]
+        assert up["days"][-1]["level"] == 2 and up["status"] == "部分中断"
+        assert "NovelAI 官方：图片生成 Operational" in sp.render(snap)
     finally:
         await db.close()
 
