@@ -869,10 +869,10 @@ function bindCoupons(root){
     idle();
   });
 }
-/* NAI 工作台（内测）：只有站长后台登录着才显示入口；Caddy 也只放行站长会话 */
+/* NAI 工作台（内测）：Caddy 只放行站长会话，其他人会被重定向；能直接拿到工作台的健康检查才显示入口 */
 function loadWorkbenchLink(){
-  fetch('/admin/api/me', {cache:'no-store', credentials:'include'}).then(function(r){
-    if(r.ok){ var a = document.getElementById('navWorkbench'); if(a){ a.hidden = false; var s = a.querySelector('[data-ic]'); if(s) s.outerHTML = icon('brush'); } }
+  fetch('/api/health', {cache:'no-store', credentials:'include', redirect:'manual'}).then(function(r){
+    if(r.ok && r.type !== 'opaqueredirect'){ var a = document.getElementById('navWorkbench'); if(a){ a.hidden = false; var s = a.querySelector('[data-ic]'); if(s) s.outerHTML = icon('brush'); } }
   }, function(){});
 }
 loadWorkbenchLink();
