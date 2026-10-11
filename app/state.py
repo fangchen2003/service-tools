@@ -413,6 +413,11 @@ class GateState:
         remaining = max(1, int(self._image_blocked_until - time.time()))
         guard = getattr(self, "guard", None)
         if guard is not None:
+            if guard.note_upstream_429() >= 3:
+                fell = await guard.fall_back_daily("上游 1 小时内 ≥3 次 429")
+                if fell:
+                    self.alerter.notify("daily_cap_fallback", f"⚠️ NovelAI 1 小时内多次返回 429：每日出图上限自动从 {fell[0]} 退回 "
+                                        f"{fell[1]} 张。确认安全后需要站长手动再调高。", cooldown=0)
             changed = await guard.on_upstream_429()
             if changed:
                 self.alerter.notify("guard_hourly_down", f"上游限流：每小时出图上限自动从 {changed[0]} 降到 {changed[1]}，"

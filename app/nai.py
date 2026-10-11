@@ -459,6 +459,17 @@ class NaiClient:
             ts.forbidden_streak = 0
             ts.blocked_until = max(ts.blocked_until, time.time() + minutes * 60.0)
             self._event("upstream_403_cooldown", f"NovelAI 连续返回 403，账号可能被上游封控。该 Token（{ts.token_id}）冷却 {minutes} 分钟后自动重试（第 {ts.forbidden_trips} 轮），请检查上游账号状态。", 1800)
+            if self.guard is not None:          # 每日上限试探期：封控信号 → 退回安全档
+                import asyncio as _asyncio
+                async def _fall():
+                    fell = await self.guard.fall_back_daily("上游连续 403（账号可能被封控）")
+                    if fell:
+                        self._event("daily_cap_fallback", f"⚠️ NovelAI 连续返回 403：每日出图上限自动从 {fell[0]} 退回 {fell[1]} 张，确认安全后需要站长手动再调高。", 0)
+                try:
+                    task = _asyncio.get_running_loop().create_task(_fall())
+                    self._bg = getattr(self, "_bg", set()); self._bg.add(task); task.add_done_callback(self._bg.discard)
+                except RuntimeError:
+                    pass
 
     def _warn_account(self, status: int) -> None:
         """402 / 403 状态告警。"""
