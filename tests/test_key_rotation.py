@@ -201,6 +201,31 @@ async def test_noop_scope_patch_keeps_algorithm_and_pin_goes_manual(env):
 
 
 @pytest.mark.asyncio
+async def test_quota_two_modes_auto_and_manual(env):
+    # 2026-10-11 站长：额度只有「算法」和「手动」两种。手动 = 填多少就是多少；算法 = 全部交给算法，忽略填的数字
+    state, client, key = env
+    await login(client)
+    manual = {'quota': 'manual', 'notify': False, 'daily_images': 40, 'daily_v5': 80, 'daily_anlas': 150,
+              'monthly_anlas': 1500, 'allow_anlas': True, 'exclude_global_v5': True, 'image_model_scope': 'all',
+              'features': ['image', 'vibe', 'upscale']}
+    r = await client.patch(f"/admin/api/keys/{key['id']}", json=manual)
+    row = await state.db.get_key(key['id'])
+    assert r.status_code == 200
+    assert (row['quota_auto'], row['anlas_auto'], row['v5_pinned']) == (-1, -1, None)        # 没有「基础值」中间状态
+    assert (row['daily_images'], row['daily_v5'], row['daily_anlas'], row['exclude_global_v5']) == (40, 80, 150.0, 1)
+    assert row['features'] == 'image,upscale,vibe'
+    r = await client.patch(f"/admin/api/keys/{key['id']}", json={'quota': 'auto', 'notify': False,
+                                                                  'daily_images': 999, 'exclude_global_v5': True})
+    row = await state.db.get_key(key['id'])
+    assert r.status_code == 200
+    assert (row['quota_auto'], row['anlas_auto'], row['v5_pinned'], row['features'], row['exclude_global_v5']) == (1, 0, None, None, 0)
+    assert row['daily_images'] != 999                                                        # 算法模式忽略填的数字
+    assert (await client.patch(f"/admin/api/keys/{key['id']}", json={'quota': 'half'})).status_code == 422
+    listed = {k['id']: k for k in (await client.get('/admin/api/keys')).json()['keys']}
+    assert listed[key['id']]['quota_auto'] is True
+
+
+@pytest.mark.asyncio
 async def test_member_tags_manual_and_auto(env):
     # 后台标签：手动（带备注）+ 自动（近 24 小时因成员自己能改的原因被拒）；删 Key 时标签一起清掉
     state, client, key = env
