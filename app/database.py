@@ -11,6 +11,8 @@ from uuid import uuid4
 
 import aiosqlite
 
+INVITE_TAG = "邀请"     # 站长手动发的邀请 Key：只由站长手动删除，闲置回收跳过（10-11 站长）
+
 from .reasons import reason_label
 
 SCHEMA = """
@@ -659,8 +661,9 @@ class Database:
         cur = await self._db.execute(
             """SELECT id FROM api_keys
                WHERE is_admin=0 AND is_test=0 AND enabled=1 AND MAX(COALESCE(last_used_at, created_at), ?) < ?
+                 AND id NOT IN (SELECT key_id FROM key_tags WHERE tag=?)
                ORDER BY id ASC""",
-            (grace_started_at, cutoff),
+            (grace_started_at, cutoff, INVITE_TAG),
         )
         return [int(row["id"]) for row in await cur.fetchall()]
 

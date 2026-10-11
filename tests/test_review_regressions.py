@@ -573,6 +573,27 @@ async def test_inactive_cleanup_is_logged(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_invite_tagged_keys_skip_inactive_cleanup(tmp_path):
+    """10-11 站长：邀请 Key 只由站长手动删，闲置回收跳过带「邀请」标签的 Key。"""
+    from types import SimpleNamespace
+    from app.state import GateState
+    db = Database(str(tmp_path / "g.sqlite"))
+    await db.connect()
+    ids = []
+    for n in ("invite", "idle"):
+        k = await db.create_key({"name": n, "token": "nai-" + n, "daily_images": 1, "monthly_anlas": 0,
+                                 "daily_text_tokens": 0, "rpm": 5})
+        ids.append(k["id"])
+        await db._db.execute("UPDATE api_keys SET created_at=? WHERE id=?", (time.time() - 10 * 86400, k["id"]))
+    await db._db.execute("INSERT INTO key_tags(key_id, tag, note, by, ts) VALUES (?, '邀请', '', '站长', ?)", (ids[0], time.time()))
+    await db._db.commit()
+    fake = SimpleNamespace(db=db, settings=SimpleNamespace(key_inactivity_delete_days=3))
+    assert await GateState.delete_inactive_keys(fake) == 1
+    assert await db.get_key(ids[0]) and not await db.get_key(ids[1])
+    await db.close()
+
+
+@pytest.mark.asyncio
 async def test_v1_prefixed_nai_paths_are_aliased(state):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app, raise_app_exceptions=False),
                                  base_url="http://gate") as c:
