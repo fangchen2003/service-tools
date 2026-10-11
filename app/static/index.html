@@ -2327,7 +2327,8 @@ function renderAuditSettings(){
   if(auditSetOpen === null) auditSetOpen = !on;
   const gb = b => (b / 1073741824).toFixed(1) + ' GB';
   const capTxt = a.image_cap_mb > 0 ? `上限 ${gb(a.image_cap_mb * 1048576)}` : '不限';
-  const parts = [a.prompts ? `提示词（${a.retention_days>0 ? a.retention_days+' 天' : '长期'}）` : '', a.thumbs ? `原图（已用 ${gb(a.image_bytes||0)} / ${capTxt}）` : ''].filter(Boolean).join(' + ');
+  const keepTxt = a.image_keep_hours > 0 ? `保存 ${a.image_keep_hours} 小时` : '不按时间删';
+  const parts = [a.prompts ? `提示词（${a.retention_days>0 ? a.retention_days+' 天' : '长期'}）` : '', a.thumbs ? `原图（${keepTxt} · 已用 ${gb(a.image_bytes||0)} / ${capTxt} · 成员下载${a.image_retention_days>0?'开':'关'}）` : ''].filter(Boolean).join(' + ');
   const summary = on ? `记录中：${parts || '无'}` : '记录已关闭：不会保存提示词和原图';
   const head = `<div class="sumline"><div class="body"><h2 style="font-size:15px;font-weight:600">记录设置</h2>
       <div class="${on?'':'muted'}" style="margin-top:2px">${esc(summary)}</div></div>
@@ -2335,10 +2336,12 @@ function renderAuditSettings(){
   if(!auditSetOpen){ box.innerHTML = head; return; }
   box.innerHTML = head + `<div style="margin-top:16px">
     <div class="feat-row"><div class="body"><div class="t">记录提示词</div></div><label class="switch"><input type="checkbox" id="aud_prompts" ${a.prompts?'checked':''} aria-label="记录提示词"><span></span></label></div>
-    <div class="feat-row"><div class="body"><div class="t">保存原图</div><div class="d">不按天数删，只在超过容量上限时删最旧的；成员只能打包下载自己最近 2 天的（找回误删的图）</div></div><label class="switch"><input type="checkbox" id="aud_thumbs" ${a.thumbs?'checked':''} aria-label="保存原图"><span></span></label></div>
+    <div class="feat-row"><div class="body"><div class="t">保存原图</div><div class="d">到保存时长就删，另外超过容量上限时删最旧的</div></div><label class="switch"><input type="checkbox" id="aud_thumbs" ${a.thumbs?'checked':''} aria-label="保存原图"><span></span></label></div>
+    <div class="feat-row"><div class="body"><div class="t">成员打包下载原图</div><div class="d">开了以后，成员在首页能打包自己最近 2 天的原图（受保存时长限制），用来找回误删的图</div></div><label class="switch"><input type="checkbox" id="aud_download" ${a.image_retention_days>0?'checked':''} aria-label="成员打包下载原图"><span></span></label></div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:16px">
+      <div class="field" style="max-width:260px;flex:1 1 200px"><label for="aud_keep_h">原图保存小时数</label><input id="aud_keep_h" type="number" min="0" max="8760" value="${esc(a.image_keep_hours ?? 24)}"><div class="hint">到点自动删；0 = 只按容量上限删</div></div>
       <div class="field" style="max-width:260px;flex:1 1 200px"><label for="aud_days">提示词保留天数</label><input id="aud_days" type="number" min="0" max="3650" value="${esc(a.retention_days)}"><div class="hint">0 = 长期保留</div></div>
-      <div class="field" style="max-width:260px;flex:1 1 200px"><label for="aud_img_cap">原图容量上限（MB）</label><input id="aud_img_cap" type="number" min="0" max="500000" value="${esc(a.image_cap_mb ?? 8192)}"><div class="hint">现在已用 ${esc(gb(a.image_bytes||0))}（约 1.5MB/张，不进备份）。超过后删最旧的；0 = 不限</div></div>
+      <div class="field" style="max-width:260px;flex:1 1 200px"><label for="aud_img_cap">原图容量上限（MB）</label><input id="aud_img_cap" type="number" min="0" max="500000" value="${esc(a.image_cap_mb ?? 8192)}"><div class="hint">现在已用 ${esc(gb(a.image_bytes||0))}（约 1.3MB/张，存成文件、不进数据库）。超过后删最旧的；0 = 不限</div></div>
     </div>
     <div style="margin-top:12px"><button class="btn danger-text" type="button" data-act="purge-images">清空服务器上的全部原图</button> <span class="muted sm">只删原图，提示词和参数保留；成员就打包不到了</span></div>
     <label class="check"><input type="checkbox" id="aud_notify" checked><span>记录范围变化时在成员频道发布数据记录说明${a.announce_configured?'':'（公告频道未配置，将不会发布）'}</span></label>
@@ -2594,7 +2597,7 @@ async function saveAudit(){
   if(!Number.isInteger(days) || days<0 || days>3650){ toast('提示词保留天数须为 0～3650 的整数（0 = 长期保留）', 'err'); return; }
   if(!Number.isInteger(cap) || cap<0 || cap>500000){ toast('原图容量上限须为 0～500000 的整数 MB（0 = 不限）', 'err'); return; }
   try{
-    opsData = await api('/admin/api/ops/audit', {method:'PUT', body:JSON.stringify({prompts:$('#aud_prompts').checked, thumbs:$('#aud_thumbs').checked, retention_days:days, image_cap_mb:cap, notify:$('#aud_notify').checked})});
+    opsData = await api('/admin/api/ops/audit', {method:'PUT', body:JSON.stringify({prompts:$('#aud_prompts').checked, thumbs:$('#aud_thumbs').checked, retention_days:days, image_cap_mb:cap, image_keep_hours:Number($('#aud_keep_h').value)||0, member_download:$('#aud_download').checked, notify:$('#aud_notify').checked})});
     statusCache = null;
     toast('生成记录设置已保存', 'ok'); auditSetOpen = null; renderAuditSettings(); loadAudit();
   }catch(e){ toastErr(e); }

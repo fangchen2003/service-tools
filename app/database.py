@@ -6,6 +6,7 @@ import asyncio
 import json
 import math
 import time
+from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -275,6 +276,8 @@ END;
 
 # 统计成员用量 / 上游表现时排除测试 Key 的日志。删除测试 Key 前先删它的日志，否则这些日志会重新算进成员统计。
 NOT_TEST = "COALESCE(key_id, 0) NOT IN (SELECT id FROM api_keys WHERE is_test=1)"
+HAS_IMAGE = "(image IS NOT NULL OR image_file IS NOT NULL)"          # 原图在 BLOB（老记录）或文件里
+IMAGE_SIZE = "COALESCE(image_size, LENGTH(image), 0)"
 
 _INSERT_LOG = """INSERT INTO usage_log (ts, key_id, key_name, kind, model, status,
                                       images, anlas, tokens, detail, unconfirmed_anlas,
@@ -331,6 +334,8 @@ class Database:
         # 独立事务也需访问同一个内存库；主连接关闭前保留该库。
         self._connection_path = (f"file:gate-{uuid4().hex}?mode=memory&cache=shared"
                                  if path == ":memory:" else path)
+        # 审计原图目录：和数据库放在一起（内存库用于测试时放到临时目录）
+        self.image_dir = (Path(path).resolve().parent if path != ":memory:" else Path("/tmp") / f"gate-{uuid4().hex}") / "audit_images"
 
     def _open_connection(self):
         return aiosqlite.connect(self._connection_path, uri=self.path == ":memory:", timeout=15)   # 锁等待 15 秒（默认 5）
@@ -368,6 +373,9 @@ class Database:
             "ALTER TABLE generation_audit ADD COLUMN extra TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE generation_audit ADD COLUMN image BLOB",
             "ALTER TABLE generation_audit ADD COLUMN image_type TEXT NOT NULL DEFAULT ''",
+            # 10-11 起原图存成文件（data/audit_images/），库里只记相对路径和字节数；老记录的 image BLOB 仍可读
+            "ALTER TABLE generation_audit ADD COLUMN image_file TEXT",
+            "ALTER TABLE generation_audit ADD COLUMN image_size INTEGER",
             "ALTER TABLE usage_log ADD COLUMN reason TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE upstream_snapshots ADD COLUMN fresh INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE discord_registrations ADD COLUMN member_checked_at REAL NOT NULL DEFAULT 0",
@@ -885,18 +893,109 @@ class Database:
     async def add_audit(self, key_id, key_name: str, kind: str, model: str, status: str,
                         prompt: str, negative: str, thumb: Optional[bytes], extra: str = "",
                         image: Optional[bytes] = None, image_type: str = "") -> None:
-        await self._db.execute(
-            """INSERT INTO generation_audit (ts,key_id,key_name,kind,model,status,prompt,negative,extra,thumb,image,image_type)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (time.time(), key_id, key_name[:80], kind, model[:80], status, prompt, negative, extra, thumb, image, image_type))
+        # 原图写成文件，不进数据库：4 GB 的 BLOB 会把 1.7 GB 内存的机器拖慢（10-11 后台每次刷新 2～10 秒）
+        rel = None
+        if image:
+            try:
+                rel = await asyncio.to_thread(self._write_image, image, image_type)
+            except OSError as exc:              # 磁盘满 / 目录不可写：原图不存，提示词和参数照常记录
+                print(f"[audit] 原图写文件失败，只记录提示词：{exc}", flush=True)
+                image = None
+        try:
+            await self._db.execute(
+                """INSERT INTO generation_audit (ts,key_id,key_name,kind,model,status,prompt,negative,extra,thumb,
+                                                 image,image_type,image_file,image_size)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (time.time(), key_id, key_name[:80], kind, model[:80], status, prompt, negative, extra, thumb,
+                 None, image_type if image else "", rel, len(image) if image else None))
+            await self._db.commit()
+        except Exception:
+            if rel:
+                await asyncio.to_thread(self._unlink_images, [rel])
+            raise
+
+    _EXT = {"image/png": "png", "image/webp": "webp", "image/jpeg": "jpg"}
+
+    def _write_image(self, data: bytes, image_type: str) -> str:
+        sub = time.strftime("%Y%m%d")
+        folder = self.image_dir / sub
+        folder.mkdir(parents=True, exist_ok=True)
+        rel = f"{sub}/{uuid4().hex}.{self._EXT.get(image_type, 'bin')}"
+        tmp = self.image_dir / (rel + ".tmp")
+        tmp.write_bytes(data)
+        tmp.replace(self.image_dir / rel)
+        return rel
+
+    def _read_image(self, rel: str) -> Optional[bytes]:
+        f = (self.image_dir / rel).resolve()
+        if self.image_dir.resolve() not in f.parents:      # 只读本目录下的文件
+            return None
+        try:
+            return f.read_bytes()
+        except OSError:
+            return None
+
+    def _unlink_images(self, rels: list[str]) -> None:
+        root = self.image_dir.resolve()
+        for rel in rels:
+            f = (self.image_dir / rel).resolve()
+            if root in f.parents:
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+
+    async def _drop_images(self, where: str, args: tuple) -> int:
+        """把满足 where 的记录的原图清掉：文件删除、BLOB 置空。返回清掉的条数。"""
+        # 先选出要清的记录，再只按这些 id 清：中间插进来的新记录不会被清了库、漏删文件
+        rows = await self._db.execute_fetchall(
+            f"SELECT id, image_file FROM generation_audit WHERE {HAS_IMAGE} AND {where}", args)
+        ids = [r[0] for r in rows]
+        for i in range(0, len(ids), 500):
+            part = ids[i:i + 500]
+            await self._db.execute(
+                "UPDATE generation_audit SET image=NULL, image_file=NULL, image_size=NULL, image_type='' "
+                f"WHERE id IN ({','.join('?' * len(part))})", part)
         await self._db.commit()
+        files = [r[1] for r in rows if r[1]]
+        if files:
+            await asyncio.to_thread(self._unlink_images, files)
+        return len(ids)
+
+    async def sweep_orphan_images(self, older_than: float) -> int:
+        """删掉目录里没有记录指向的原图文件（崩溃留下的 .tmp、写完没入库的），只动 older_than 之前的文件。"""
+        known = {r[0] for r in await self._db.execute_fetchall(
+            "SELECT image_file FROM generation_audit WHERE image_file IS NOT NULL")}
+
+        def sweep() -> int:
+            n = 0
+            if not self.image_dir.is_dir():
+                return 0
+            for f in self.image_dir.rglob("*"):
+                if not f.is_file():
+                    continue
+                rel = f.relative_to(self.image_dir).as_posix()
+                try:
+                    if rel not in known and f.stat().st_mtime < older_than:
+                        f.unlink()
+                        n += 1
+                except OSError:
+                    pass
+            for d in sorted(self.image_dir.iterdir(), reverse=True):
+                if d.is_dir():
+                    try:
+                        d.rmdir()               # 空的日期目录顺手删掉，非空会抛错，忽略
+                    except OSError:
+                        pass
+            return n
+        return await asyncio.to_thread(sweep)
 
     async def list_audit(self, limit: int, offset: int, key_id: Optional[int] = None) -> tuple[list, int]:
         where, args = ("WHERE key_id=?", (key_id,)) if key_id is not None else ("", ())
         total = (await (await self._db.execute(f"SELECT COUNT(*) FROM generation_audit {where}", args)).fetchone())[0]
         rows = await (await self._db.execute(
             f"""SELECT id,ts,key_id,key_name,kind,model,status,prompt,negative,extra,
-                       (thumb IS NOT NULL) AS has_thumb, (image IS NOT NULL) AS has_image
+                       (thumb IS NOT NULL) AS has_thumb, (image IS NOT NULL OR image_file IS NOT NULL) AS has_image
                 FROM generation_audit {where} ORDER BY id DESC LIMIT ? OFFSET ?""",
             (*args, limit, offset))).fetchall()
         return rows, int(total)
@@ -907,17 +1006,29 @@ class Database:
 
     async def audit_image(self, audit_id: int) -> tuple[Optional[bytes], str]:
         row = await (await self._db.execute(
-            "SELECT image, image_type FROM generation_audit WHERE id=?", (audit_id,))).fetchone()
-        if row and row["image"] is not None:
-            return bytes(row["image"]), (row["image_type"] or "image/png")
-        return None, ""
+            "SELECT image, image_file, image_type FROM generation_audit WHERE id=?", (audit_id,))).fetchone()
+        if not row:
+            return None, ""
+        data = bytes(row["image"]) if row["image"] is not None else (
+            await asyncio.to_thread(self._read_image, row["image_file"]) if row["image_file"] else None)
+        return (data, row["image_type"] or "image/png") if data is not None else (None, "")
+
+    async def _with_image(self, rows) -> list[tuple]:
+        """(id, ts, image_type, prompt, negative, extra, image, image_file) → 第 7 列换成原图字节；文件丢了的跳过。"""
+        out = []
+        for r in rows:
+            data = bytes(r[6]) if r[6] is not None else await asyncio.to_thread(self._read_image, r[7])
+            if data is not None:
+                out.append((r[0], r[1], r[2], r[3], r[4], r[5], data))
+        return out
 
     async def audit_images_for(self, key_id: int, max_bytes: int = 0, since: float = 0.0):
         """导出用：某成员带原图的记录，产出 (id, ts, image_type, prompt, negative, extra, image)。
         max_bytes>0 时只取最新的、原图合计不超过这么多字节的那些（防止一次打包把内存撑爆）。"""
+        cols = "SELECT id, ts, image_type, prompt, negative, extra, image, image_file FROM generation_audit "
         if max_bytes > 0:
             sizes = await self._db.execute_fetchall(
-                "SELECT id, length(image) FROM generation_audit WHERE key_id=? AND image IS NOT NULL AND ts>=? "
+                f"SELECT id, {IMAGE_SIZE} FROM generation_audit WHERE key_id=? AND {HAS_IMAGE} AND ts>=? "
                 "ORDER BY ts DESC", (key_id, since))
             keep, total = [], 0
             for rid, size in sizes:
@@ -928,33 +1039,30 @@ class Database:
             if not keep:
                 return []
             marks = ",".join("?" * len(keep))
-            return await self._db.execute_fetchall(
-                "SELECT id, ts, image_type, prompt, negative, extra, image FROM generation_audit "
-                f"WHERE id IN ({marks}) ORDER BY ts", tuple(keep))
-        rows = await self._db.execute_fetchall(
-            "SELECT id, ts, image_type, prompt, negative, extra, image FROM generation_audit "
-            "WHERE key_id=? AND image IS NOT NULL AND ts>=? ORDER BY ts", (key_id, since))
-        return rows
+            return await self._with_image(await self._db.execute_fetchall(
+                cols + f"WHERE id IN ({marks}) ORDER BY ts", tuple(keep)))
+        return await self._with_image(await self._db.execute_fetchall(
+            cols + f"WHERE key_id=? AND {HAS_IMAGE} AND ts>=? ORDER BY ts", (key_id, since)))
 
     async def audit_image_count(self, key_id: int, since: float = 0.0) -> int:
         r = await self._db.execute_fetchall(
-            "SELECT COUNT(*) FROM generation_audit WHERE key_id=? AND image IS NOT NULL AND ts>=?", (key_id, since))
+            f"SELECT COUNT(*) FROM generation_audit WHERE key_id=? AND {HAS_IMAGE} AND ts>=?", (key_id, since))
         return int(r[0][0])
 
     async def audit_image_bytes(self) -> int:
         r = await self._db.execute_fetchall(
-            "SELECT COALESCE(SUM(LENGTH(image)), 0) FROM generation_audit WHERE image IS NOT NULL")
+            f"SELECT COALESCE(SUM({IMAGE_SIZE}), 0) FROM generation_audit WHERE {HAS_IMAGE}")
         return int(r[0][0])
 
     async def purge_audit_images_to_cap(self, cap_bytes: int, low_water: float = 0.9) -> int:
-        """原图总量超过 cap_bytes 时，从最旧的开始清（只置空 BLOB），清到 cap 的 90% 以下（留余量，避免每 5 分钟清一点）。"""
+        """原图总量超过 cap_bytes 时，从最旧的开始清，清到 cap 的 90% 以下（留余量，避免每 5 分钟清一点）。"""
         total = await self.audit_image_bytes()
         if cap_bytes <= 0 or total <= cap_bytes:
             return 0
         target = total - int(cap_bytes * low_water)
         freed, cutoff = 0, None
         cur = await self._db.execute(
-            "SELECT id, LENGTH(image) FROM generation_audit WHERE image IS NOT NULL ORDER BY id")
+            f"SELECT id, {IMAGE_SIZE} FROM generation_audit WHERE {HAS_IMAGE} ORDER BY id")
         async for row_id, size in cur:
             freed += int(size or 0)
             cutoff = row_id
@@ -966,17 +1074,11 @@ class Database:
         return await self.purge_audit_images_before_id(cutoff + 1)
 
     async def purge_audit_images_before_id(self, before_id: int) -> int:
-        cur = await self._db.execute(
-            "UPDATE generation_audit SET image=NULL, image_type='' WHERE image IS NOT NULL AND id<?", (before_id,))
-        await self._db.commit()
-        return cur.rowcount or 0
+        return await self._drop_images("id<?", (before_id,))
 
     async def purge_audit_images(self, older_than: float) -> int:
-        """只清原图 BLOB（置空），保留缩略图、提示词、参数。"""
-        cur = await self._db.execute(
-            "UPDATE generation_audit SET image=NULL, image_type='' WHERE image IS NOT NULL AND ts<?", (older_than,))
-        await self._db.commit()
-        return cur.rowcount or 0
+        """只清原图（文件 / BLOB），保留缩略图、提示词、参数。"""
+        return await self._drop_images("ts<?", (older_than,))
 
     async def touch_key_source(self, key_id: int, net_hash: str, label: str,
                                now: float, window_start: float) -> bool:
@@ -1043,6 +1145,7 @@ class Database:
         return cur.rowcount
 
     async def purge_audit(self, older_than: float) -> int:
+        await self._drop_images("ts<?", (older_than,))         # 先删原图文件，再删记录
         cur = await self._db.execute("DELETE FROM generation_audit WHERE ts<?", (older_than,))
         await self._db.commit()
         return cur.rowcount

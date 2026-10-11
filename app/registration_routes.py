@@ -556,8 +556,11 @@ async def my_export(request: Request, format: str = "zip"):
         raise HTTPException(429, "有人正在打包，请过半分钟再试")
     async with _EXPORT_LOCK:
         db = request.app.state.gate.db
+        days = await audit_image_days(db)
+        if days <= 0:
+            raise HTTPException(403, "原图下载暂未开放")
         rows = await db.audit_images_for(key["id"], max_bytes=EXPORT_MAX_BYTES,
-                                         since=_t.time() - MEMBER_DOWNLOAD_DAYS * 86400)
+                                         since=_t.time() - days * 86400)
         if not rows:
             raise HTTPException(404, "最近 2 天没有可打包的原图（打包只用来找回最近误删的图）")
         _EXPORT_AT[discord_id] = now

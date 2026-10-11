@@ -28,7 +28,7 @@ from .action_log import ADMIN_ACTIONS, log_action, summarize
 from . import features as feature_defs
 from . import token_store
 from . import ops
-from .audit import audit_image_cap_mb, audit_image_days
+from .audit import audit_image_cap_mb, audit_image_days, audit_image_keep_hours
 from .policy import gen_key
 from .body import read_json_body
 from .allowance import SETTING, read_alert_threshold
@@ -1625,7 +1625,7 @@ async def server_status(request: Request):
         "audit": {**dict(zip(("prompts", "thumbs", "retention_days"), await ops.audit_flags(st.db, cfg))),
                   "image_retention_days": await audit_image_days(st.db),
                   "image_cap_mb": await audit_image_cap_mb(st.db), "image_bytes": await st.db.audit_image_bytes(),
-                  "image_cap_mb": await audit_image_cap_mb(st.db), "image_bytes": await st.db.audit_image_bytes()},
+                  "image_keep_hours": await audit_image_keep_hours(st.db)},
         "upstream": st.upstream_health(),
         "protection": {"auth_fail_max": cfg.auth_fail_max, "auth_fail_window": cfg.auth_fail_window,
                        "auth_block_seconds": cfg.auth_block_seconds,
@@ -1675,6 +1675,8 @@ async def _ops_snapshot(request: Request) -> dict:
                      "new_key": feature_defs.parse_list(await _new_key_features(request, {}))},
         "audit": {"prompts": prompts, "thumbs": thumbs, "retention_days": days,
                   "image_retention_days": await audit_image_days(st.db),
+                  "image_cap_mb": await audit_image_cap_mb(st.db), "image_bytes": await st.db.audit_image_bytes(),
+                  "image_keep_hours": await audit_image_keep_hours(st.db),
                   "announce_configured": st.announcer.configured},
         "upstream": st.upstream_health(),
     }

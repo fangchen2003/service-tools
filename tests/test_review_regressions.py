@@ -1491,10 +1491,15 @@ async def test_audit_disclosure_and_image_cap_purge():
         db = Database(str(Path(tmp) / "g.sqlite"))
         await db.connect()
         cfg = SimpleNamespace(audit_prompts=True, audit_thumbs=True, audit_retention_days=14)
-        assert await audit_image_days(db) == MEMBER_DOWNLOAD_DAYS == 2
+        from app import site_flags
+        assert await audit_image_days(db) == 0                    # 10-11 站长：成员下载默认关
         assert await audit_image_cap_mb(db) == 8192
         text = await audit_disclosure(db, cfg)
-        assert "最近 2 天" in text and "最旧" in text and "提示词（14 天后自动删除）" in text
+        assert "24 小时后自动删除" in text and "打包下载" not in text and "提示词（14 天后自动删除）" in text
+        await site_flags.put(db, site_flags.MEMBER_DOWNLOAD, True)
+        assert await audit_image_days(db) == MEMBER_DOWNLOAD_DAYS == 2
+        text = await audit_disclosure(db, cfg)
+        assert "最近 24 小时" in text                          # 下载窗口不超过保存时长
         assert "缩略图" not in text and "测试" not in text
         assert "原图" not in await audit_disclosure(db, SimpleNamespace(audit_prompts=True, audit_thumbs=False,
                                                                        audit_retention_days=14))
@@ -1510,9 +1515,35 @@ async def test_audit_disclosure_and_image_cap_purge():
         assert await db.purge_audit_images_to_cap(1000) == 0                       # 没超上限：一张不删（不按天数）
         assert await db.purge_audit_images_to_cap(300) == 3                        # 超了：删最旧的，删到 90% 以下
         assert await db.audit_image_bytes() == 200
-        left = await db._db.execute_fetchall("SELECT ts FROM generation_audit WHERE image IS NOT NULL")
+        left = await db._db.execute_fetchall("SELECT ts FROM generation_audit WHERE image_file IS NOT NULL")
         assert min(r[0] for r in left) >= now - 1 * 86400 - 5
+        # 10-11 起原图存文件、不进数据库；删的时候文件也一起删
+        assert (await db._db.execute_fetchall("SELECT COUNT(*) FROM generation_audit WHERE image IS NOT NULL"))[0][0] == 0
+        assert len(list(db.image_dir.rglob("*.png"))) == 2
+        data, ctype = await db.audit_image(left[0][0] and (await db._db.execute_fetchall(
+            "SELECT id FROM generation_audit WHERE image_file IS NOT NULL LIMIT 1"))[0][0])
+        assert ctype == "image/png" and len(data) == 100
         assert await db.purge_audit_images_before_id(2 ** 62) == 2                 # 站长手动清空
+        assert list(db.image_dir.rglob("*.png")) == []
+        # 老记录的 BLOB 仍可读、可算大小、可清
+        await db._db.execute("INSERT INTO generation_audit (ts,key_id,image,image_type) VALUES (?,1,?,'image/png')",
+                             (now, b"x" * 50))
+        await db._db.commit()
+        assert await db.audit_image_bytes() == 50 and len(await db.audit_images_for(1)) == 1
+        assert await db.purge_audit(now + 1) == 6 and await db.audit_image_bytes() == 0
+        # 写文件失败：提示词照常记录，只是没原图
+        real = db._write_image
+        db._write_image = lambda *a: (_ for _ in ()).throw(OSError("disk full"))
+        await db.add_audit(1, "k", "image", "m", "ok", "p2", "", None, image=b"y" * 10, image_type="image/png")
+        db._write_image = real
+        row = (await db._db.execute_fetchall("SELECT prompt, image_file, image_size FROM generation_audit ORDER BY id DESC LIMIT 1"))[0]
+        assert tuple(row) == ("p2", None, None)
+        # 孤儿文件（没有记录指向）：超过时限才删
+        (db.image_dir / "20200101").mkdir(parents=True, exist_ok=True)
+        orphan = db.image_dir / "20200101" / "x.png.tmp"
+        orphan.write_bytes(b"z")
+        assert await db.sweep_orphan_images(now - 3600) == 0 and orphan.exists()
+        assert await db.sweep_orphan_images(now + 60) == 1 and not orphan.exists()
         await db.close()
 
 
