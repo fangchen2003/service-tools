@@ -49,6 +49,7 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from .action_log import log_action
+from . import quota_policies
 from .params import P
 
 V5_IMAGES_PER_PERCENT = 14.2      # 官方 17.3 张/1% 按 23 步估算；成员多用 28 步，按步数折算 17.3×23/28
@@ -72,6 +73,8 @@ DEFAULTS = {
     "quota_v5_max": 30,
 }
 STATE_KEY = "quota_algo_last"
+SHADOW_STATE_KEY = "quota_shadow_state"       # 影子模式：各算法 × 号池规模上一天的结果
+SHADOW_HISTORY_KEY = "quota_shadow_history"   # 影子模式：最近 30 天
 HISTORY_KEY = "quota_algo_history"
 DAY_KEY = "quota_algo_day"
 NOTICE_KEY = "algo_notice"
@@ -188,19 +191,7 @@ def daily_adjust(a: int, b: int, *, used: int, cap: int, hourly_blocks: int, cei
 FAIR_SHARE = 0.6        # 账号日上限里拿多少按人平分做保底；其余 40% 留给超出保底的人在空闲时段用
 
 
-def water_fill(usage: list[int], budget: float) -> int:
-    """最大最小公平（water-filling）：找最小的 b，使 Σ min(用量ᵢ, b) ≥ budget。
-    用得少的人用多少算多少，剩下的平分给用得多的人；需求不到 budget 时返回最大用量（人人都满足）。"""
-    us = sorted(u for u in usage if u > 0)
-    if not us:
-        return 0
-    left, n = float(budget), len(us)
-    for i, u in enumerate(us):
-        share = left / (n - i)
-        if u >= share:
-            return max(1, int(share))
-        left -= u
-    return us[-1]
+from .quota_policies import water_fill  # noqa: E402  影子模式和线上共用同一份实现
 
 
 async def member_usage(db, day: str) -> list[int]:
@@ -415,19 +406,19 @@ async def run(state, now: Optional[float] = None) -> dict[str, Any]:
             n, reasons = a, [f"昨天只有 {covered:.1f} 小时数据（不足 20 小时），每人额度不变"]
         else:
             usage = await member_usage(db, yday)
-            lo, hi = cfg["quota_base_min_fair"], cfg["quota_ceiling_max"]
-            if usage and sum(usage) >= budget * 0.95:
-                # 总需求已经顶满：按需求平分（可升可降）
-                n = max(lo, min(hi, water_fill(usage, budget)))
-                why = f"昨天总需求 {sum(usage)} 张已接近可分的 {budget} 张，按需求平分"
-            elif usage and max(usage) >= a:
-                # 还有余量且有人用满了 N：放宽一步（只用昨天的用量会被昨天的 N 截住，永远升不回来——Sonnet 审查 P1）
-                n = min(hi, a + cfg["quota_step"])
-                why = f"还有余量（昨天共 {sum(usage)} / {budget} 张），{sum(1 for u in usage if u >= a)} 人用满 {a} 张：放宽"
-            else:
-                n = max(lo, min(hi, a))
-                why = f"还有余量（昨天共 {sum(usage)} / {budget} 张），没人用满：不变"
-            reasons = [f"每人每天 {n} 张。{why}（可分 = 账号日上限 {cap} − 全站 V5 {v5_global}）"]
+            new, why = quota_policies.simple({"a": a}, usage=usage, budget=budget, cfg=cfg)     # 线上 = 影子里的 LIVE
+            n = new["a"]
+            reasons = [f"{why}（可分 = 账号日上限 {cap} − 全站 V5 {v5_global}）"]
+            # 影子模式：历代算法 × 1/2/3 个账号各算一份，只记录不生效（以后加号池时对比 / 回测用）
+            try:
+                shadow_state = json.loads(await db.get_setting(SHADOW_STATE_KEY, "{}") or "{}")
+                shadow = quota_policies.run_all(shadow_state, day=yday, usage=usage, stats=stats,
+                                                cap_per_account=cap // accounts, v5_global=v5_global, cfg=cfg)
+                shadow_hist = json.loads(await db.get_setting(SHADOW_HISTORY_KEY, "[]") or "[]")[-29:] + [shadow]
+                await db.set_settings_bulk({SHADOW_STATE_KEY: json.dumps(shadow["results"], ensure_ascii=False),
+                                            SHADOW_HISTORY_KEY: json.dumps(shadow_hist, ensure_ascii=False)})
+            except Exception as exc:          # 影子模式出错绝不能影响线上分配
+                print(f"[warn] quota shadow failed: {type(exc).__name__}: {exc}", flush=True)
         a2 = b2 = n
         stats["coverage_hours"] = round(covered, 1)
         review = {"day": yday, **stats, "cap": cap, "from": [a, b], "to": [a2, b2], "reasons": reasons}

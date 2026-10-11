@@ -40,7 +40,8 @@ import numpy as np
 from . import stats
 from .data import CAPACITY, MODELED, Dataset, clean_mask, retry_model, segments
 
-REASONS = ("daily_account", "hourly", "cap3h", "key_queue", "site_queue", "member_daily", "base", "timeout", "other")
+REASONS = ("daily_account", "hourly", "cap3h", "key_queue", "site_queue", "member_daily", "base", "timeout", "other",
+           "paced")       # paced 放最后：已有原因码的编号不变
 R_OK, R_ERR = 0, 1
 CODE = {name: i + 2 for i, name in enumerate(REASONS)}
 NAME = {v: k for k, v in CODE.items()}
@@ -193,6 +194,7 @@ def replay(inp: dict[str, np.ndarray], params: Optional[dict] = None, *, seed: i
     hcap_quiet = int(p["quiet_hourly_cap"]) * acc
     q_start, q_end = int(p["quiet_start"]), int(p["quiet_end"])
     cap3 = int(p["account_3h_cap"]) * acc
+    burst = int(p.get("daily_burst", 0) or 0) * acc        # 按时段放行（guard.paced_allowance，v2.17.0 起）
     jit = float(p["interval_jitter"])
     kq = int(p["key_image_queue"])
     per = int(p["queue_per_account"]) * acc
@@ -254,6 +256,10 @@ def replay(inp: dict[str, np.ndarray], params: Optional[dict] = None, *, seed: i
     def cap_block(t: float) -> int:
         if daily_cap and acct_day.get(day(t), 0) >= daily_cap:
             return CODE["daily_account"]
+        if daily_cap and burst:
+            frac = ((t + off) % 86400) / 86400
+            if acct_day.get(day(t), 0) >= min(daily_cap, burst + daily_cap * frac):
+                return CODE["paced"]
         hc = hour_cap(t)
         if hc and cnt(t, 3600) >= hc:
             return CODE["hourly"]
@@ -265,7 +271,7 @@ def replay(inp: dict[str, np.ndarray], params: Optional[dict] = None, *, seed: i
         outcome[i] = code
         state[i] = DONE
         end[i] = t
-        if code in (CODE["hourly"], CODE["daily_account"]):
+        if code in (CODE["hourly"], CODE["daily_account"], CODE["paced"]):
             block_hours.add(int((t + off) // 3600))
         if r_p and code in MODELED_CODES and att[i] < MAX_ATTEMPTS:
             pk = r_p[min(att[i], len(r_p)) - 1]

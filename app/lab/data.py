@@ -38,16 +38,17 @@ REASON_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
     ("cap3h", ("最近 3 小时出图量已达上限",)),
     ("hourly", ("本小时出图量已达上限", "安静时段")),
     ("daily_account", ("出图总量已达上限",)),
+    ("paced", ("按时段放行",)),
     ("key_queue", ("上一张图还没出完",)),
     ("site_queue", ("排队的人太多",)),
     ("base", ("保底",)),
     ("member_daily", ("免费图额度已用完",)),
     ("timeout", ("排队超时", "排队人数过多")),
 ]
-MODELED = ("daily_account", "hourly", "cap3h", "key_queue", "site_queue", "member_daily", "base", "timeout")
-CAPACITY = ("daily_account", "hourly", "cap3h", "site_queue", "base", "timeout")     # 「容量」拒绝（不含个人上限与个人排队）
+MODELED = ("daily_account", "hourly", "cap3h", "key_queue", "site_queue", "member_daily", "base", "timeout", "paced")
+CAPACITY = ("daily_account", "hourly", "cap3h", "site_queue", "base", "timeout", "paced")     # 「容量」拒绝（不含个人上限与个人排队）
 REASON_LABELS = {
-    "daily_account": "账号日上限", "hourly": "每小时上限", "cap3h": "3 小时上限", "key_queue": "每 Key 排队",
+    "paced": "按时段放行", "daily_account": "账号日上限", "hourly": "每小时上限", "cap3h": "3 小时上限", "key_queue": "每 Key 排队",
     "site_queue": "全站排队", "member_daily": "每人日上限", "base": "保底（不空闲）", "timeout": "排队超时",
     "other": "其他（未建模）", "upstream_error": "上游错误",
 }
