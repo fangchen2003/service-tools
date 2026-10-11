@@ -1101,6 +1101,17 @@ class Database:
                 sorted(([k, v] for k, v in items.items()), key=lambda x: -x[1])[:3]
         return out
 
+    async def latest_member_clients(self) -> dict[int, str]:
+        """每把 Key 最近一次请求自报的客户端（User-Agent 摘要）。"""
+        cur = await self._db.execute(
+            """SELECT u.key_id, u.client FROM usage_log u
+               JOIN (SELECT key_id, MAX(id) AS max_id FROM usage_log
+                     WHERE key_id IS NOT NULL AND client != ''
+                     GROUP BY key_id) m
+               ON u.id = m.max_id"""
+        )
+        return {int(row[0]): str(row[1]) for row in await cur.fetchall()}
+
     async def image_perf_rows(self, since: float) -> list[tuple]:
         """出图请求的 (ts, model, status, images, wait_ms, dur_ms, up_status, detail)，供上游表现分析。"""
         cur = await self._db.execute(
