@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from . import site_flags
 
+import re
 import time
 from collections import deque
 from typing import Any, Optional
@@ -31,6 +32,11 @@ def recent(now: Optional[float] = None) -> dict[str, int]:
 def mask(name: str) -> str:
     name = (name or "").strip()
     return (name[:2] + "**") if name else "**"
+
+
+def _wait_minutes(reason) -> int:
+    m = re.search(r"约 (\d+) 分钟", str(reason))
+    return int(m.group(1)) if m else 10 ** 6
 
 
 async def build(state, registrar, now: Optional[float] = None) -> dict[str, Any]:
@@ -103,6 +109,17 @@ async def build(state, registrar, now: Optional[float] = None) -> dict[str, Any]
             borrow_open = await guard.paced_headroom(state.db, token_ids, day, now) > reserve
         except Exception:
             borrow_open = False
+    # 全站现在能不能出图：所有可用账号都被站点级规则拦下时，首页要说清原因（和成员拿到的 429 同一句话）
+    blocked = None
+    if guard is not None and token_ids:
+        try:
+            why = [await guard.token_block_reason(state.db, tid, day, now) for tid in token_ids]
+            if all(why):
+                first = min(why, key=lambda r: _wait_minutes(r))
+                blocked = {"code": getattr(first, "code", ""), "text": str(first)}
+        except Exception:
+            blocked = None
+    body["guard"]["blocked"] = blocked
     body["rules"] = {
         "base": gv.get("base_daily_images", 0), "key_queue": gv.get("key_image_queue", 0),
         "queue_cap": (gv.get("queue_per_account") or 0) * usable,
