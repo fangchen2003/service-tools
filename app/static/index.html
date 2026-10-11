@@ -2755,6 +2755,7 @@ function formatClient(ua){
   ua = String(ua || '').trim();
   if(!ua) return '';
   if(/SillyTavern/i.test(ua)) return 'SillyTavern';
+  if(/undici/i.test(ua)) return 'SillyTavern (酒馆/智绘姬)';
   if(/axios/i.test(ua)) return 'axios (聊天前端/脚本)';
   if(/NAI-Launcher/i.test(ua)) return 'NAI-Launcher';
   if(/python-requests|urllib|python/i.test(ua)) return 'Python 脚本';

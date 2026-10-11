@@ -2128,7 +2128,7 @@ app.get("/ai/user/information")(user_information)
 
 # ================================================================ 路由注册 ====
 
-for path in ("/ai/generate-image", "/nai/ai/generate-image"):
+for path in ("/ai/generate-image", "/nai/ai/generate-image", "/"):
     app.post(path)(limit_inflight(generate_image))
 for path in ("/ai/encode-vibe", "/nai/ai/encode-vibe"):
     app.post(path)(limit_inflight(encode_vibe))
