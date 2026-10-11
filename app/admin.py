@@ -356,6 +356,7 @@ def _key_json(row, counter, generated_images_total: int = 0) -> dict[str, Any]:
         "image_model_scope": row["image_model_scope"],
         "is_admin": bool(row["is_admin"]),
         "is_test": bool(row["is_test"]) if "is_test" in row.keys() else False,
+        "quota_auto": row["quota_auto"] == 1 if "quota_auto" in row.keys() else False,
         "features": feature_defs.key_features(row),
         "expires_at": row["expires_at"],
         "created_at": row["created_at"],
@@ -540,6 +541,17 @@ async def patch_key(request: Request, key_id: int):
     if not await st.db.get_key(key_id):
         raise HTTPException(404, "key 不存在")
     body = await read_json_body(request)
+    quota = body.get("quota")
+    if quota not in (None, "auto", "manual"):
+        raise HTTPException(422, "quota 只能是 auto（算法）或 manual（手动）")
+    if quota is not None:
+        # 2026-10-11 站长：额度只有两种——「算法」全部交给算法；「手动」填多少就是多少，不和算法混用
+        for k in ("anlas_mode", "v5_pinned", "quota_mode"):
+            body.pop(k, None)
+        if quota == "auto":
+            for k in ("daily_images", "daily_v5", "daily_anlas", "monthly_anlas", "allow_anlas",
+                      "exclude_global_v5", "image_model_scope", "features"):
+                body.pop(k, None)
     fields: dict[str, Any] = {}
     if "name" in body:
         fields["name"] = str(body["name"] or "").strip()[:60] or "未命名"
@@ -592,14 +604,24 @@ async def patch_key(request: Request, key_id: int):
         d = _num(body["expires_days"], int, 0, 3650, "expires_days")
         fields["expires_at"] = (time.time() + d * 86400) if d > 0 else None
     before = await st.db.get_key(key_id)
-    if "daily_v5" in fields and "v5_pinned" not in fields and fields["daily_v5"] != before["daily_v5"]:
+    if quota == "auto":
+        fields.update(exclude_global_v5=False, features=None)
+    if quota is not None:
+        fields["v5_pinned"] = None                  # 手动就是填的值，不再有「基础值 + 不低于普通成员」的中间状态
+    if quota is None and "daily_v5" in fields and "v5_pinned" not in fields and fields["daily_v5"] != before["daily_v5"]:
         fields["v5_pinned"] = fields["daily_v5"] or None      # 编辑窗口里手填的 V5 张数也作为手动基础值
     await st.db.update_key(key_id, fields)
-    quota_mode = body.get("quota_mode")
+    quota_mode = body.get("quota_mode") or ("auto" if quota == "auto" else None)
+    if quota == "manual":
+        await st.db._db.execute("UPDATE api_keys SET quota_auto=-1, anlas_auto=-1 WHERE id=?", (key_id,))
+        await st.db._db.commit()
+        mode = None
     # 只有额度 / 模型的值真的变了才转为手动（2026-10-10：提交了一个没变的「模型 = 全部」就被冻结在 18 张）
     quota_changed = any(k in fields and fields[k] != before[k] for k in ("daily_images", "daily_v5", "image_model_scope")) \
         or ("v5_pinned" in fields and fields["v5_pinned"] != before["v5_pinned"])
-    if quota_mode == "auto" or quota_changed:
+    if quota == "manual":
+        pass
+    elif quota_mode == "auto" or quota_changed:
         # 手动改了额度或模型 → 这把 Key 由站长管理（-1），动态额度算法不再覆盖；选「交给算法」恢复为 1 并立即重算
         await st.db._db.execute("UPDATE api_keys SET quota_auto=?, v5_pinned=CASE WHEN ?=1 THEN NULL ELSE v5_pinned END "
                                 "WHERE id=?", (1 if quota_mode == "auto" else -1, 1 if quota_mode == "auto" else 0, key_id))
@@ -610,7 +632,11 @@ async def patch_key(request: Request, key_id: int):
                 await quota_algo.run(st)
             except Exception as exc:
                 st.bugs.capture("quota_algo", exc) if getattr(st, "bugs", None) else None
-    if mode == "auto" or "allow_anlas" in fields or "daily_anlas" in fields:
+    if quota == "auto":
+        mode = "auto"
+    if quota == "manual":
+        pass
+    elif mode == "auto" or "allow_anlas" in fields or "daily_anlas" in fields:
         # 手动设置后由站长管理（-1），自动分配不会再覆盖；选「交给算法」则回到 0，下次重算时按条件分配
         await st.db._db.execute("UPDATE api_keys SET anlas_auto=? WHERE id=?", (0 if mode == "auto" else -1, key_id))
         await st.db._db.commit()
@@ -1349,6 +1375,7 @@ async def members(request: Request):
     since = time.time() - 24 * 3600
     milestones = await st.db.member_milestones(since)
     sources = await st.db.key_source_summary(since)
+    clients = await st.db.latest_member_clients()
     out = []
     from .share_guard import decayed
     share_map = {}
@@ -1403,6 +1430,7 @@ async def members(request: Request):
             "reset_today": reset_map.get(row["id"]),
             "tags": manual_tags.get(row["id"], []),
             "auto_tags": auto_tags.get(row["id"], []),
+            "last_client": clients.get(row["id"], ""),
         })
     return {"members": out, "share_alert_nets": st.settings.key_share_alert_nets,
             "inactivity_days": st.settings.key_inactivity_delete_days}

@@ -1051,33 +1051,42 @@ td.note{min-width:220px}
     <div class="dialog-head"><h3 id="modalTitle">新建 Key</h3><button class="btn ghost icon" data-act="close-modal" aria-label="关闭"><span data-ic="x"></span></button></div>
     <div class="dialog-body">
       <div class="field"><label for="f_name">名称 / 备注</label><input id="f_name" placeholder="例如：张三" maxlength="60"></div>
+      <div class="sec-title">额度</div>
+      <div class="opt-group" role="radiogroup" aria-label="额度来源">
+        <label class="check"><input type="radio" name="f_quota" value="auto"><span>算法（V4.5、V5、Anlas、功能全部由算法每天自动分配，和其他成员一样）</span></label>
+        <label class="check"><input type="radio" name="f_quota" value="manual" checked><span>手动（下面填多少就是多少，算法不再改）</span></label>
+      </div>
+      <div id="f_manual">
       <div class="field"><label for="f_image_model_scope">图片模型范围</label>
         <select id="f_image_model_scope">
           <option value="legacy">仅 V4.5 及更低（默认）</option>
           <option value="all">所有当前支持模型（含 V5）</option>
         </select></div>
-      <div class="sec-title">额度</div>
       <div class="form-grid">
         <div class="field"><label for="f_daily_images">每日 V4.5 及以下免费图张数</label><input id="f_daily_images" type="number" min="0" step="1" required value="100"><div class="hint">0 = 不限</div></div>
         <div class="field"><label for="f_daily_v5">每日 V5 张数（走官方周额度）</label><input id="f_daily_v5" type="number" min="0" step="1" required value="0"><div class="hint">0 = 不限</div></div>
         <div class="field"><label for="f_daily_anlas">每日 Anlas 上限</label><input id="f_daily_anlas" type="number" min="0" step="1" required value="100"><div class="hint">0 = 不限</div></div>
         <div class="field"><label for="f_monthly_anlas">每月 Anlas 上限</label><input id="f_monthly_anlas" type="number" min="0" step="1" required value="2500"><div class="hint">0 = 不限</div></div>
         <div class="field"><label for="f_daily_text">每日文本 tokens</label><input id="f_daily_text" type="number" min="0" step="1" required value="150000"><div class="hint">0 = 禁止使用文本</div></div>
-        <div class="field"><label for="f_rpm">每分钟请求数（RPM）</label><input id="f_rpm" type="number" min="1" step="1" required value="10"><div class="hint">1～600</div></div>
-        <div class="field"><label for="f_expires">有效天数</label><input id="f_expires" type="number" min="0" step="1" required value="30"><div class="hint">0 = 永久</div></div>
       </div>
-      <div class="sec-title">权限</div>
+      <div class="sec-title">Anlas 与 V5</div>
       <label class="check"><input id="f_allow_anlas" type="checkbox"><span title="旧模型和 V5 的付费规格均受 日Anlas / 月Anlas / 全站预算 约束；不开启时仅允许免费档或 V5 额度规格">允许消耗 Anlas</span></label>
-      <label class="check"><input id="f_allow_img2img" type="checkbox"><span title="需同时允许消耗 Anlas">允许 img2img / 局部重绘</span></label>
-      <label class="check"><input id="f_exclude_global_v5" type="checkbox"><span title="此 Key 的 V5 使用不计入、也不受全站 V5 日额度限制">独立 V5 额度</span></label>
-      <label class="check"><input id="f_is_test" type="checkbox"><span title="不计入成员统计、上游表现和首页稳定性，不会被闲置回收">测试 Key</span></label>
-      <label class="check"><input id="f_notify" type="checkbox" checked><span title="停用 / 恢复、额度、模型、Anlas、有效期的变化；仅限 Discord 领取的成员">保存后私信通知成员</span></label>
+      <label class="check"><input id="f_exclude_global_v5" type="checkbox"><span title="此 Key 的 V5 使用不计入、也不受全站 V5 日额度限制">不占全站 V5 额度</span></label>
       <div class="sec-title">功能权限</div>
       <div class="opt-group">
         <label class="check"><input type="radio" name="f_feat_mode" value="legacy"><span>全部已开放功能（含以后新开放的）</span></label>
         <label class="check"><input type="radio" name="f_feat_mode" value="custom" checked><span>仅选中的功能</span></label>
       </div>
       <div class="feat-checks off" id="f_feat_list"></div>
+      </div>
+      <div class="sec-title">其他</div>
+      <div class="form-grid">
+        <div class="field"><label for="f_rpm">每分钟请求数（RPM）</label><input id="f_rpm" type="number" min="1" step="1" required value="10"><div class="hint">1～600</div></div>
+        <div class="field"><label for="f_expires">有效天数</label><input id="f_expires" type="number" min="0" step="1" required value="30"><div class="hint">0 = 永久</div></div>
+      </div>
+      <label class="check"><input id="f_allow_img2img" type="checkbox"><span title="还需服务器开启 ALLOW_IMG2IMG；会扣 Anlas 的请求还要允许消耗 Anlas">允许 img2img / 局部重绘</span></label>
+      <label class="check"><input id="f_is_test" type="checkbox"><span title="不计入成员统计、上游表现和首页稳定性，不会被闲置回收">测试 Key</span></label>
+      <label class="check"><input id="f_notify" type="checkbox"><span title="停用 / 恢复、额度、模型、Anlas、有效期的变化；仅限 Discord 领取的成员">保存后私信通知成员</span></label>
       <div class="err" id="modalErr"></div>
     </div>
     <div class="dialog-foot">
@@ -1985,43 +1994,28 @@ const isManual = m => !m.is_admin && !m.is_test && !m.discord && !m.discord_id;
 /* 标签：手动（站长 / 运维打的，带备注）+ 自动（近 24 小时因成员自己能改的原因被拒）；都只在后台显示 */
 const tagNames = m => [...(m.tags||[]).map(t => t.tag), ...(m.auto_tags||[]).map(t => t.tag)];
 function ago(sec){ return sec < H ? Math.max(1, Math.round(sec/60)) + ' 分钟' : sec < D ? Math.round(sec/H) + ' 小时' : Math.round(sec/D) + ' 天'; }
-/* 快捷权限：额度方式、Anlas 方式。改动立即生效，并由机器人私信成员 */
-const ANLAS_PRESETS = [30, 90, 150];
-const V5_PIN_PRESETS = [18, 30, 50, 80];      // 手动 V5 基础值（28 步计）
+/* 快捷切换额度来源：算法 / 手动（手动打开编辑窗口填具体数字）。不私信（Discord 应用申诉期） */
 function permControls(m){
-  const scope = m.image_model_scope === 'all' ? 'all' : 'legacy';
-  const mode = m.anlas_mode || 'auto', daily = Math.round(m.daily_anlas || 0);
-  const manual = ANLAS_PRESETS.includes(daily) ? ANLAS_PRESETS : [...ANLAS_PRESETS, daily].filter(Boolean).sort((a,b)=>a-b);
-  const autoLabel = m.anlas_auto ? `算法 · 今日 ${daily}` : '交给算法';
-  const qa = m.quota_auto !== false, pin = Number(m.v5_pinned) || 0;
-  // 手动 V5 选的是「基础值」：实际 = max(基础值, 普通成员的值)，括号里是现在实际生效的张数
-  const pins = [...new Set([...V5_PIN_PRESETS, pin].filter(Boolean))].sort((a,b)=>a-b);
-  const legacyManualAll = !qa && scope==='all' && !pin;     // 老数据：手动但没定基础值
-  return `<select class="psel" data-perm="scope" data-id="${m.id}" aria-label="额度" title="额度：改动立即生效并私信通知。手动 V5 不会低于普通成员">
-      <option value="auto"${qa?' selected':''}>额度：算法 · ${m.daily_images}${m.daily_v5?' + V5 '+m.daily_v5:''}</option>
-      <option value="legacy"${!qa&&scope==='legacy'?' selected':''}>额度：手动 · 仅 V4.5</option>
-      ${legacyManualAll?`<option value="all" selected>额度：手动 · V5 ${m.daily_v5}/天（未定基础值）</option>`:''}
-      ${pins.map(n=>`<option value="pin:${n}"${!qa&&scope==='all'&&pin===n?' selected':''}>额度：手动 · V5 ${n}/天${!qa&&pin===n&&m.daily_v5!==n?`（现 ${m.daily_v5}）`:''}</option>`).join('')}</select>
-    <select class="psel" data-perm="anlas" data-id="${m.id}" aria-label="Anlas 权限" title="Anlas：改动立即生效并私信通知">
-      <option value="off"${mode==='off'?' selected':''}>Anlas 关闭</option>
-      <option value="auto"${mode==='auto'?' selected':''}>Anlas：${esc(autoLabel)}</option>
-      ${manual.map(n=>`<option value="manual:${n}"${mode==='manual'&&daily===n?' selected':''}>Anlas：手动 ${n}/天</option>`).join('')}
-    </select>`;
+  const qa = m.quota_auto !== false;
+  const anl = !m.allow_anlas ? '' : ` · Anlas ${Math.round(m.daily_anlas || 0)}`;
+  const now = `V4.5 ${m.daily_images}${m.daily_v5 ? ' · V5 ' + m.daily_v5 : ''}${anl}`;
+  return `<select class="psel" data-perm="quota" data-id="${m.id}" aria-label="额度来源" title="算法：和其他成员一样每天自动分配；手动：在编辑窗口里填具体数字">
+      <option value="auto"${qa?' selected':''}>额度：算法${qa ? ' · ' + esc(now) : ''}</option>
+      <option value="manual"${!qa?' selected':''}>额度：手动${!qa ? ' · ' + esc(now) : '（打开编辑）'}</option></select>`;
 }
 document.addEventListener('change', async e => {
   const sel = e.target.closest('select[data-perm]'); if(!sel) return;
   const m = findMember(+sel.dataset.id); if(!m) return;
-  const v = sel.value, body = {};
-  if(sel.dataset.perm === 'scope'){
-    if(v === 'auto') body.quota_mode = 'auto';
-    else if(v.startsWith('pin:')) body.v5_pinned = +v.slice(4);
-    else body.image_model_scope = v; }
-  else if(v.startsWith('manual:')){ body.anlas_mode = 'manual'; body.daily_anlas = +v.slice(7); }
-  else body.anlas_mode = v;
+  if(sel.value === 'manual'){
+    if(m.quota_auto === false) return;
+    sel.value = 'auto';
+    if(!keysCache.length){ try{ keysCache = (await api('/admin/api/keys')).keys; }catch(_){} }
+    openEdit(m.id); setQuotaMode('manual'); return;
+  }
   sel.disabled = true;
   try{
-    await api('/admin/api/keys/' + m.id, {method:'PATCH', body:JSON.stringify(body)});
-    toast(`已更新「${memberLabel(m)}」`, 'ok');
+    await api('/admin/api/keys/' + m.id, {method:'PATCH', body:JSON.stringify({quota:'auto', notify:false})});
+    toast(`「${memberLabel(m)}」已交给算法`, 'ok');
     membersCache = null; await loadMembers();
   }catch(err){ toastErr(err); sel.disabled = false; }
 });
@@ -2035,7 +2029,7 @@ async function loadShare(id){
   try{
     const d = await api(`/admin/api/keys/${id}/share`);
     const ev = d.evidence.map(e => `<tr><td class="t" data-label="时间">${esc(fullTime(e.ts))}</td><td data-label="类型"><span class="mf ${e.kind==='action'?'bad':'warn'}">${esc(e.label)}</span></td><td class="num" data-label="分值">${e.points?'+'+e.points:''}</td><td class="muted" data-label="说明">${esc(e.detail)}</td></tr>`).join('');
-    const tr = d.trail.map(r => `<tr><td class="t" data-label="时间">${esc(fullTime(r.ts))}</td><td class="mono" data-label="网络">${esc(r.src||'—')}</td><td class="muted" data-label="客户端" title="${esc(r.client)}">${esc((r.client||'').slice(0,40))}</td><td data-label="请求">${esc(r.kind)} · ${esc(r.status)}</td></tr>`).join('');
+    const tr = d.trail.map(r => `<tr><td class="t" data-label="时间">${esc(fullTime(r.ts))}</td><td class="mono" data-label="网络">${esc(r.src||'—')}</td><td class="muted" data-label="客户端" title="${esc(r.client)}">${esc(formatClient(r.client) || '—')}</td><td data-label="请求">${esc(r.kind)} · ${esc(r.status)}</td></tr>`).join('');
     box.innerHTML = `<h5>证据与处罚</h5>${ev ? `<div class="table-wrap"><table class="rt"><tbody>${ev}</tbody></table></div>` : '<div class="muted sm">没有证据</div>'}
       <h5>最近请求的来源</h5>${tr ? `<div class="table-wrap"><table class="rt"><thead><tr><th class="t">时间</th><th>网络</th><th>客户端</th><th>请求</th></tr></thead><tbody>${tr}</tbody></table></div>` : '<div class="muted sm">没有记录</div>'}`;
   }catch(e){ box.innerHTML = '<div class="muted sm">读取失败</div>'; }
@@ -2164,8 +2158,8 @@ function memberPanel(m, now){
       ${k.allow_anlas ? meter('Anlas', Math.round(u.anlas||0), Math.round(k.daily_anlas||0), 'an') : ''}
       ${u.text_tokens ? meter('文本 tokens', u.text_tokens, k.daily_text_tokens) : ''}</div>
       <p class="muted sm" style="margin:8px 0 0">近 7 天 ${m.week.images} 张 · 累计 ${m.total_images} 张</p></div>`;
-  const mode = m.is_admin ? '' : (m.quota_auto ? '算法自动' : '手动');
-  const anl = !k.allow_anlas ? '关闭' : m.anlas_auto ? `算法分配 · 今日 ${Math.round(k.daily_anlas||0)}` : `手动 · ${inf(Math.round(k.daily_anlas||0))}/天`;
+  const mode = m.is_admin ? '' : (m.quota_auto ? '算法' : '手动');
+  const anl = !k.allow_anlas ? (m.quota_auto ? '今天没分配' : '关闭') : `${inf(Math.round(k.daily_anlas||0))}/天`;
   const settings = `<div><h4>额度与权限${mode ? ` <span class="h4-note">${mode}</span>` : ''}</h4>
       <dl class="kv">${m.is_admin ? '' : `<dt>每天</dt><dd>V4.5 ${inf(k.daily_images)}${k.image_model_scope==='all' ? ` · V5 ${inf(k.daily_v5)}` : ' · 不能用 V5'}</dd>`}
         <dt>Anlas</dt><dd>${esc(anl)}</dd>
@@ -2173,7 +2167,7 @@ function memberPanel(m, now){
         <dt>到期</dt><dd>${esc(exp)}</dd>
         ${k.allow_img2img || k.exclude_global_v5 ? `<dt>其他</dt><dd>${[k.allow_img2img ? '可以图生图' : '', k.exclude_global_v5 ? 'V5 不占全站额度' : ''].filter(Boolean).join(' · ')}</dd>` : ''}</dl>
       <details class="mx-adj"><summary class="btn mini">${ic('edit')}调整</summary><div class="mx-adj-in">
-        ${m.is_admin ? '' : `<div class="mx-perm">${permControls(m)}</div><p class="muted sm" style="margin:0">改了立即生效，奶妹会私信通知本人。</p>`}
+        ${m.is_admin ? '' : `<div class="mx-perm">${permControls(m)}</div><p class="muted sm" style="margin:0">选「算法」立即生效；选「手动」会打开编辑窗口。</p>`}
         <button class="btn mini" type="button" data-act="edit-key" data-id="${k.id}">全部设置…</button></div></details></div>`;
   const tags = userTags(m);
   const info = `<div><h4>资料</h4><dl class="kv">
@@ -2181,6 +2175,7 @@ function memberPanel(m, now){
       ${dcId ? `<dt>Discord</dt><dd>${dc && dc.username ? '@' + esc(dc.username) : esc(dcId)} ${prof ? `<a class="btn mini ghost" href="${esc(prof)}" target="_blank" rel="noopener noreferrer">打开</a>` : ''}<button class="btn mini ghost" type="button" data-act="copy-dc" data-dcid="${esc(dcId)}">复制 ID</button></dd>` : ''}
       <dt>${m.discord_id ? '领取' : '创建'}</dt><dd title="${esc(fullTime(m.registered_at))}">${m.registered_at ? esc(rel(m.registered_at)) : '—'}</dd>
       <dt>最近使用</dt><dd title="${esc(fullTime(k.last_used_at))}">${k.last_used_at ? esc(rel(k.last_used_at)) : '从未使用'}</dd>
+      ${m.last_client ? `<dt>常用设备</dt><dd title="${esc(m.last_client)}">${esc(formatClient(m.last_client))}</dd>` : ''}
       <dt>标签</dt><dd><div class="tag-row">${tags.map(t => `<span class="mf tag" title="${esc((t.note ? t.note + ' · ' : '') + (t.by||'') + ' · ' + fullTime(t.ts))}">${esc(t.tag)}<button type="button" data-act="tag-del" data-id="${k.id}" data-tag="${esc(t.tag)}" aria-label="移除标签 ${esc(t.tag)}">×</button></span>`).join('')}
         <details class="tag-new"><summary class="btn mini ghost">${ic('plus')}标签</summary><div class="tag-add"><input id="tagIn${k.id}" maxlength="12" placeholder="站长熟人" aria-label="标签名"><input id="tagNote${k.id}" maxlength="200" placeholder="备注，只有后台能看到" aria-label="标签备注"><button class="btn mini" type="button" data-act="tag-add" data-id="${k.id}">添加</button></div></details></div></dd></dl></div>`;
   const more = `<details class="menu mx-more"><summary class="btn mini danger-text">更多 ${ic('chev')}</summary><div class="menu-pop">
@@ -2552,12 +2547,19 @@ async function openCreate(){
   $('#f_allow_anlas').checked=false; $('#f_allow_img2img').checked=false;
   $('#f_exclude_global_v5').checked=false;
   $('#f_is_test').checked=false;
-  $('#f_notify').checked=true;
+  $('#f_notify').checked=false;                  // Discord 应用申诉期：默认不私信
+  setQuotaMode('manual');
   // 默认只开通“新成员默认功能”（通常只有文生图），而不是全部功能。
   const newKeyFeat = opsData && opsData.features ? opsData.features.new_key : undefined;
   setFeatForm(newKeyFeat === undefined ? ['image'] : newKeyFeat);
   $('#modalErr').textContent=''; openOverlay('#modal');
 }
+/* 额度来源只有两种：算法（全部交给算法，不显示输入框）/ 手动（填多少就是多少） */
+function setQuotaMode(v){
+  document.querySelector(`input[name="f_quota"][value="${v}"]`).checked = true;
+  $('#f_manual').hidden = v === 'auto';
+}
+document.addEventListener('change', e => { if(e.target.name === 'f_quota') setQuotaMode(e.target.value); });
 function setFeatForm(list){
   document.querySelector(`input[name="f_feat_mode"][value="${list==null?'legacy':'custom'}"]`).checked = true;
   $('#f_feat_list').innerHTML = featChecks(list,'k');
@@ -2582,7 +2584,9 @@ function openEdit(id){
   $('#f_allow_img2img').checked = k.allow_img2img;
   $('#f_exclude_global_v5').checked = k.exclude_global_v5;
   $('#f_is_test').checked = !!k.is_test;
+  $('#f_notify').checked = false;
   setFeatForm(k.features == null ? null : k.features);
+  setQuotaMode(k.quota_auto ? 'auto' : 'manual');
   $('#modalErr').textContent=''; openOverlay('#modal');
 }
 function closeModal(){ closeOverlay('#modal'); }
@@ -2609,26 +2613,23 @@ async function saveKey(){
     };
     if(!editingId || $('#f_expires').value.trim() !== '') body.expires_days = readNum('f_expires', '有效天数', {max:3650});
   }catch(e){ showModalErr(e.message); return; }
+  const quota = document.querySelector('input[name="f_quota"]:checked').value;
+  body.quota = quota;
+  if(quota === 'auto'){
+    // 算法：额度、Anlas、模型、功能都不发，后端统一交给算法
+    ['image_model_scope','daily_anlas','daily_images','daily_v5','monthly_anlas','allow_anlas','exclude_global_v5'].forEach(k => delete body[k]);
+  }else{
+    body.features = readFeatMode('f_feat_mode','#f_feat_list');
+  }
   savingKey = true; $('#modalSave').disabled = true;
   try{
     if(editingId){
-      const cur = keysCache.find(x=>x.id===editingId), nf = readFeatMode('f_feat_mode','#f_feat_list');
-      if(!cur || !sameFeat(nf, cur.features)) body.features = nf;
-      // 只发改动过的字段：后端只要收到额度字段就会把这把 Key 转为「手动额度」、退出动态额度算法，
-      // 只改名字 / RPM 时不能顺带把成员踢出算法管理
-      if(cur){
-        const same = k => { const a = body[k], b = cur[k];
-          if(typeof a === 'boolean') return a === !!b;
-          if(typeof a === 'number') return Number(b) === a;
-          return String(b ?? '') === String(a ?? ''); };
-        ['name','image_model_scope','daily_anlas','daily_images','daily_v5','monthly_anlas','daily_text_tokens',
-         'rpm','allow_anlas','allow_img2img','exclude_global_v5','is_test'].forEach(k => { if(k in body && same(k)) delete body[k]; });
-      }
       await api('/admin/api/keys/'+editingId, {method:'PATCH', body: JSON.stringify(body)});
       toast('已保存', 'ok');
     }else{
-      body.features = readFeatMode('f_feat_mode','#f_feat_list');
-      const d = await api('/admin/api/keys', {method:'POST', body: JSON.stringify(body)});
+      const create = {...body}; delete create.quota;
+      const d = await api('/admin/api/keys', {method:'POST', body: JSON.stringify(create)});
+      if(quota === 'auto') await api('/admin/api/keys/'+d.key.id, {method:'PATCH', body: JSON.stringify({quota:'auto', notify:false})});
       closeModal(); refreshAfterMemberChange();
       showKey('新 Key 已创建', '请立即复制新 Key（发给用户）：', d.key.token);
       return;
@@ -2682,6 +2683,42 @@ function shortModel(m){
   if(!base) return m.length > 18 ? m.slice(0, 16) + '…' : m;
   return base + (/curated/.test(m) ? ' Curated' : '') + (/inpainting/.test(m) ? ' 重绘' : '');
 }
+/* 客户端摘要：从 User-Agent 识别操作系统与软件（例如「Windows · Edge」「SillyTavern」「Android · App 内置」） */
+function formatClient(ua){
+  ua = String(ua || '').trim();
+  if(!ua) return '';
+  if(/SillyTavern/i.test(ua)) return 'SillyTavern';
+  if(/axios/i.test(ua)) return 'axios (聊天前端/脚本)';
+  if(/NAI-Launcher/i.test(ua)) return 'NAI-Launcher';
+  if(/python-requests|urllib|python/i.test(ua)) return 'Python 脚本';
+  if(/curl/i.test(ua)) return 'curl';
+  if(/Postman/i.test(ua)) return 'Postman';
+  if(/ComfyUI/i.test(ua)) return 'ComfyUI';
+
+  let os = '';
+  if(/Windows/i.test(ua)) os = 'Windows';
+  else if(/Android/i.test(ua)) os = 'Android';
+  else if(/iPhone|iPad|iOS/i.test(ua)) os = 'iOS';
+  else if(/Macintosh|Mac OS X/i.test(ua)) os = 'Mac';
+  else if(/Linux/i.test(ua)) os = 'Linux';
+
+  let app = '';
+  if(/Edg[A-Z]?\//i.test(ua)) app = 'Edge';
+  else if(/MicroMessenger/i.test(ua)) app = '微信内置';
+  else if(/HeyTapBrowser/i.test(ua)) app = 'OPPO 浏览器';
+  else if(/Quark/i.test(ua)) app = '夸克';
+  else if(/MiuiBrowser/i.test(ua)) app = '小米浏览器';
+  else if(/Chrome\//i.test(ua)){
+    if(/; wv\)|Version\/[0-9]/i.test(ua)) app = 'App 内置';
+    else app = 'Chrome';
+  } else if(/Firefox\//i.test(ua)) app = 'Firefox';
+  else if(/Safari\//i.test(ua)) app = 'Safari';
+
+  if(os && app) return `${os} · ${app}`;
+  if(app) return app;
+  if(os) return os;
+  return ua.length > 28 ? ua.slice(0, 26) + '…' : ua;
+}
 /* 手机上筛选收进「筛选」折叠，桌面上始终展开 */
 const logMq = matchMedia('(max-width:720px)');
 function syncLogFilters(){ const d = $('#logFilters'); if(d) d.open = !logMq.matches; }
@@ -2701,7 +2738,7 @@ async function loadLogs(){
       const timing = l.wait_ms || l.dur_ms ? fmtTiming(l) : '';
       return `<tr>
         <td class="t" data-label="时间" title="${esc(fullTime(l.ts))}">${esc(shortTime(l.ts))}</td>
-        <td data-label="Key"><div class="stack"><span>${esc(l.key_name)}</span>${l.client?`<span class="muted" style="font-size:11.5px" title="客户端自报的 User-Agent，仅供参考">${esc(l.client)}</span>`:''}</div></td>
+        <td data-label="Key"><div class="stack"><span>${esc(l.key_name)}</span>${l.client?`<span class="muted" style="font-size:11.5px" title="${esc(l.client)}">${esc(formatClient(l.client))}</span>`:''}</div></td>
         <td class="nw" data-label="类型">${esc((FEAT[l.kind]||[l.kind])[0])}</td>
         <td class="nw" data-label="模型" title="${esc(l.model)}">${esc(shortModel(l.model))}</td>
         <td class="st" data-label="状态">${l.status==='ok'?'<span class="tag on">成功</span>':l.status==='rejected'?'<span class="tag warn">拒绝</span>':'<span class="tag off">错误</span>'}</td>
