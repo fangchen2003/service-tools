@@ -2035,7 +2035,7 @@ async function loadShare(id){
   try{
     const d = await api(`/admin/api/keys/${id}/share`);
     const ev = d.evidence.map(e => `<tr><td class="t" data-label="时间">${esc(fullTime(e.ts))}</td><td data-label="类型"><span class="mf ${e.kind==='action'?'bad':'warn'}">${esc(e.label)}</span></td><td class="num" data-label="分值">${e.points?'+'+e.points:''}</td><td class="muted" data-label="说明">${esc(e.detail)}</td></tr>`).join('');
-    const tr = d.trail.map(r => `<tr><td class="t" data-label="时间">${esc(fullTime(r.ts))}</td><td class="mono" data-label="网络">${esc(r.src||'—')}</td><td class="muted" data-label="客户端" title="${esc(r.client)}">${esc((r.client||'').slice(0,40))}</td><td data-label="请求">${esc(r.kind)} · ${esc(r.status)}</td></tr>`).join('');
+    const tr = d.trail.map(r => `<tr><td class="t" data-label="时间">${esc(fullTime(r.ts))}</td><td class="mono" data-label="网络">${esc(r.src||'—')}</td><td class="muted" data-label="客户端" title="${esc(r.client)}">${esc(formatClient(r.client) || '—')}</td><td data-label="请求">${esc(r.kind)} · ${esc(r.status)}</td></tr>`).join('');
     box.innerHTML = `<h5>证据与处罚</h5>${ev ? `<div class="table-wrap"><table class="rt"><tbody>${ev}</tbody></table></div>` : '<div class="muted sm">没有证据</div>'}
       <h5>最近请求的来源</h5>${tr ? `<div class="table-wrap"><table class="rt"><thead><tr><th class="t">时间</th><th>网络</th><th>客户端</th><th>请求</th></tr></thead><tbody>${tr}</tbody></table></div>` : '<div class="muted sm">没有记录</div>'}`;
   }catch(e){ box.innerHTML = '<div class="muted sm">读取失败</div>'; }
@@ -2181,6 +2181,7 @@ function memberPanel(m, now){
       ${dcId ? `<dt>Discord</dt><dd>${dc && dc.username ? '@' + esc(dc.username) : esc(dcId)} ${prof ? `<a class="btn mini ghost" href="${esc(prof)}" target="_blank" rel="noopener noreferrer">打开</a>` : ''}<button class="btn mini ghost" type="button" data-act="copy-dc" data-dcid="${esc(dcId)}">复制 ID</button></dd>` : ''}
       <dt>${m.discord_id ? '领取' : '创建'}</dt><dd title="${esc(fullTime(m.registered_at))}">${m.registered_at ? esc(rel(m.registered_at)) : '—'}</dd>
       <dt>最近使用</dt><dd title="${esc(fullTime(k.last_used_at))}">${k.last_used_at ? esc(rel(k.last_used_at)) : '从未使用'}</dd>
+      ${m.last_client ? `<dt>常用设备</dt><dd title="${esc(m.last_client)}">${esc(formatClient(m.last_client))}</dd>` : ''}
       <dt>标签</dt><dd><div class="tag-row">${tags.map(t => `<span class="mf tag" title="${esc((t.note ? t.note + ' · ' : '') + (t.by||'') + ' · ' + fullTime(t.ts))}">${esc(t.tag)}<button type="button" data-act="tag-del" data-id="${k.id}" data-tag="${esc(t.tag)}" aria-label="移除标签 ${esc(t.tag)}">×</button></span>`).join('')}
         <details class="tag-new"><summary class="btn mini ghost">${ic('plus')}标签</summary><div class="tag-add"><input id="tagIn${k.id}" maxlength="12" placeholder="站长熟人" aria-label="标签名"><input id="tagNote${k.id}" maxlength="200" placeholder="备注，只有后台能看到" aria-label="标签备注"><button class="btn mini" type="button" data-act="tag-add" data-id="${k.id}">添加</button></div></details></div></dd></dl></div>`;
   const more = `<details class="menu mx-more"><summary class="btn mini danger-text">更多 ${ic('chev')}</summary><div class="menu-pop">
@@ -2682,6 +2683,42 @@ function shortModel(m){
   if(!base) return m.length > 18 ? m.slice(0, 16) + '…' : m;
   return base + (/curated/.test(m) ? ' Curated' : '') + (/inpainting/.test(m) ? ' 重绘' : '');
 }
+/* 客户端摘要：从 User-Agent 识别操作系统与软件（例如「Windows · Edge」「SillyTavern」「Android · App 内置」） */
+function formatClient(ua){
+  ua = String(ua || '').trim();
+  if(!ua) return '';
+  if(/SillyTavern/i.test(ua)) return 'SillyTavern';
+  if(/axios/i.test(ua)) return 'axios (聊天前端/脚本)';
+  if(/NAI-Launcher/i.test(ua)) return 'NAI-Launcher';
+  if(/python-requests|urllib|python/i.test(ua)) return 'Python 脚本';
+  if(/curl/i.test(ua)) return 'curl';
+  if(/Postman/i.test(ua)) return 'Postman';
+  if(/ComfyUI/i.test(ua)) return 'ComfyUI';
+
+  let os = '';
+  if(/Windows/i.test(ua)) os = 'Windows';
+  else if(/Android/i.test(ua)) os = 'Android';
+  else if(/iPhone|iPad|iOS/i.test(ua)) os = 'iOS';
+  else if(/Macintosh|Mac OS X/i.test(ua)) os = 'Mac';
+  else if(/Linux/i.test(ua)) os = 'Linux';
+
+  let app = '';
+  if(/Edg[A-Z]?\//i.test(ua)) app = 'Edge';
+  else if(/MicroMessenger/i.test(ua)) app = '微信内置';
+  else if(/HeyTapBrowser/i.test(ua)) app = 'OPPO 浏览器';
+  else if(/Quark/i.test(ua)) app = '夸克';
+  else if(/MiuiBrowser/i.test(ua)) app = '小米浏览器';
+  else if(/Chrome\//i.test(ua)){
+    if(/; wv\)|Version\/[0-9]/i.test(ua)) app = 'App 内置';
+    else app = 'Chrome';
+  } else if(/Firefox\//i.test(ua)) app = 'Firefox';
+  else if(/Safari\//i.test(ua)) app = 'Safari';
+
+  if(os && app) return `${os} · ${app}`;
+  if(app) return app;
+  if(os) return os;
+  return ua.length > 28 ? ua.slice(0, 26) + '…' : ua;
+}
 /* 手机上筛选收进「筛选」折叠，桌面上始终展开 */
 const logMq = matchMedia('(max-width:720px)');
 function syncLogFilters(){ const d = $('#logFilters'); if(d) d.open = !logMq.matches; }
@@ -2701,7 +2738,7 @@ async function loadLogs(){
       const timing = l.wait_ms || l.dur_ms ? fmtTiming(l) : '';
       return `<tr>
         <td class="t" data-label="时间" title="${esc(fullTime(l.ts))}">${esc(shortTime(l.ts))}</td>
-        <td data-label="Key"><div class="stack"><span>${esc(l.key_name)}</span>${l.client?`<span class="muted" style="font-size:11.5px" title="客户端自报的 User-Agent，仅供参考">${esc(l.client)}</span>`:''}</div></td>
+        <td data-label="Key"><div class="stack"><span>${esc(l.key_name)}</span>${l.client?`<span class="muted" style="font-size:11.5px" title="${esc(l.client)}">${esc(formatClient(l.client))}</span>`:''}</div></td>
         <td class="nw" data-label="类型">${esc((FEAT[l.kind]||[l.kind])[0])}</td>
         <td class="nw" data-label="模型" title="${esc(l.model)}">${esc(shortModel(l.model))}</td>
         <td class="st" data-label="状态">${l.status==='ok'?'<span class="tag on">成功</span>':l.status==='rejected'?'<span class="tag warn">拒绝</span>':'<span class="tag off">错误</span>'}</td>

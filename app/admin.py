@@ -1349,6 +1349,7 @@ async def members(request: Request):
     since = time.time() - 24 * 3600
     milestones = await st.db.member_milestones(since)
     sources = await st.db.key_source_summary(since)
+    clients = await st.db.latest_member_clients()
     out = []
     from .share_guard import decayed
     share_map = {}
@@ -1403,6 +1404,7 @@ async def members(request: Request):
             "reset_today": reset_map.get(row["id"]),
             "tags": manual_tags.get(row["id"], []),
             "auto_tags": auto_tags.get(row["id"], []),
+            "last_client": clients.get(row["id"], ""),
         })
     return {"members": out, "share_alert_nets": st.settings.key_share_alert_nets,
             "inactivity_days": st.settings.key_inactivity_delete_days}
