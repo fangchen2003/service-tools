@@ -146,7 +146,6 @@ section{margin-top:40px}
 .pill.info{color:var(--accent-text);background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 25%,transparent)}
 .pill.bad{color:var(--bad);background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 25%,transparent)}
 @keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 50%,transparent)}70%,100%{box-shadow:0 0 0 7px transparent}}
-.cta-note{color:var(--muted);font-size:13.5px;align-self:center}
 .skel{display:inline-block;height:32px;width:120px;border-radius:999px;background:linear-gradient(90deg,var(--surface-3),var(--surface-2),var(--surface-3));background-size:200% 100%;animation:sh 1.4s infinite linear}
 @keyframes sh{to{background-position:-200% 0}}
 
@@ -381,9 +380,9 @@ body.authed #board{margin-top:22px}
     <ol class="steps">
       <li class="card step"><h3><span class="n">1</span>加入 Discord</h3>
         <div class="step-act" id="discordSlot"></div></li>
-      <li class="card step"><h3><span class="n">2</span>领取你的 Key</h3><p>在 <code>🔑｜领取key</code> 输入 <code>/register</code>，机器人（奶妹）会回复一条<b>只有你能看到</b>的消息，Key 就在里面（不会私信）。</p></li>
-      <li class="card step"><h3><span class="n">3</span>填入客户端</h3><p>把下面的接口地址（不要加 /v1）和你的 Key 填进客户端：</p>
-        <div class="copyline"><span class="mono" id="siteTxt1">—</span><button class="btn mini" type="button" data-copy="site"><span data-ic="copy"></span>复制</button></div>
+      <li class="card step"><h3><span class="n">2</span>领取你的 Key</h3><p>在 <code>🔑｜领取key</code> 输入 <code>/register</code></p></li>
+      <li class="card step"><h3><span class="n">3</span>填入客户端</h3>
+        <div class="copyline"><span class="mono" id="siteTxt1">—</span><button class="btn mini icon" type="button" data-copy="site" aria-label="复制" title="复制"><span data-ic="copy"></span></button></div>
       </li>
     </ol>
     <div class="card guide">
@@ -400,7 +399,7 @@ body.authed #board{margin-top:22px}
       <details class="more">
         <summary><span data-ic="code"></span>文本客户端（OpenAI 兼容）</summary>
         <p>只给聊天、写作类客户端用；生图客户端请填步骤 3 里不带 /v1 的地址。</p>
-        <div class="copyline"><span class="mono" id="siteTxt2">—</span><button class="btn mini" type="button" data-copy="v1"><span data-ic="copy"></span>复制</button></div>
+        <div class="copyline"><span class="mono" id="siteTxt2">—</span><button class="btn mini icon" type="button" data-copy="v1" aria-label="复制" title="复制"><span data-ic="copy"></span></button></div>
       </details>
     </div>
   </section>
@@ -506,8 +505,6 @@ function renderDiscord(inv){
     var a = el('a', 'btn primary'); a.href = inv; a.target = '_blank'; a.rel = 'noopener noreferrer';
     a.appendChild(ic('discord')); a.appendChild(document.createTextNode('加入 Discord 领取 Key'));
     slot.appendChild(a);
-  } else {
-    slot.appendChild(el('span', 'cta-note', '请联系站长获取 Discord 邀请'));
   }
 }
 var annLoaded = false;
