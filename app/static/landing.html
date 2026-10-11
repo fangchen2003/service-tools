@@ -158,10 +158,9 @@ section{margin-top:40px}
 
 /* 实时架构图 */
 #live .card{padding:16px 18px}
-.live-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.live-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:nowrap;margin-bottom:12px}
 #live{margin-top:24px}
 #live .pills{justify-content:flex-end}
-@media (max-width:560px){#live .pills{justify-content:flex-start;width:100%}}
 .live-head .t{font-weight:600;font-size:17px;display:flex;align-items:center;gap:8px}
 .dash{margin-top:14px;display:flex;flex-direction:column;gap:12px}
 .dstrip{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12.5px;color:var(--muted)}
@@ -254,7 +253,6 @@ footer{max-width:960px;margin:0 auto;padding:24px 16px 40px;text-align:center;co
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
 }
-#loginPaused{flex:1 1 100%;margin:0}
 .loginrow{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:4px 0 14px}
 .keylogin{display:flex;gap:8px;flex:1 1 320px;min-width:0;max-width:520px}
 .keylogin input[type=password]{flex:1;min-width:0;padding-right:12px}
@@ -268,7 +266,6 @@ footer{max-width:960px;margin:0 auto;padding:24px 16px 40px;text-align:center;co
 .me .link:hover{color:var(--text)}
 .me-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
 .me-grid:last-child{margin-bottom:0}
-.econ-note{display:flex;align-items:flex-start;gap:8px;margin:0 0 12px;padding:10px 12px;border-radius:var(--radius-sm);background:var(--warn-soft);color:var(--text);font-size:13.5px;line-height:1.55}
 .me-grid>div{background:var(--surface);border-radius:var(--radius-sm);padding:8px 10px}
 .me-grid span{display:block;font-size:11.5px;color:var(--text-2)}
 .me-grid b{font-size:17px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
@@ -345,15 +342,13 @@ body.authed #board{margin-top:22px}
           <div class="head-key" id="headKey" hidden></div></div>
         <div class="pills" id="pills" aria-live="polite" aria-busy="true"><span class="skel"></span><span class="skel"></span></div></div>
       <p class="algo-note" id="algoNote" hidden></p>
-      <p class="econ-note" id="econNote" hidden><span data-ic="info"></span>节约模式已开启：人多时全站统一用 14 步出图，更快更省；V5 Full 自动换成官方 Medium 档（画质接近正常，自定义负面词暂不生效）。空闲后自动恢复，开关都会在公告频道通知。</p>
       <div class="me" id="meCard" hidden></div>
       <div class="loginrow" id="loginRow" hidden>
         <a class="btn primary dc" id="loginBtn" href="/login" hidden><span data-ic="discord"></span>用 Discord 登录</a>
         <form class="keylogin" id="keyLogin" autocomplete="off">
           <input type="password" id="keyLoginIn" placeholder="粘贴你的 Key（nai-…）" aria-label="你的 Key" spellcheck="false">
-          <button class="btn primary" type="submit" id="keyLoginBtn"><span data-ic="key"></span>用 Key 登录</button>
+          <button class="btn primary" type="submit" id="keyLoginBtn">登录</button>
         </form>
-        <p class="muted sm" id="loginPaused" hidden>用 <code>/register</code> 领到的 Key 登录，就能看自己的额度、打包下载作品。还没有 Key？在 Discord 里输入 <code>/register</code>。</p>
       </div>
     </div>
   </section>
@@ -548,8 +543,6 @@ function renderStatus(d){
   $('audit').hidden = !an; $('auditTxt').textContent = an;
   var paused = d.web_login !== true;          // 只有服务端明确说开放才显示登录按钮
   if($('loginBtn')) $('loginBtn').hidden = paused;
-  if($('loginPaused')) $('loginPaused').hidden = !paused;
-  if($('econNote')) $('econNote').hidden = !d.economy;
   try{ document.dispatchEvent(new CustomEvent('owl-status', {detail: d})); }catch(_){}
 }
 function statusFailed(){
