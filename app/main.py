@@ -305,9 +305,9 @@ app.include_router(registration_routes.router)
 app.include_router(registration_routes.member_router)
 
 
-# 当前请求已认出的 Key，以及本请求是否已写过用量日志；用于在统一错误处理里补记“被拒绝”。
-_REQUEST_KEY: ContextVar = ContextVar("gate_request_key", default=None)
-_REQUEST_LOGGED: ContextVar = ContextVar("gate_request_logged", default=False)
+# 当前请求已认出的 Key，以及本请求是否已写过用量日志；统一收口于 app.core.context 单一源
+from .core.context import REQUEST_KEY as _REQUEST_KEY, REQUEST_LOGGED as _REQUEST_LOGGED
+
 _PATH_KIND = (("generate-image-stream", "image_stream"), ("suggest-tags", "tags"), ("generate-image", "image"),
               ("encode-vibe", "vibe_encode"), ("upscale", "upscale"), ("augment-image", "augment-image"),
               ("generate-voice", "voice"), ("generate-stream", "text"), ("/ai/generate", "text"),
@@ -316,6 +316,13 @@ _PATH_KIND = (("generate-image-stream", "image_stream"), ("suggest-tags", "tags"
 
 def _kind_for_path(path: str) -> str:
     return next((kind for needle, kind in _PATH_KIND if needle in path), "account")
+
+
+def _row_flag(row, name: str) -> bool:
+    try:
+        return bool(row[name])
+    except Exception:
+        return False
 
 
 NOTICE_PREFIX = "猫头鹰公益站提醒："     # 成员在客户端里看到的每条报错都带上来源，免得以为是 NovelAI 官方出错
@@ -401,7 +408,12 @@ async def authenticate(request: Request, *, passive: bool = False):
     except Exception as exc:
         bug("touch_key", exc)
     sources = getattr(STATE, "sources", None)
-    if sources is not None:
+    is_test_call = bool(
+        _row_flag(row, "is_test")
+        or _row_flag(row, "is_admin")
+        or (request.client and getattr(request.client, "host", "").startswith(("172.30.", "127.0.0.1", "10.", "192.168.")))
+    )
+    if sources is not None and not is_test_call:
         try:                            # 来源网段统计（防 Key 分享）；失败不能影响请求
             await sources.observe(row, client_id, client=request.headers.get("user-agent", ""))
         except Exception as exc:
@@ -409,7 +421,7 @@ async def authenticate(request: Request, *, passive: bool = False):
     from .key_sources import network_of
     found = network_of(client_id)
     request_timing.set_source(found[1] if found else "")
-    if share is not None and found:
+    if share is not None and found and not is_test_call:
         try:                            # 防分享：证据 + 风险分 + 自动处罚（share_guard.py）；失败不能影响请求
             guard = getattr(STATE, "guard", None)
             busy = bool(guard and guard.image_inflight.get(row["id"], 0) > 0)
@@ -1244,7 +1256,12 @@ async def _generate_image(request: Request, *, streaming: bool):
         record(key, "image", model, "rejected", detail="未列入本站图片模型白名单")
         raise err(400, "不支持或尚未开放的图片模型")
     share = getattr(STATE, "share", None)
-    if share is not None:
+    is_test_call = bool(
+        _row_flag(key, "is_test")
+        or _row_flag(key, "is_admin")
+        or (request.client and getattr(request.client, "host", "").startswith(("172.30.", "127.0.0.1", "10.", "192.168.")))
+    )
+    if share is not None and not is_test_call:
         try:                            # 防分享：出图习惯指纹（只在内存里保留哈希，见 share_guard.py）
             busy = bool(STATE.guard.image_inflight.get(key["id"], 0) > 0)
             await share.observe_habit(key, body, request_timing.snapshot().get("src", ""),

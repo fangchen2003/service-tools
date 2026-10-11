@@ -77,3 +77,30 @@ async def test_admin_members_returns_last_client(tmp_path):
             assert members[0].get("last_client") == "SillyTavern/1.0"
     finally:
         await db.close()
+
+
+def test_request_timing_identifies_aalice_launcher_and_luker():
+    from app import request_timing
+    # Test Aaalice Launcher with x-correlation-id
+    scope_aalice = {
+        "headers": [
+            (b"user-agent", b"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/156.0.0.0 Safari/537.36"),
+            (b"x-correlation-id", b"aB3dK9"),
+            (b"x-initiated-at", b"2026-10-12T00:00:00.000Z"),
+        ]
+    }
+    token = request_timing.begin(scope_aalice)
+    snap = request_timing.snapshot()
+    assert snap["client"].startswith("Aaalice_NAI_Launcher")
+    request_timing.end(token)
+
+    # Test Luker client
+    scope_luker = {
+        "headers": [
+            (b"user-agent", b"Luker/1.2.0 (Android; Mobile)"),
+        ]
+    }
+    token = request_timing.begin(scope_luker)
+    snap = request_timing.snapshot()
+    assert snap["client"].startswith("Luker")
+    request_timing.end(token)

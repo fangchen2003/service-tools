@@ -95,9 +95,10 @@ async def test_standard_key_can_encode_vibe_under_daily_cap(env):
     assert resp.content == b"fake-vibe-binary-encoding"
 
     # 消耗了 2 Anlas
-    c = await env.db.get_counter(env.key["id"], "2026-10-11")
+    day = env.state.day()
+    c = await env.db.get_counter(env.key["id"], day)
     assert c["anlas"] == 2.0
-    assert await env.db.day_anlas_total("2026-10-11") == 2.0
+    assert await env.db.day_anlas_total(day) == 2.0
 
 
 @pytest.mark.asyncio

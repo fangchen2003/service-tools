@@ -809,7 +809,7 @@ td.note{min-width:220px}
             <div class="panel-head"><div><h2>状态码分布</h2><div class="desc" id="scSum">成员接口（出图、查额度等）返回的 HTTP 状态码</div></div>
               <div class="sc-tools">
                 <div class="seg" role="group" aria-label="看哪一段"><button class="on" data-scv="gw" title="网关返回给成员客户端的">网关→成员</button><button data-scv="up" title="NovelAI 实际返回给网关的">NovelAI→网关</button></div>
-                <div class="seg" role="group" aria-label="时间范围"><button data-sc="1">1 小时</button><button class="on" data-sc="24">24 小时</button><button data-sc="168">7 天</button></div></div></div>
+                <div class="seg" role="group" aria-label="时间范围"><button class="on" data-sc="today">今日</button><button data-sc="1">1 小时</button><button data-sc="24">24 小时</button><button data-sc="168">7 天</button></div></div></div>
             <div class="sc-list" id="scList"><div class="skel" style="height:160px"></div></div>
           </div>
           <div class="card panel"><div class="panel-head"><div><h2 id="chartLabel">今日生成图片</h2>
@@ -885,7 +885,7 @@ td.note{min-width:220px}
         <section id="tab-members" hidden>
           <div class="page-head">
             <div class="tools">
-              <button class="btn" data-act="new-invite"><span data-ic="plus"></span>新建邀请 Key</button><button class="btn primary" data-act="new-key"><span data-ic="plus"></span>新建 Key</button></div></div>
+              <button class="btn" data-act="new-invite"><span data-ic="plus"></span>新建邀请 Key</button><button class="btn primary" data-act="new-key"><span data-ic="plus"></span>新建 Key</button><button class="btn danger outline" data-act="reset-all-keys" title="使全站所有非管理员成员的 Key 失效并解除绑定，用于全站杀头重置"><span data-ic="refresh"></span>全站重置 Key</button></div></div>
           <div class="mtools">
             <div class="search"><span data-ic="search"></span><input id="memberSearch" type="search" placeholder="搜索名称、Discord ID、标签或备注" aria-label="搜索成员"></div>
             <div class="chips-filter" id="memberFilter" role="group" aria-label="筛选成员"></div>
@@ -1739,18 +1739,18 @@ async function renderOverviewTop(d){
 }
 
 /* 状态码分布（/admin/api/status-codes） */
-let scHours = 24, scView = 'gw';
+let scHours = 'today', scView = 'gw';
 const scCache = {};
 let scSeq = 0;
 async function loadStatusCodes(fresh = true){
-  document.querySelectorAll('[data-sc]').forEach(b => b.classList.toggle('on', +b.dataset.sc === scHours));
+  document.querySelectorAll('[data-sc]').forEach(b => b.classList.toggle('on', String(b.dataset.sc) === String(scHours)));
   document.querySelectorAll('[data-scv]').forEach(b => b.classList.toggle('on', b.dataset.scv === scView));
   const hours = scHours, seq = ++scSeq;
   if(scCache[hours]) renderStatusCodes(scCache[hours]);
   if(!fresh && scCache[hours]){ $('#scList').classList.remove('busy'); return; }
   $('#scList').classList.add('busy');
   try{
-    const d = await api('/admin/api/status-codes?hours=' + hours);
+    const d = await api('/admin/api/status-codes?hours=' + encodeURIComponent(hours));
     scCache[hours] = d;
     if(seq === scSeq) renderStatusCodes(d);       /* 连点时只画最后一次 */
   }catch(e){ if(seq === scSeq && !scCache[hours]) $('#scList').innerHTML = '<div class="muted sm">读取失败</div>'; }
@@ -1771,7 +1771,7 @@ function renderStatusCodes(d){
       : '<div class="muted sm">还没有数据</div>';
   }
 }
-document.addEventListener('click', e => { const b = e.target.closest('[data-sc]'); if(b){ scHours = +b.dataset.sc; loadStatusCodes(); } });
+document.addEventListener('click', e => { const b = e.target.closest('[data-sc]'); if(b){ scHours = b.dataset.sc; loadStatusCodes(); } });
 document.addEventListener('click', e => { const b = e.target.closest('[data-scv]'); if(b){ scView = b.dataset.scv; loadStatusCodes(false); } });
 
 async function loadStatus(){
@@ -2080,15 +2080,18 @@ function memberIssues(m, now){
   else if(shareHot(m))
     out.push({lv:'bad', t:`疑似分享 Key · 风险 ${Math.round(m.share.score)}`, d:`违规 ${m.share.strikes} 次${scA}。先看来源，确认是一个人换网络就点误判`, a: btn('share-view','查看证据') + btn('share-clear','误判，清除')});
   else if(k && !m.is_admin && (k.sources_24h||[]).length >= nets){
-    // 只看网段数误伤多（手机流量、代理切换）：≥ 阈值 + 2 才进「需要处理」，否则只在详情里提一句
-    const many = k.sources_24h.length >= nets + 2;
-    out.push({lv: many ? 'warn' : 'info', t:`24 小时内从 ${k.sources_24h.length} 个网段使用`, d:'手机加电脑通常是 2 个；更多可能是分享，也可能只是开了代理或用手机流量' + scA, a: btn('share-view','查看来源') + (many ? okBtn : ''), need: many});
+    // 只看网段数误伤多（手机流量、代理切换）：详情里展示信息，不进「需要处理」（由 shareHot 风险分判定）
+    out.push({lv: 'info', t:`24 小时内从 ${k.sources_24h.length} 个网段使用`, d:'手机加电脑通常是 2 个；更多可能是开启了代理或手机流量切换' + scA, a: btn('share-view','查看来源'), need: false});
   }
   if(m.expires_at && m.expires_at < now) out.push({lv:'bad', t:'Key 已过期', d:'成员现在用不了', a: btn('edit-key','改到期时间')});
   else if(m.expires_at && m.expires_at - now < 3*D) out.push({lv:'warn', t:`${Math.max(1, Math.ceil((m.expires_at-now)/D))} 天后到期`, d:shortTime(m.expires_at), a: btn('edit-key','改到期时间') + okBtn, need:true});
-  // 自动标签是成员客户端设置的问题（开着 Vibe、传了底图……），本人改设置就好；被拒很多次（像死循环）或疑似同一人才要站长看
-  (m.auto_tags||[]).forEach(t => { const loud = !!t.note || t.count >= 20;
-    out.push({lv: loud ? 'warn' : 'info', t: t.tag, d: t.note || `近 24 小时因此被拒 ${t.count} 次。是客户端设置的问题，本人改了就好${loud ? '；次数多，可能是客户端在自动重试' : ''}`, a: loud ? okBtn : '', need: loud}); });
+  // 自动标签：算法标记「只观察」或单纯客户端短时连点「请求过快」不升级为要处理
+  (m.auto_tags||[]).forEach(t => { 
+    const isObserve = t.tag === '疑似同一人' || (t.note && t.note.includes('只观察'));
+    const isRateLimit = t.tag === '请求过快';
+    const loud = !isObserve && !isRateLimit && (!!t.note || t.count >= 50);
+    out.push({lv: loud ? 'warn' : 'info', t: t.tag, d: t.note || `近 24 小时因此被拒 ${t.count} 次。是客户端设置的问题，本人改了就好${loud ? '；次数多，可能是客户端在自动重试' : ''}`, a: loud ? okBtn : '', need: loud}); 
+  });
   userTags(m).filter(t => /疑似|待查|观察/.test(t.tag)).forEach(t => out.push({lv:'warn', t:'站长标记：' + t.tag, d: (t.note || '') + (t.ts ? ` · ${rel(t.ts)}` : ''), a: `<button class="btn mini" type="button" data-act="tag-del" data-id="${id}" data-tag="${esc(t.tag)}">查完了，移除标记</button>`, need:true}));
   if(m.reset_today && m.reset_today.count >= 2) out.push({lv:'warn', t:`今天被手动重置额度 ${m.reset_today.count} 次`, d:'操作日志里能看到是谁重置的', a: okBtn, need:true});
   // 点过「没问题」的 24 小时内，这些可确认的提醒不再出现（防分享等 bad 级别要单独处理，不受影响）
@@ -2754,6 +2757,10 @@ function shortModel(m){
 function formatClient(ua){
   ua = String(ua || '').trim();
   if(!ua) return '';
+  if(/Aaalice|Aaalice_NAI_Launcher/i.test(ua)) return 'Aaalice NAI 启动器';
+  if(/Luker/i.test(ua)) return 'Luker 酒馆客户端';
+  if(/TauriTavern|Tauri/i.test(ua)) return 'TauriTavern';
+  if(/NAI-Workbench|workbench/i.test(ua)) return 'NAI 工作台 (官方)';
   if(/SillyTavern/i.test(ua)) return 'SillyTavern';
   if(/undici/i.test(ua)) return 'SillyTavern (酒馆/智绘姬)';
   if(/axios/i.test(ua)) return 'axios (聊天前端/脚本)';
@@ -3195,6 +3202,15 @@ document.addEventListener('click', ev=>{
         showKey(`${d.key.name} 已创建`, '下面是发给对方的完整消息，复制后直接私信对方。', d.key.token, inviteMessage(d.key.token));
       }).catch(toastErr);
       break;
+    case 'reset-all-keys': {
+      const ans = prompt('⚠️【高危操作警告】\n将失效全站所有非管理员成员的 Key，并清空 Discord 绑定！\n执行后成员需在 Discord 输入 /register 重新领 Key。\n\n如确认执行，请输入：确认重置');
+      if(!ans) break;
+      if(ans.trim() !== '确认重置') { toast('输入不匹配，已取消全站重置', 'err'); break; }
+      api('/admin/api/ops/reset-all-keys', {method:'POST', body: JSON.stringify({confirm: '确认重置'})})
+        .then(d => { toast(d.message || '全站已成功重置！', 'ok'); loadMembers(); })
+        .catch(toastErr);
+      break;
+    }
     case 'mx-toggle': toggleMemberPanel(id); break;
     case 'edit-key': openEdit(id); break;
     case 'close-modal': closeModal(); break;

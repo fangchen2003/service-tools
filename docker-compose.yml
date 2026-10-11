@@ -11,9 +11,8 @@ services:
     environment:
       - DATA_DIR=/app/data
       - TZ=Asia/Shanghai
-      # 端口只绑定在本机(127.0.0.1)，只有本机的反向代理能连上，可信任其 X-Forwarded-For，
-      # 这样登录/无效 Key 限流按真实访客 IP 计，而不是把所有人算成同一个。
-      - FORWARDED_ALLOW_IPS=*
+      # 仅信任本机和 Docker 网桥反向代理的 X-Forwarded-For，防止外部任意伪造 IP 击穿防爆破与风控
+      - FORWARDED_ALLOW_IPS=127.0.0.1,172.30.0.1
     volumes:
       - ./data:/app/data
     # Caddy 直连这个固定 IP（不经 127.0.0.1:3003 的 docker-proxy）：旧容器收尾 / 新容器未起时连接直接被拒，

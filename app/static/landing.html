@@ -271,11 +271,13 @@ footer{max-width:960px;margin:0 auto;padding:24px 16px 40px;text-align:center;co
 .lh-left{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-width:0}
 .head-key{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}
 .head-key code{font-family:var(--mono);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 9px;font-size:13px;white-space:nowrap}
-.invite-bind{margin-top:12px;padding:10px 12px;border:1px solid var(--accent);border-radius:10px;display:flex;gap:8px;align-items:flex-start;font-size:13.5px}
-.share-check{margin-top:12px;padding:12px;border:1px solid var(--warn);border-radius:10px;display:grid;gap:6px}
+.share-check{margin-top:12px;padding:14px;border:1px solid var(--warn);border-radius:10px;display:grid;gap:8px}
 .share-check b{display:flex;align-items:center;gap:6px;font-size:14px}
-.share-check-btns{display:grid;gap:6px}
-.share-check-btns .btn{justify-content:flex-start;text-align:left;white-space:normal;height:auto;padding:8px 10px}
+.sc-opts{display:grid;gap:8px;margin:4px 0}
+.sc-opt{display:flex;align-items:flex-start;gap:9px;cursor:pointer;font-size:13.5px;line-height:1.45;padding:8px 10px;border-radius:var(--radius-sm);background:color-mix(in srgb,var(--surface) 60%,transparent);border:1px solid var(--border);transition:background .15s,border-color .15s}
+.sc-opt:hover{background:var(--surface);border-color:var(--border-strong)}
+.sc-opt input[type=checkbox]{margin-top:3px;cursor:pointer;accent-color:var(--accent)}
+.sc-act{display:flex;justify-content:flex-end;margin-top:4px}
 .me-export{margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}
 .me-export p{margin-top:4px}
 .me-empty{font-size:14px;color:var(--text-2);margin:4px 0}
@@ -403,15 +405,14 @@ body.authed #board{margin-top:22px}
   </section>
 
   <section id="rules" class="guest-only">
-    <div class="sec-head"><h2>使用须知</h2><p>按下面几条使用，基本不会被拒绝或报错。</p></div>
+    <div class="sec-head"><h2>使用须知</h2><p>请仔细阅读以下规范，合理使用公益资源，避免被限流或封禁。</p></div>
     <ul class="rules card">
-      <li><span class="ri" data-ic="code"></span><span><b>客户端怎么填</b>：生图客户端（柏宝绘 / 智绘姬 / SillyTavern 等）的 NovelAI 接口地址填 <code id="siteTxt3">—</code>（不加 /v1），API Key 填你的 Key。</span></li>
-      <li><span class="ri" data-ic="image"></span><span><b>只能免费出图</b>：尺寸 V4.5 最大 1024×1024，V5 用预设尺寸（如 832×1216）；步数 ≤ 28、每次 1 张。超出会被自动调低。图生图、Vibe 等会扣 Anlas 的功能请在客户端关掉。</span></li>
-      <li><span class="ri" data-ic="clock"></span><span><b>一次一张，别狂重试</b>：每把 Key 同时只画 1 张，上一张没出完别重发。被拒后让客户端停下来——1 小时内被拒 60 次会自动暂停 1 小时，到点自动恢复。</span></li>
-      <li><span class="ri" data-ic="info"></span><span><b>查额度、重置 Key</b>：在 Discord 输入 <code>/quota</code> 看今日额度；Key 泄露用 <code>/resetkey</code> 重置。</span></li>
-      <li><span class="ri" data-ic="key"></span><span><b>一人一把</b>：请勿分享；退出 Discord 服务器后 Key 会被回收<span id="ruleIdle" hidden>；连续 <b id="idleDays"></b> 天不用也会被回收</span>。</span></li>
-      <li><span class="ri" data-ic="ban"></span><span><b>禁止违禁内容</b>：违规的 Key 会被停用。</span></li>
-      <li id="audit" hidden><span class="ri" data-ic="info"></span><span><b>数据记录</b>：<span id="auditTxt"></span></span></li>
+      <li><span class="ri" data-ic="code"></span><span><b>客户端怎么填</b>：生图客户端（Aaalice 启动器 / 酒馆 SillyTavern / 柏宝绘 / 智绘姬 等）接口地址填 <code id="siteTxt3">—</code>（末尾不要加 <code>/v1</code>），API Key 填你领到的专属 Key。</span></li>
+      <li><span class="ri" data-ic="image"></span><span><b>免费出图规格</b>：推荐模型 <code>V4.5 Full</code>；尺寸上限 1024×1024 或等总像素（如 832×1216），V5 请用官方预设尺寸。建议采样步数 ≤ 28、单次 1 张。图生图、Vibe 等功能未开通前请在客户端关闭。</span></li>
+      <li><span class="ri" data-ic="clock"></span><span><b>一次一张，别狂重试</b>：单并发控制，每把 Key 同时只排队或生成 1 张，出完再发下一张。如遇排队请耐心等待——1 小时内被拒 60 次会自动限流 1 小时，到点自动恢复。</span></li>
+      <li><span class="ri" data-ic="info"></span><span><b>查额度、自助换 Key</b>：在 Discord 输入 <code>/quota</code> 随时查看今日剩余免费额度与状态；若怀疑 Key 泄露或遇到配置异常，在 Discord 输入 <code>/resetkey</code> 可一键自助更换新 Key。</span></li>
+      <li><span class="ri" data-ic="key"></span><span><b>一人一把，严禁分享</b>：公益资源有限，Key 仅限本人使用。多设备同时跨网穿梭会被风控自动暂停；退出 Discord 服务器或长期闲置后 Key 会被自动回收<span id="ruleIdle" hidden>（连续 <b id="idleDays"></b> 天不用）</span>。</span></li>
+      <li><span class="ri" data-ic="ban"></span><span><b>合规安全，禁止违禁</b>：严禁生成违反法律法规或极端有害的内容，违规账号将被永久封禁并不再恢复。</span></li>
     </ul>
   </section>
 
@@ -534,8 +535,11 @@ function renderStatus(d){
   renderAnnouncement(!!d.has_announcement);
   var al = (d.algo_notice || '').trim();
   $('algoNote').hidden = !al; $('algoNote').textContent = al;
-  var an = (d.audit_notice || '').trim();
-  $('audit').hidden = !an; $('auditTxt').textContent = an;
+  if($('audit')){
+    var an = (d.audit_notice || '').trim();
+    $('audit').hidden = !an;
+    if($('auditTxt')) $('auditTxt').textContent = an;
+  }
   var paused = d.web_login !== true;          // 只有服务端明确说开放才显示登录按钮
   if($('loginBtn')) $('loginBtn').hidden = paused;
   try{ document.dispatchEvent(new CustomEvent('owl-status', {detail: d})); }catch(_){}
@@ -642,26 +646,46 @@ function renderMe(d){
   }
   hydrate(me);
 }
-/* 重置券：站长 / 奶妹发的，7 天内自己点一下就能重置今天的 V5 额度（先在页面里确认一次，不弹窗） */
+/* 重置券：站长 / 奶妹发的，7 天内自己点一下就能重置今天的 V5 与 Anlas 额度（先在页面里确认一次，不弹窗） */
 /* 网络确认：被检测标记过的成员才会看到；只记录回答，不改额度、不处罚 */
 function shareCheckHtml(sc){
   if(!sc || !sc.options) return '';
-  var btns = Object.keys(sc.options).map(function(k){
-    return '<button class="btn mini sc-ans" type="button" data-ans="' + esc(k) + '">' + esc(sc.options[k]) + '</button>';
+  var opts = Object.keys(sc.options).map(function(k){
+    return '<label class="sc-opt"><input type="checkbox" class="sc-cb" value="' + esc(k) + '"><span>' + esc(sc.options[k]) + '</span></label>';
   }).join('');
   return '<div class="share-check"><b>' + icon('info') + '确认一下你的网络情况</b>'
-    + '<p class="muted sm">系统看到你的 Key 最近在几个不同的网络之间切换（常见原因是开了 VPN / 代理，节点自动切换）。请选一个最符合的，只用来核对检测有没有误判，不会因此扣额度或封号。</p>'
-    + '<div class="share-check-btns">' + btns + '</div></div>';
+    + '<p class="muted sm">系统看到你的 Key 最近在几个不同的网络之间切换（常见原因是开了 VPN / 代理，节点自动切换）。请勾选符合的情况（支持多选），只用来核对检测有没有误判，不会因此扣额度或封号。</p>'
+    + '<div class="sc-opts">' + opts + '</div>'
+    + '<div class="sc-act"><button class="btn primary sm sc-submit" type="button" disabled>提交确认</button></div></div>';
 }
 function bindShareCheck(root){
-  Array.prototype.forEach.call(root.querySelectorAll('.sc-ans'), function(b){
-    b.onclick = function(){
-      Array.prototype.forEach.call(root.querySelectorAll('.sc-ans'), function(x){ x.disabled = true; });
-      fetch('/public/me/share-confirm', {method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body:JSON.stringify({answer:b.dataset.ans})})
-        .then(function(r){ if(!r.ok) throw 0; toast('收到，谢谢！'); var box = root.querySelector('.share-check'); if(box) box.remove(); })
-        .catch(function(){ toast('没提交成功，请稍后再试'); Array.prototype.forEach.call(root.querySelectorAll('.sc-ans'), function(x){ x.disabled = false; }); });
-    };
+  var box = root.querySelector('.share-check'); if(!box) return;
+  var cbs = box.querySelectorAll('.sc-cb'), btn = box.querySelector('.sc-submit');
+  function updateState(changed){
+    if(changed && changed.checked){
+      if(changed.value === 'others'){
+        Array.prototype.forEach.call(cbs, function(x){ if(x.value !== 'others') x.checked = false; });
+      } else {
+        Array.prototype.forEach.call(cbs, function(x){ if(x.value === 'others') x.checked = false; });
+      }
+    }
+    var any = Array.prototype.some.call(cbs, function(x){ return x.checked; });
+    if(btn) btn.disabled = !any;
+  }
+  Array.prototype.forEach.call(cbs, function(cb){
+    cb.onchange = function(){ updateState(cb); };
   });
+  if(btn){
+    btn.onclick = function(){
+      var chosen = [];
+      Array.prototype.forEach.call(cbs, function(x){ if(x.checked) chosen.push(x.value); x.disabled = true; });
+      if(!chosen.length) return;
+      btn.disabled = true; btn.textContent = '提交中…';
+      fetch('/public/me/share-confirm', {method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body:JSON.stringify({answer:chosen})})
+        .then(function(r){ if(!r.ok) throw 0; toast('收到，谢谢！'); box.remove(); })
+        .catch(function(){ toast('没提交成功，请稍后再试'); Array.prototype.forEach.call(cbs, function(x){ x.disabled = false; }); btn.disabled = false; btn.textContent = '提交确认'; });
+    };
+  }
 }
 function couponsHtml(list){
   if(!list.length) return '';
@@ -669,7 +693,7 @@ function couponsHtml(list){
     var left = Math.max(0, c.expires_at - Date.now()/1000), days = Math.floor(left / 86400), hrs = Math.ceil((left % 86400) / 3600);
     var exp = days >= 1 ? days + ' 天' + (hrs ? ' ' + hrs + ' 小时' : '') : hrs + ' 小时';
     return '<div class="coupon" data-cid="' + Number(c.id) + '"><div class="cp-l"><span class="cp-ic" aria-hidden="true">🎟️</span><div><b>重置券</b>'
-      + '<span class="cp-d">重置今天的 V5 额度，一张用一次 · 还有 ' + exp + '过期</span>'
+      + '<span class="cp-d">重置今天的 V5 与 Anlas 额度，一张用一次 · 还有 ' + exp + '过期</span>'
       + (c.note ? '<span class="cp-note">「' + esc(c.note) + '」</span>' : '') + '</div></div>'
       + '<div class="cp-a"><button class="btn primary sm cp-use" type="button">使用</button></div></div>';
   }).join('') + '</div>';
@@ -679,13 +703,13 @@ function bindCoupons(root){
     var act = box.querySelector('.cp-a'), cid = box.getAttribute('data-cid');
     function idle(){ act.innerHTML = '<button class="btn primary sm cp-use" type="button">使用</button>'; act.querySelector('.cp-use').onclick = ask; }
     function ask(){
-      act.innerHTML = '<span class="cp-q">现在重置今天的 V5 额度？</span><button class="btn primary sm" type="button" data-y>确定</button><button class="btn ghost sm" type="button" data-n>取消</button>';
+      act.innerHTML = '<span class="cp-q">现在重置今天的 V5 与 Anlas 额度？</span><button class="btn primary sm" type="button" data-y>确定</button><button class="btn ghost sm" type="button" data-n>取消</button>';
       act.querySelector('[data-n]').onclick = idle;
       act.querySelector('[data-y]').onclick = function(){
         act.innerHTML = '<span class="cp-q">正在重置…</span>';
         fetch('/public/me/coupons/' + encodeURIComponent(cid) + '/use', {method:'POST', credentials:'include', cache:'no-store'})
           .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(b){ if(!r.ok) throw new Error((b.error && b.error.message) || b.detail || '没有成功，请稍后再试'); }); })
-          .then(function(){ toast('已重置，今天的 V5 额度满血回来了 🎉'); loadMe(); }, function(e){ toast(e.message || '没有成功'); idle(); });
+          .then(function(){ toast('已重置，今天的 V5 与 Anlas 额度满血回来了 🎉'); loadMe(); }, function(e){ toast(e.message || '没有成功'); idle(); });
       };
     }
     idle();
@@ -747,9 +771,32 @@ function fmtDate(sec){
   var steps = root.querySelectorAll('[data-step]'), failed = 0, failSince = 0, reported = false;
   function pct(a, b){ return b > 0 ? Math.min(100, Math.round(a / b * 100)) : 0; }
   function setBar(id, a, b){ var e = $id(id), p = pct(a, b); e.style.width = p + '%'; if(e.parentNode) e.parentNode.setAttribute('aria-valuenow', String(p)); }
-  function mark(k){ Array.prototype.forEach.call(steps, function(s){ var on = s.dataset.step === k; s.classList.toggle('on', on); if(on) s.setAttribute('aria-current', 'step'); else s.removeAttribute('aria-current'); }); }
-  var BLOCK_TITLE = {paced: '暂停出图 · 按时段放行', daily_cap: '今日出图已满', breaker: '暂停出图 · 上游出错',
+  var BLOCK_TITLE = {paced: '暂停出图 · 全天配额匀速补给中', daily_cap: '今日出图已满', breaker: '暂停出图 · 上游出错',
     hourly_cap: '本小时出图已满', quiet_cap: '安静时段 · 出图已满', cap_3h: '近 3 小时出图已满'};
+  var lastQueueCount = -1, lastQueueSec = 0, queueSeenAt = 0;
+  function getEstimatedSec(count, iv){
+    if(count <= 0) return 0;
+    var now = Date.now();
+    if(count !== lastQueueCount){
+      lastQueueCount = count;
+      lastQueueSec = Math.round(count * iv);
+      queueSeenAt = now;
+      return lastQueueSec;
+    }
+    var passed = Math.floor((now - queueSeenAt) / 1000);
+    return Math.max(2, lastQueueSec - passed);
+  }
+  setInterval(function(){
+    if(lastQueueCount > 0){
+      var passed = Math.floor((Date.now() - queueSeenAt) / 1000);
+      var curSec = Math.max(2, lastQueueSec - passed);
+      var el = $id('dMeV'), tile = $id('dMe');
+      if(el && tile && tile.dataset.tone === 'busy' && !tile.classList.contains('mine')){
+        el.textContent = '约 ' + curSec + ' 秒后开始';
+      }
+    }
+  }, 1000);
+
   function render(d, me){
     var q = d.quota || {}, g = d.guard || {}, r = d.rules || {};
     var qu = me || d.queue || {}, w = qu.waiting || 0, run = qu.running || 0;   /* 有 Key 时用不带缓存的数字，和「排第几」一致 */
@@ -763,8 +810,16 @@ function fmtDate(sec){
     else if(bk){ tone = bk.code === 'breaker' ? 'bad' : 'warn'; txt = BLOCK_TITLE[bk.code] || '暂时不能出图';
       val = bk.code === 'daily_cap' ? '明天 0 点恢复' : bw ? '约 ' + bw[1] + ' 分钟后' : '稍后再试'; sub = bk.text; }
     else if(qcap && w >= qcap){ tone = 'warn'; txt = '排队已满'; val = '稍后再发'; sub = '队伍最多 ' + qcap + ' 张，新请求会被拒绝'; }
-    else if(w + run > 0){ tone = 'busy'; txt = '运行正常'; val = '约 ' + Math.round((w + run) * iv) + ' 秒后开始'; sub = '前面有 ' + (w + run) + ' 张，每张约 ' + iv + ' 秒'; }
-    else { tone = 'ok'; txt = '运行正常'; val = '马上开始'; }
+    else if(w + run > 0){ 
+      tone = 'busy'; txt = '运行正常'; 
+      var estSec = getEstimatedSec(w + run, iv);
+      val = '约 ' + estSec + ' 秒后开始'; 
+      sub = '前面有 ' + (w + run) + ' 张，每张约 ' + iv + ' 秒'; 
+    }
+    else { 
+      lastQueueCount = 0;
+      tone = 'ok'; txt = '运行正常'; val = '马上开始'; 
+    }
     if(!g.cooldown && !bk && hcap && hour >= hcap * 0.95){ tone = 'warn'; txt = '本小时出图快满了'; }
     var tile = $id('dMe');
     tile.dataset.tone = tone; $id('vText').textContent = txt;
@@ -785,7 +840,15 @@ function fmtDate(sec){
     $id('dPs').textContent = '/ ' + (g.hour_cap || 0) + ' 张';
     setBar('dPbar', g.hour || 0, g.hour_cap || 0);
     var nx = Number(g.next_in) || 0;
-    $id('dPn').textContent = g.hour_cap && (g.hour || 0) >= g.hour_cap ? '近 60 分钟已满，最早那张满 60 分钟后就有空位' : (nx > 0 ? '下一张约 ' + Math.ceil(nx) + ' 秒后可以发' : '');
+    var noteP = '';
+    if(g.hour_cap && (g.hour || 0) >= g.hour_cap){
+      noteP = '近 60 分钟已满，最早那张满 60 分钟后就有空位';
+    } else if(bk && bk.code === 'paced'){
+      noteP = '近 60 分钟未满，全天配额匀速补充中（约 ' + (bw ? bw[1] + ' 分钟' : '稍后') + '）';
+    } else if(nx > 0){
+      noteP = '下一张约 ' + Math.ceil(nx) + ' 秒后可以发';
+    }
+    $id('dPn').textContent = noteP;
     /* 额度 */
     // 每日上限按张数计（10-11 起不再折算半张）
     const used45 = q.units_today ?? q.images_today ?? 0;

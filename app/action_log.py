@@ -46,6 +46,7 @@ ADMIN_ACTIONS = {
     ("POST", "/keys/{key_id}/share-clear"): "防分享清零（误判）",
     ("PUT", "/share-guard"): "修改防分享模式",
     ("PUT", "/modules/{name}"): "启用 / 关闭模块",
+    ("POST", "/ops/reset-all-keys"): "全站杀头重置",
 }
 
 

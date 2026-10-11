@@ -24,11 +24,28 @@ def client_name(user_agent: str) -> str:
 
 def begin(scope) -> object:
     ua = ""
+    is_aalice = False
     for name, value in scope.get("headers") or ():
         if name == b"user-agent":
             ua = value.decode("latin-1", "replace")
-            break
-    return _TIMING.set({"t0": time.monotonic(), "sent": None, "client": client_name(ua), "status": 0,
+        elif name in (b"x-correlation-id", b"x-initiated-at"):
+            is_aalice = True
+
+    cname = client_name(ua)
+    if is_aalice or "dart" in ua.lower():
+        if not cname.startswith("Aaalice"):
+            cname = f"Aaalice_NAI_Launcher ({cname})"[:CLIENT_MAX]
+    elif "luker" in ua.lower():
+        if not cname.startswith("Luker"):
+            cname = f"Luker ({cname})"[:CLIENT_MAX]
+    elif "tauri" in ua.lower():
+        if not cname.startswith("Tauri"):
+            cname = f"TauriTavern ({cname})"[:CLIENT_MAX]
+    elif "workbench" in ua.lower():
+        if not cname.startswith("NAI-Workbench"):
+            cname = f"NAI-Workbench ({cname})"[:CLIENT_MAX]
+
+    return _TIMING.set({"t0": time.monotonic(), "sent": None, "client": cname, "status": 0,
                         "rid": secrets.token_hex(4)})
 
 

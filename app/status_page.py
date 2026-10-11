@@ -123,14 +123,15 @@ async def _api_error_days(db, start: float) -> dict[str, float]:
 async def _upstream_days(db, start: float) -> dict[str, float]:
     """NovelAI 每天真实返回的失败占比：只看真的发到上游的请求（up_status>0），5xx / 429 / 403 算失败。
     数据来自 usage_log（保留 7 天以上），更早的日子只看事件。"""
-    out: dict[str, list[int]] = {}
-    for ts, code in await db._db.execute_fetchall(
-            "SELECT ts, up_status FROM usage_log WHERE ts>=? AND up_status>0", (start,)):
-        tot = out.setdefault(datetime.fromtimestamp(ts).strftime("%Y-%m-%d"), [0, 0])
-        tot[0] += 1
-        if code >= 500 or code in (429, 403):
-            tot[1] += 1
-    return {d: bad / total for d, (total, bad) in out.items() if total}
+    rows = await db._db.execute_fetchall(
+        """SELECT strftime('%Y-%m-%d', ts, 'unixepoch', 'localtime') AS day,
+                  COUNT(*),
+                  SUM(CASE WHEN up_status >= 500 OR up_status IN (429, 403) THEN 1 ELSE 0 END)
+           FROM usage_log
+           WHERE ts >= ? AND up_status > 0
+           GROUP BY day""",
+        (start,))
+    return {r[0]: (float(r[2] or 0) / float(r[1])) for r in rows if r[1]}
 
 
 async def _upstream_last_hour(db, now: float) -> float:
@@ -391,7 +392,7 @@ async def _cached_snapshot(db) -> dict[str, Any]:
     return _SNAP["snap"]
 
 
-@router.get("/status", response_class=HTMLResponse)
+@router.api_route("/status", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def status_page(request: Request):
     snap = await _cached_snapshot(request.app.state.gate.db)
     import os

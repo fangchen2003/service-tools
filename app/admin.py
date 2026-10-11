@@ -733,18 +733,33 @@ async def give_coupon(request: Request, key_id: int):
 
 
 @router.get("/status-codes")
-async def status_codes(request: Request, hours: int = 24):
-    """成员接口 HTTP 状态码分布（最近 1 / 24 / 168 小时）。"""
+async def status_codes(request: Request, hours: str = "today"):
+    """成员接口 HTTP 状态码分布（今日 / 最近 1 / 24 / 168 小时）。"""
     require_admin(request)
     from . import status_stats
-    hours = max(1, min(int(hours), 24 * 30))
-    db = request.app.state.gate.db
-    out = await status_stats.distribution(db, hours)
-    # NovelAI 实际返回给网关的状态码（usage_log.up_status）：和上面「网关返回给成员的」分开看，
-    # 才知道 429 是网关自己限流还是上游真的限流。0 = 网关自己拦下 / 没发到上游
+    import datetime
+    from zoneinfo import ZoneInfo
+    st = request.app.state.gate
+    db = st.db
+    now = time.time()
+    if str(hours).lower() in ("today", "0"):
+        today_str = st.day()
+        tz = getattr(st, "tz", None) or ZoneInfo(st.settings.tz)
+        today_start = datetime.datetime.strptime(today_str, "%Y-%m-%d").replace(tzinfo=tz).timestamp()
+        since = int(today_start)
+        h_val = max(1, int((now - since) // 3600))
+    else:
+        try:
+            h_val = max(1, min(int(hours), 24 * 30))
+        except ValueError:
+            h_val = 24
+        since = int((now - h_val * 3600) // 3600) * 3600
+
+    out = await status_stats.distribution(db, h_val, since=since)
+    # NovelAI 实际返回给网关的状态码（usage_log.up_status）
     rows = await db._db.execute_fetchall(
         "SELECT up_status, COUNT(*) FROM usage_log WHERE ts>=? GROUP BY up_status ORDER BY 2 DESC",
-        (time.time() - hours * 3600,))
+        (since,))
     total = sum(int(n) for _, n in rows)
     meaning = {0: "没发到 NovelAI（网关自己拦下、排队超时或客户端断开）", 200: "NovelAI 正常返回",
                400: "NovelAI 说参数不对", 401: "NovelAI 说凭证无效", 402: "NovelAI 说需要 Anlas / 额度不足",
@@ -1751,3 +1766,21 @@ async def ops_set_audit(request: Request):
     except (TypeError, ValueError):
         raise HTTPException(422, "参数无效") from None
     return await _ops_snapshot(request)
+
+
+@router.post("/ops/reset-all-keys")
+async def ops_reset_all_keys(request: Request):
+    """【全站杀头重置】失效所有非管理员 Key 并解除 Discord 绑定映射，以便重新开始。"""
+    require_admin(request)
+    body = await read_json_body(request)
+    if not isinstance(body, dict) or body.get("confirm") != "确认重置":
+        raise HTTPException(400, "安全确认未通过：必须传入 confirm='确认重置'")
+    st = request.app.state.gate
+    cur = await st.db._db.execute("UPDATE api_keys SET enabled=0 WHERE is_admin=0")
+    disabled_count = cur.rowcount
+    await st.db._db.execute("DELETE FROM discord_registrations")
+    await st.db._db.execute("DELETE FROM key_tags WHERE key_id NOT IN (SELECT id FROM api_keys WHERE is_admin=1)")
+    await st.db._db.execute("DELETE FROM share_state")
+    await st.db._db.commit()
+    return {"ok": True, "disabled_count": disabled_count, "message": f"全站已成功重置！已失效 {disabled_count} 把 Key 并解除 Discord 绑定。"}
+

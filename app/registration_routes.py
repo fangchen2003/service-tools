@@ -526,12 +526,17 @@ async def share_confirm_answer(request: Request):
         body = await request.json()
     except Exception:
         body = {}
-    answer = str((body or {}).get("answer") or "")
-    if answer not in share_confirm.ANSWERS:
-        raise HTTPException(422, "请选一个选项")
+    raw = (body or {}).get("answer") or (body or {}).get("answers") or ""
+    if isinstance(raw, list):
+        answer = ",".join(str(x) for x in raw)
+    else:
+        answer = str(raw)
+    from . import share_confirm
+    if not share_confirm.is_valid_answer(answer):
+        raise HTTPException(422, "请选择有效选项")
     gate = request.app.state.gate
     if await share_confirm.record(gate.db, key["id"], answer, str((body or {}).get("note") or "")):
-        await log_action(gate.db, f"Discord:{discord_id}", "成员确认网络情况", key["name"], share_confirm.ANSWERS[answer])
+        await log_action(gate.db, f"Discord:{discord_id}", "成员确认网络情况", key["name"], share_confirm.label_for(answer))
     return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
 
 
