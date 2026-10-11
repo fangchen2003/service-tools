@@ -544,6 +544,12 @@ async def patch_key(request: Request, key_id: int):
     quota = body.get("quota")
     if quota not in (None, "auto", "manual"):
         raise HTTPException(422, "quota 只能是 auto（算法）或 manual（手动）")
+    if quota == "auto":
+        cur = await st.db.get_key(key_id)
+        if cur is None:
+            raise HTTPException(404, "key 不存在")
+        if cur["is_test"] and body.get("is_test", True) is not False:
+            raise HTTPException(422, "测试 Key 不归算法管理，只能手动设置额度")
     if quota is not None:
         # 2026-10-11 站长：额度只有两种——「算法」全部交给算法；「手动」填多少就是多少，不和算法混用
         for k in ("anlas_mode", "v5_pinned", "quota_mode"):
