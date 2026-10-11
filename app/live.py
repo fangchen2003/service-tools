@@ -95,6 +95,14 @@ async def build(state, registrar, now: Optional[float] = None) -> dict[str, Any]
     except (TypeError, ValueError):
         pass
     token_ids = [t.token_id for t in pool if t.usable]
+    # 和出图检查同一个条件：没人排队 + 按时段放出的份额还剩半小时以上的量（main.quota_image_check）
+    borrow_open = False
+    if guard is not None and guard.site_idle(-1, token_ids, now):
+        try:
+            reserve = (gv.get("account_daily_cap") or 0) / 48 * len(token_ids)
+            borrow_open = await guard.paced_headroom(state.db, token_ids, day, now) > reserve
+        except Exception:
+            borrow_open = False
     body["rules"] = {
         "base": gv.get("base_daily_images", 0), "key_queue": gv.get("key_image_queue", 0),
         "queue_cap": (gv.get("queue_per_account") or 0) * usable,
@@ -102,7 +110,7 @@ async def build(state, registrar, now: Optional[float] = None) -> dict[str, Any]
         "quiet_start": gv.get("quiet_start", 0), "quiet_end": gv.get("quiet_end", 0),
         "quiet_cap": (gv.get("quiet_hourly_cap") or 0) * usable,
         "min_interval": float(getattr(state.settings, "image_min_interval", 15) or 15), "jitter": gv.get("interval_jitter", 0),
-        "borrow_open": bool(guard.site_idle(-1, token_ids, now)) if guard else False,
+        "borrow_open": borrow_open,
         "anlas": anlas,
         "quota": quota,          # 动态额度的当前结果（quota_algo.py）
     }

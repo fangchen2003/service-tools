@@ -130,7 +130,12 @@ def test_review_signals_count_paced_and_not_headroom():
     import inspect
     from app import main, quota_algo
     src = inspect.getsource(quota_algo._yesterday)
-    assert "%按时段放行%" in src                                   # 按时段放行的拦截算拥挤
+    assert "%按时段放行%" not in src and "%出图总量已达上限%" not in src  # 总量本来就这么多：不算「每人给多了」
     m = inspect.getsource(main.quota_image_check)
     headroom_msg = m.split("paced_headroom", 1)[1]
     assert "其他人在排队" not in headroom_msg.split("raise", 2)[1]  # 份额紧的拦截不算「有余量还被拦」
+
+
+def test_over_base_rejections_are_site_level():
+    from app.reasons import OVER_BASE, LABELS
+    assert OVER_BASE in SITE_LEVEL and OVER_BASE in LABELS      # 忙时自动重试不能被 key_guard 当成死循环暂停

@@ -843,15 +843,19 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
             # 按时段放行时，超出保底的部分只能用「这个时段放出来、还剩得多」的份额：至少留半小时的量给保底内的人
             reserve = guard.values["account_daily_cap"] / 48 * len(tokens)
             if not guard.site_idle(key["id"], tokens):
-                raise err(429, f"今天的保底 {base} 张已用完。全站空闲时可以继续用到 {key['daily_images']} 张，"
-                               "现在有其他人在排队或用量较高，请过几分钟再试")
+                raise err(429, reasons.Reason(f"今天的保底 {base} 张已用完。全站空闲时可以继续用到 {key['daily_images']} 张，"
+                                      "现在有其他人在排队或用量较高，请过几分钟再试", reasons.OVER_BASE))
             if await guard.paced_headroom(STATE.db, tokens, STATE.day()) <= reserve:
                 # 文案不能含「其他人在排队」：每日复盘按它数 base_blocks（「有余量还被拦」），这里是份额紧（Sonnet 审查 P1）
-                raise err(429, f"今天的保底 {base} 张已用完。这个时段放出的出图份额所剩不多，先留给还没用到保底的成员；"
-                               f"份额充裕时可以继续用到 {key['daily_images']} 张，请稍后再试")
+                raise err(429, reasons.Reason(f"今天的保底 {base} 张已用完。这个时段放出的出图份额所剩不多，先留给还没用到保底的成员；"
+                                      f"份额充裕时可以继续用到 {key['daily_images']} 张，请稍后再试", reasons.OVER_BASE))
     if est["v5"] > 0:
         # V5 周额度是账户级共享资源，用全站日计数镜像（恢复量 ~190 张/天）
-        borrow = quota_algo.borrow_for(key["id"]) if key["daily_v5"] > 0 else 0    # 账号快满时的空闲借用
+        try:
+            manual = key["quota_auto"] == -1
+        except (KeyError, IndexError, TypeError):
+            manual = False
+        borrow = quota_algo.borrow_for(key["id"]) if key["daily_v5"] > 0 and not manual else 0    # 手动 Key 填多少就是多少，不借
         if key["daily_v5"] > 0 and c["v5"] + sum(r.v5 for r in own_day) + est["v5"] > key["daily_v5"] + borrow:
             raise err(402, f"已达今日 V5 额度（{key['daily_v5']} 张/天" + (f"，含空闲借用 {borrow} 张" if borrow else "")
                       + "），明天恢复后再用")
@@ -1301,9 +1305,9 @@ async def _generate_image(request: Request, *, streaming: bool):
     ) if part) or "免费"
     # 尺寸 / 步数 / 费用始终在前：节约模式等钳制说明只追加在后面，不能顶掉记账信息
     detail = "; ".join([f"{p.get('width')}x{p.get('height')}/{p.get('steps')}step {cost}", *notes])
-    # 账号每日上限按算力折算：最终步数 ≤ 14（节约模式）的图约是 28 步的一半，计 0.5 张
+    # 不打折（2026-10-11 站长）：每张都按 1 张计入账号每日上限。原来 ≤14 步计 0.5 张，节约模式关了也在生效
     try:
-        IMAGE_COST_WEIGHT.set(0.5 if 0 < int(p.get("steps") or 0) <= ECONOMY_STEPS else 1.0)
+        IMAGE_COST_WEIGHT.set(1.0)
     except (TypeError, ValueError):
         IMAGE_COST_WEIGHT.set(1.0)
 

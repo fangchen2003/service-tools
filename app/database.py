@@ -381,6 +381,8 @@ class Database:
                 pass  # 列已存在
         # units 列刚加上时为 NULL：老数据按 1 张 = 1 份回填（偏保守，不会让升级当天突然多出额度）
         await self._db.execute("UPDATE upstream_token_counters SET units=images WHERE units IS NULL")
+        # 2026-10-11：手动额度就是精确值，「V5 基础值」不再用；旧数据一次性清掉（daily_v5 保留当前实际值）
+        await self._db.execute("UPDATE api_keys SET v5_pinned=NULL WHERE v5_pinned IS NOT NULL")
         await self._db.commit()
         # 原因码上线前的拒绝只有中文 detail：一次性回填最近 2 天（自动驾驶 / AIMD 最长看 24 小时），之后只按 reason 数
         from .reasons import BACKFILL
