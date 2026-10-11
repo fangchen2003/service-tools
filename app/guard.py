@@ -176,8 +176,12 @@ class Guard:
     def note_upstream_429(self, now: Optional[float] = None) -> int:
         """记一次上游 429，返回最近 1 小时内的次数（内存，重启清零）。"""
         now = time.time() if now is None else now
-        self._upstream_429 = [t for t in getattr(self, "_upstream_429", []) if now - t < HOUR] + [now]
-        return len(self._upstream_429)
+        seen = [t for t in getattr(self, "_upstream_429", []) if now - t < HOUR]
+        # 同一次限流里几个在途请求会同时收到 429：60 秒内只算一次（Sonnet 审查 P1，避免一次就误退档）
+        if not seen or now - seen[-1] >= 60:
+            seen.append(now)
+        self._upstream_429 = seen
+        return len(seen)
 
     async def adapt_daily(self, now: Optional[float] = None) -> Optional[tuple[int, int]]:
         """每 24 小时最多一次：过去 24 小时没有上游 429 → +10（不超过 200）。"""
