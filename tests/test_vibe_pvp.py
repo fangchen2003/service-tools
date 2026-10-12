@@ -211,3 +211,23 @@ async def test_admin_can_globally_close_vibe(env):
     resp = await env.client.post("/ai/encode-vibe", json=encoding_body(), headers=headers)
     assert resp.status_code == 403
     assert "站长暂未开放此功能：Vibe 编码" in resp.json()["message"]
+
+
+@pytest.mark.asyncio
+async def test_vibe_pvp_expires_after_until_timestamp(env, monkeypatch):
+    """当设置了 GLOBAL_DAILY_ANLAS_UNTIL 且当前时间超过截止时间时，自动关闭 Vibe PVP。"""
+    import time
+    now = time.time()
+    # 截止时间设在过去 10 秒
+    await site_flags.put(env.db, site_flags.GLOBAL_DAILY_ANLAS, 1000)
+    await site_flags.put(env.db, site_flags.GLOBAL_DAILY_ANLAS_UNTIL, now - 10)
+
+    headers = {"Authorization": "Bearer nai-test-standard-key-12345"}
+    resp = await env.client.post("/ai/encode-vibe", json=encoding_body(), headers=headers)
+    assert resp.status_code == 403
+    assert "Vibe 编码会消耗 Anlas" in resp.json()["message"]
+
+    # 截止时间设在未来 1 小时，正常放行
+    await site_flags.put(env.db, site_flags.GLOBAL_DAILY_ANLAS_UNTIL, now + 3600)
+    resp_ok = await env.client.post("/ai/encode-vibe", json=encoding_body(), headers=headers)
+    assert resp_ok.status_code == 200

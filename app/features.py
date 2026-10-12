@@ -6,6 +6,7 @@ NULL 表示沿用旧行为（全局开启的功能都可用）；逗号分隔列
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Iterable, Optional
 
 from . import site_flags
@@ -92,7 +93,11 @@ async def check(db, key, name: str, settings=None) -> Optional[str]:
     if name in ANLAS_FEATURES and has_anlas:
         return None          # 2026-10-10 放开 Anlas：有 Anlas 权限（含自动分配）的成员可以用付费功能，费用按每日 Anlas 上限扣
     if name == "vibe":
-        vibe_daily_cap = await site_flags.get(db, site_flags.GLOBAL_DAILY_ANLAS, settings)
+        until = await site_flags.get(db, site_flags.GLOBAL_DAILY_ANLAS_UNTIL, settings)
+        if until > 0 and time.time() >= until:
+            vibe_daily_cap = 0
+        else:
+            vibe_daily_cap = await site_flags.get(db, site_flags.GLOBAL_DAILY_ANLAS, settings)
         if vibe_daily_cap > 0:
             return None      # 针对 Vibe 开放全站每日 Anlas PVP 抢额度（由 quota_image_check 统一校验全站池）
     if allowed is not None and name not in allowed:

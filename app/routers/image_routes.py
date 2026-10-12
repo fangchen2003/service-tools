@@ -253,7 +253,11 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
                 raise main.err(402, f"全站今日 V5 额度已用完（{int(g)} 张/天），明天再来")
     if est["anlas"] > 0:
         is_vibe = bool(est.get("is_vibe"))
-        vibe_daily_cap = await site_flags.get(state.db, site_flags.GLOBAL_DAILY_ANLAS, state.settings)
+        until = await site_flags.get(state.db, site_flags.GLOBAL_DAILY_ANLAS_UNTIL, state.settings)
+        if until > 0 and time.time() >= until:
+            vibe_daily_cap = 0
+        else:
+            vibe_daily_cap = await site_flags.get(state.db, site_flags.GLOBAL_DAILY_ANLAS, state.settings)
         if is_vibe and not key["allow_anlas"]:
             if vibe_daily_cap <= 0:
                 raise main.err(402, "该请求会消耗 Anlas，全站 Vibe 每日额度暂未开放")
