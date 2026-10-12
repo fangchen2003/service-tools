@@ -36,6 +36,7 @@ from ..policy import (
     legacy_normal_free_eligible,
     medium_normalize,
     normalize_image_request,
+    sanitize_and_translate_prompts,
     upstream_parameter_problem,
     validate_image_references,
     validate_vibe_encoding,
@@ -537,6 +538,7 @@ async def _generate_image(request: Request, *, streaming: bool):
         raise main.err(400, f"图片参数无效：{exc}") from None
     model = body["model"]
     fix_name_digit_weights(body)               # bm94199:: → bm94199 ::（否则上游当成权重 94199 → NaN）
+    sanitize_and_translate_prompts(body)       # WebUI 语法 (tag:1.2) 转译为 1.2::tag::，并清理孤立破损 ::
     problem = upstream_parameter_problem(body)
     if problem:
         main.record(key, "image", model, "rejected", detail=problem[:120])

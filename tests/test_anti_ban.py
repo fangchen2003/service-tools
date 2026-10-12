@@ -310,3 +310,41 @@ def test_name_digit_weight_is_auto_fixed_not_rejected():
     plain = {"model": "nai-diffusion-4-5", "input": "1.2::tag::, -3::x::, 94199::y::", "parameters": {}}
     assert fix_name_digit_weights(plain) == 0
     assert "94199::" in upstream_parameter_problem(plain)
+
+
+def test_sanitize_and_translate_prompts():
+    from app.policy import clean_prompt_syntax, sanitize_and_translate_prompts
+
+    # 1. 基础语法测试：WebUI 格式转译、孤立 :: 清洗、多余逗号合并
+    raw = "(masterpiece:1.2), 1girl, (solo:1.1), ::, blue eyes, ,, (smile:0.9)"
+    cleaned = clean_prompt_syntax(raw)
+    assert cleaned == "1.2::masterpiece::, 1girl, 1.1::solo::, blue eyes, 0.9::smile::"
+
+    # 2. 完整请求体多字段深层转译
+    body = {
+        "model": "nai-diffusion-4-5",
+        "input": "(masterpiece:1.3), 1girl, ::",
+        "parameters": {
+            "prompt": "(best quality:1.2), cat ears",
+            "negative_prompt": "lowres, (bad hands:1.4), ::",
+            "characterPrompts": [
+                {"prompt": "(red hair:1.1), ::", "uc": "(ugly:1.2)"}
+            ],
+            "v4_prompt": {
+                "caption": {
+                    "base_caption": "(sunset:1.5), beach",
+                    "char_captions": [{"char_caption": "(standing:1.0), ::"}]
+                }
+            }
+        }
+    }
+    n = sanitize_and_translate_prompts(body)
+    assert n == 7
+    assert body["input"] == "1.3::masterpiece::, 1girl"
+    assert body["parameters"]["prompt"] == "1.2::best quality::, cat ears"
+    assert body["parameters"]["negative_prompt"] == "lowres, 1.4::bad hands::"
+    assert body["parameters"]["characterPrompts"][0]["prompt"] == "1.1::red hair::"
+    assert body["parameters"]["characterPrompts"][0]["uc"] == "1.2::ugly::"
+    assert body["parameters"]["v4_prompt"]["caption"]["base_caption"] == "1.5::sunset::, beach"
+    assert body["parameters"]["v4_prompt"]["caption"]["char_captions"][0]["char_caption"] == "1.0::standing::"
+
