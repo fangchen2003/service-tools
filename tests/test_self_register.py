@@ -333,11 +333,11 @@ class OpenRegistrationTests(RegistrationTests):
             self.assertEqual(await _member_session(req), f"key:{row['id']}")
             self.assertEqual((await self.service.key_row_for(f"key:{row['id']}"))["id"], row["id"])
             self.assertIsNone(await self.service.key_row_for("key:abc"))
-            # 停用的、站长的 Key 不行
+            # 停用的 Key 不行；站长 Key 与普通 Key 均可正常登录查额度
             await self.db._db.execute("UPDATE api_keys SET enabled=0 WHERE id=?", (row["id"],))
             self.assertEqual((await client.post("/login/key", json={"key": row["token"]})).status_code, 401)
             await self.db._db.execute("UPDATE api_keys SET enabled=1, is_admin=1 WHERE id=?", (row["id"],))
-            self.assertEqual((await client.post("/login/key", json={"key": row["token"]})).status_code, 401)
+            self.assertEqual((await client.post("/login/key", json={"key": row["token"]})).status_code, 200)
             await self.db._db.execute("UPDATE api_keys SET is_admin=0 WHERE id=?", (row["id"],))
             _KEY_LOGIN_FAILS.clear()
             await self.db._db.execute("UPDATE discord_registrations SET key_id=?", (row["id"],))
