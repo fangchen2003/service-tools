@@ -347,8 +347,7 @@ def render(snap: dict[str, Any], subscribe_url: str = "/") -> str:
                      f'<span class="status font-large">部分系统{IMPACT_COMPONENT[worst]}</span></div>')
     else:
         parts.append('<div class="page-status status-none"><span class="status font-large">所有系统运行正常</span></div>')
-    parts.append(f'<div class="components-section font-regular"><div class="components-uptime-link">'
-                 f'过去 {DAYS} 天的正常运行时间。</div><div class="components-container one-column">')
+    parts.append(f'<div class="components-section font-regular"><div class="components-container one-column">')
     for comp in snap["components"]:
         up = f'{comp["uptime"]:.2f} % 正常运行时间' if comp["uptime"] is not None else "无数据"
         parts.append(f'<div class="component-container border-color"><div class="component-inner-container">'

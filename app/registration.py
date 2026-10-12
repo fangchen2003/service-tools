@@ -466,7 +466,7 @@ class RegistrationService:
             raise RegistrationError("这不是一把待绑定的邀请 Key。请检查是否复制完整；普通领取请不填这一项。")
         key_id = int(row[0][0])
         if not row[0][1]:
-            raise RegistrationError("这把邀请 Key 已被停用，请联系站长。")
+            raise RegistrationError("这把邀请 Key 已被停用。")
         await self.db._db.execute(
             "INSERT INTO discord_registrations(discord_id,key_id,created_at,username,display_name,avatar) "
             "VALUES (?,?,?,?,?,?)",

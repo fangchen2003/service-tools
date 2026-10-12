@@ -12,16 +12,16 @@ def upstream_error_message(status: int) -> str:
     # Select a local message from the status instead of attempting to redact it.
     messages = {
         400: "上游未接受请求参数，请检查输入",
-        401: "上游账号认证失败，请联系站长",
-        402: "上游账号余额或权限不足，请联系站长",
-        403: "上游拒绝了请求，请联系站长",
-        404: "上游接口或模型不可用，请联系站长",
+        401: "上游服务认证失败，请稍后重试",
+        402: "上游服务额度或权限不足，请稍后重试",
+        403: "上游服务拒绝了请求，请稍后重试",
+        404: "上游服务接口或模型不可用，请稍后重试",
         413: "请求内容过大，请缩小图片或减少输入",
         422: "上游未接受请求参数，请检查输入",
         429: "上游请求过于频繁，请稍后重试",
     }
     message = messages.get(status, "上游服务暂时不可用，请稍后重试" if status >= 500
-                           else "上游请求失败，请联系站长")
+                           else "上游请求失败，请稍后重试")
     return f"{message}（上游状态 {status}）"
 
 

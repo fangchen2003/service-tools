@@ -366,12 +366,8 @@ body.authed #board{margin-top:22px}
 </header>
 
 <main>
-  <section id="live" aria-labelledby="liveTitle">
+  <section id="live">
     <div class="card">
-      <div class="live-head"><div class="lh-left"><div class="t" id="liveTitle"><span data-ic="key"></span>查额度</div>
-          <div class="head-key" id="headKey" hidden></div></div>
-        <div class="pills" id="pills" aria-live="polite" aria-busy="true"><span class="skel"></span><span class="skel"></span></div></div>
-      <p class="algo-note" id="algoNote" hidden></p>
       <div class="me" id="meCard" hidden></div>
       <div class="loginrow" id="loginRow" hidden>
         <a class="btn primary dc" id="loginBtn" href="/login" hidden><span data-ic="discord"></span>用 Discord 登录</a>
@@ -550,11 +546,14 @@ function renderAnnouncement(has){
 function renderStatus(d){
   setSite(d.site);
   var reg = d.registration || {};
-  var pills = $('pills'); pills.textContent = ''; pills.removeAttribute('aria-busy');
-  if(reg.open && (!ME || !ME.has_key)){
-    var full = reg.slots_left === 0, rp = pill(full ? 'warn' : 'info', full ? '已满员' : '可领取', false);
-    rp.title = full ? '名额已满，在 Discord 用 /register 可排候补' : '在 Discord 用 /register 领 Key' + (reg.slots_left != null ? '，剩余名额 ' + reg.slots_left : '');
-    pills.appendChild(rp);
+  var pills = $('pills');
+  if(pills){
+    pills.textContent = ''; pills.removeAttribute('aria-busy');
+    if(reg.open && (!ME || !ME.has_key)){
+      var full = reg.slots_left === 0, rp = pill(full ? 'warn' : 'info', full ? '已满员' : '可领取', false);
+      rp.title = full ? '名额已满，在 Discord 用 /register 可排候补' : '在 Discord 用 /register 领 Key' + (reg.slots_left != null ? '，剩余名额 ' + reg.slots_left : '');
+      pills.appendChild(rp);
+    }
   }
   var idle = Number(d.key_inactivity_delete_days) || 0;
   $('ruleIdle').hidden = !(idle > 0);
@@ -562,7 +561,7 @@ function renderStatus(d){
   renderDiscord(d.discord_invite);
   renderAnnouncement(!!d.has_announcement);
   var al = (d.algo_notice || '').trim();
-  $('algoNote').hidden = !al; $('algoNote').textContent = al;
+  if($('algoNote')){ $('algoNote').hidden = !al; $('algoNote').textContent = al; }
   if($('audit')){
     var an = (d.audit_notice || '').trim();
     $('audit').hidden = !an;
@@ -573,8 +572,11 @@ function renderStatus(d){
   try{ document.dispatchEvent(new CustomEvent('owl-status', {detail: d})); }catch(_){}
 }
 function statusFailed(){
-  var pills = $('pills'); pills.textContent = ''; pills.removeAttribute('aria-busy');
-  pills.appendChild(pill('bad', '状态暂时无法读取', true));
+  var pills = $('pills');
+  if(pills){
+    pills.textContent = ''; pills.removeAttribute('aria-busy');
+    pills.appendChild(pill('bad', '状态暂时无法读取', true));
+  }
   if(!$('discordSlot').firstChild) renderDiscord('');
 }
 var loading = false;
@@ -619,8 +621,8 @@ function renderMe(d){
   // 登录且已有 Key 时，隐藏「全站算法分配」那句——它和下面你自己的额度数字会打架
   document.body.classList.toggle('haskey', !!(authed && d && d.has_key));
   renderChip(d);
-  $('liveTitle').innerHTML = icon('key') + (authed ? '我的额度' : '查额度');
-  if(authed && d && d.has_key){ var pills = $('pills'); if(pills) pills.textContent = ''; }
+  if($('liveTitle')) $('liveTitle').innerHTML = icon('key') + (authed ? '我的额度' : '查额度');
+  if(authed && d && d.has_key && $('pills')) $('pills').textContent = '';
   var hk = $('headKey');
   if(hk){ hk.hidden = true; hk.innerHTML = ''; }
   if(!authed){ me.hidden = true; lr.hidden = false; return; }
