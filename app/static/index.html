@@ -215,8 +215,8 @@ tr.muted a{opacity:1}
 .chart .col:hover .fill{opacity:1}
 .chart .lb{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .chart .val{font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
-.chart24{display:flex;align-items:stretch;gap:2px;height:118px;margin:2px 0 14px}
-.chart24 .col{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:3px}
+.chart24{display:flex;align-items:stretch;gap:2px;height:118px;margin:2px 0 14px;overflow-x:auto}
+.chart24 .col{flex:1;min-width:11px;display:flex;flex-direction:column;align-items:center;gap:3px}
 .chart24 .track{flex:1;width:100%;display:flex;align-items:flex-end;justify-content:center}
 .chart24 .stk{width:68%;min-width:3px;display:flex;flex-direction:column-reverse;border-radius:3px 3px 0 0;overflow:hidden;min-height:2px;transition:height .3s}
 .chart24 .stk .ok{background:var(--accent)}
@@ -408,11 +408,17 @@ details.fold[open]>summary{margin-bottom:14px}
 tr.mx>td{background:var(--surface-2);padding:16px 18px 18px;cursor:default}
 .mtable tbody tr.mx:hover td{background:var(--surface-2)}
 tr.mr.open>td{background:var(--surface-2);border-bottom-color:transparent}
-.mod.off{opacity:.65}.mod-checks{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}.bad-text{color:var(--bad)}
+#modList{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:16px;align-items:start}
+@media (max-width:540px){#modList{grid-template-columns:1fr}}
+.mod.off{opacity:.7}.mod-checks{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}.bad-text{color:var(--bad)}
 .mod-runs{display:flex;gap:2px;margin-top:4px}.mod-runs i{flex:1;max-width:14px;height:18px;border-radius:2px;background:var(--surface-3)}
 .mod-runs i.ok{background:var(--ok)}.mod-runs i.warn{background:var(--warn)}.mod-runs i.bad{background:var(--bad)}
 .mod-check{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline;padding:8px 0;border-top:1px solid var(--border);font-size:13.5px}
-.mod-check:first-of-type{margin-top:8px}.mod-ev{flex-basis:100%;font-size:12.5px;color:var(--text-2);white-space:pre-wrap}
+.mod-check:first-of-type{margin-top:8px}
+.mod-ev-wrap{flex-basis:100%;margin-top:4px}
+.mod-ev-wrap summary{cursor:pointer;font-size:12px;color:var(--muted);user-select:none}
+.mod-ev-wrap summary:hover{color:var(--text)}
+.mod-ev{margin-top:4px;padding:6px 10px;background:var(--surface-2);border-radius:var(--radius-sm);font-size:12px;color:var(--text-2);white-space:pre-wrap;overflow:auto;max-height:160px}
 .mod-kv{margin-top:10px}.mod-kv dd .muted{margin-left:4px}
 .mod .kv{margin-bottom:6px}
 .share-ev h5{font-size:12px;font-weight:600;color:var(--muted);margin:4px 0 8px}.share-ev .table-wrap{max-height:280px;overflow:auto;margin-bottom:12px}
@@ -473,31 +479,7 @@ details.menu>summary::-webkit-details-marker{display:none}
 @media (hover:none){.thumb .zoom{opacity:.85}}
 .thumb.none .zoom{display:none}
 .shot-params{font-size:11.5px;color:var(--muted);margin-top:4px;word-break:break-all}
-/* 有原图的卡片：按原图比例整张显示，文字和按钮半透明叠在图片底部（图上永远是深色渐变 + 白字，与主题无关） */
 .gallery{align-items:start}
-.gallery:not(.list) .shot.ov{position:relative;background:#0b0d14}
-.gallery:not(.list) .shot.ov .thumb{aspect-ratio:auto;height:100%;position:absolute;inset:0}
-.gallery:not(.list) .shot.ov .thumb img{object-fit:contain}
-.gallery:not(.list) .shot.ov .thumb:hover img{transform:none}
-.gallery:not(.list) .shot.ov .thumb .zoom{top:8px;bottom:auto}
-.gallery:not(.list) .shot.ov .shot-body{position:absolute;left:0;right:0;bottom:0;flex:none;gap:6px;padding:40px 12px 12px;pointer-events:none;
-  max-height:100%;overflow:auto;color:#fff;background:linear-gradient(to bottom,rgba(8,10,16,0) 0,rgba(8,10,16,.55) 34px,rgba(8,10,16,.78) 100%);
-  text-shadow:0 1px 2px rgba(0,0,0,.6);transition:background .2s}
-.gallery:not(.list) .shot.ov .shot-body>*{pointer-events:auto}
-.gallery:not(.list) .shot.ov:hover .shot-body,.gallery:not(.list) .shot.ov:focus-within .shot-body{background:linear-gradient(to bottom,rgba(8,10,16,0) 0,rgba(8,10,16,.72) 34px,rgba(8,10,16,.9) 100%)}
-.gallery:not(.list) .shot.ov .shot-top .who,.gallery:not(.list) .shot.ov .prompt{color:#fff}
-.gallery:not(.list) .shot.ov .shot-meta,.gallery:not(.list) .shot.ov .shot-params,.gallery:not(.list) .shot.ov details.neg{color:rgba(255,255,255,.72)}
-.gallery:not(.list) .shot.ov details.neg div{color:rgba(255,255,255,.88)}
-.gallery:not(.list) .shot.ov .prompt{-webkit-line-clamp:2;font-size:12.5px}
-.gallery:not(.list) .shot.ov .btn.mini{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.22);color:#fff;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
-.gallery:not(.list) .shot.ov .btn.mini:hover{background:rgba(255,255,255,.26)}
-/* 能悬停的设备：默认只露名字、状态、一行提示词和按钮，尽量少挡图；悬停 / 键盘聚焦时再展开模型、负面、参数 */
-@media (hover:hover){
-  .gallery:not(.list) .shot.ov .prompt:not(.open){-webkit-line-clamp:1}
-  .gallery:not(.list) .shot.ov:not(:hover):not(:focus-within) :is(.shot-meta,details.neg,.shot-params){display:none}
-}
-.gallery.list .shot.ov{aspect-ratio:auto!important}   /* 列表视图仍是小方图 + 右侧文字 */
-.gallery.large{grid-template-columns:repeat(auto-fill,minmax(360px,1fr))}
 .gallery.list{display:flex;flex-direction:column;gap:8px}
 .gallery.list .shot{flex-direction:row;align-items:stretch}
 .gallery.list .thumb{width:120px;flex:none;aspect-ratio:1/1}
@@ -886,7 +868,14 @@ td.note{min-width:220px}
         </section>
         <!-- Bug 追踪 -->
         <section id="tab-bugs" hidden>
-          <div class="page-head"><div class="tools"><label class="check" style="white-space:nowrap;margin:0;padding:7px 10px"><input type="checkbox" id="bugAll"><span>含已处理</span></label></div></div>
+          <div class="page-head">
+            <div class="ttl"><span class="muted sm" id="bugStats"></span></div>
+            <div class="tools">
+              <select id="bugLevel" aria-label="按级别筛选" style="width:110px"><option value="">全部级别</option><option value="error">仅错误</option><option value="warn">仅注意</option></select>
+              <label class="check" style="white-space:nowrap;margin:0;padding:7px 10px"><input type="checkbox" id="bugAll"><span>含已处理</span></label>
+              <button class="btn mini outline" data-act="resolve-all-bugs" id="bugResolveAll" title="一键将当前所有未处理的 Bug 标记为已处理">全部标记已处理</button>
+            </div>
+          </div>
           <div class="card panel tight" id="bugPanel">
             <div class="table-wrap"><table class="rt"><thead><tr><th class="st">级别</th><th class="bug-src">来源</th><th class="bug-content">内容</th><th class="num">次数</th><th class="t">首次 / 最近</th><th class="nw">最近错误编号</th><th class="act">操作</th></tr></thead><tbody id="bugBody"></tbody></table></div>
           </div>
@@ -894,15 +883,35 @@ td.note{min-width:220px}
 
         <!-- 模块 -->
         <section id="tab-modules" hidden>
+          <div class="panel-head" style="margin-bottom:16px">
+            <div>
+              <h2>内核监控与自动化模块</h2>
+              <div class="desc">系统内置 9 大核心模块（容量、分配、调度、续杯、自动驾驶、防分享、领 Key、观测、风险检查），每 10 分钟自动运行与交叉校验。</div>
+            </div>
+            <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+              <button class="btn sm ghost" id="btnRunModules" type="button"><span data-ic="refresh"></span>立即运行全部校验</button>
+            </div>
+          </div>
           <div id="modList"><div class="skel" style="height:300px"></div></div>
         </section>
 
         <!-- Discord 机器人 -->
         <section id="tab-discord" hidden>
-          <div class="card panel"><div class="panel-head"><h2>机器人</h2></div><div id="botStatus"><div class="skel" style="height:60px"></div></div></div>
-          <div class="card panel"><div class="panel-head"><h2>跑图分享</h2><div class="desc">新帖自动点赞、看图写评论；露骨图片只发「捂眼睛跑开」</div></div>
-            <div id="botCfg"><div class="skel" style="height:200px"></div></div></div>
-          <div class="card panel"><div class="panel-head"><h2>最近动作</h2></div><div id="botEvents"><div class="skel" style="height:120px"></div></div></div>
+          <div class="card panel">
+            <div class="panel-head">
+              <h2>机器人状态</h2>
+              <button class="btn sm ghost" id="btnRefreshBot" type="button" style="margin-left:auto"><span data-ic="refresh"></span>刷新状态与动作</button>
+            </div>
+            <div id="botStatus"><div class="skel" style="height:60px"></div></div>
+          </div>
+          <div class="card panel">
+            <div class="panel-head"><h2>跑图分享设置</h2><div class="desc">新帖自动点赞、看图写评论；露骨图片只发「捂眼睛跑开」</div></div>
+            <div id="botCfg"><div class="skel" style="height:200px"></div></div>
+          </div>
+          <div class="card panel">
+            <div class="panel-head"><h2>最近动作</h2></div>
+            <div id="botEvents"><div class="skel" style="height:120px"></div></div>
+          </div>
         </section>
 
         <!-- 成员 -->
@@ -933,7 +942,10 @@ td.note{min-width:220px}
 
         <!-- 领 Key 与功能 -->
         <section id="tab-ops" hidden>
-          <div class="card panel"><div id="opsReg"><div class="skel" style="height:260px"></div></div></div>
+          <div class="card panel">
+            <div class="panel-head"><h2>自助领 Key</h2><div class="desc">Discord /register 自助领 Key 开放状态、名额限制与新成员默认权限</div></div>
+            <div id="opsReg"><div class="skel" style="height:260px"></div></div>
+          </div>
           <div class="card panel"><div class="panel-head"><h2>功能开关</h2><div class="desc">关闭后管理员 Key 仍可使用</div></div><div id="opsFeatures"><div class="skel" style="height:200px"></div></div></div>
         </section>
 
@@ -980,12 +992,23 @@ td.note{min-width:220px}
         <!-- 额度与保护 -->
         <section id="tab-feedback" hidden>
           <div class="page-head">
-            <div class="tools"><button class="btn" data-act="feedback-export" title="下载全部反馈（CSV）">导出 CSV</button></div></div>
+            <div class="ttl"><span class="muted sm" id="fbStats"></span></div>
+            <div class="tools">
+              <input id="fbSearch" type="search" placeholder="搜索成员或选项" aria-label="搜索成员或选项" style="width:160px">
+              <select id="fbScoreFilter" aria-label="按评价筛选" style="width:120px">
+                <option value="">全部评价</option>
+                <option value="good">满意 / 好评</option>
+                <option value="bad">一般 / 不满</option>
+              </select>
+              <button class="btn" data-act="feedback-export" title="下载全部反馈（CSV）">导出 CSV</button>
+            </div>
+          </div>
+          <div id="fbSummary" class="stats" style="margin-bottom:14px"></div>
           <div class="card panel tight"><div class="table-wrap"><table class="rt"><thead id="fbHead"></thead><tbody id="fbBody"><tr><td class="empty">加载中…</td></tr></tbody></table></div></div>
         </section>
         <section id="tab-limits" hidden>
           <div class="card panel" id="quotaAlgo">
-            <div class="panel-head"><h2>动态额度</h2><div class="desc">平滑注水令牌桶机制：每小时恢复 4 张，全天上限 96 张</div></div>
+            <div class="panel-head"><h2>动态额度</h2><div class="desc">平滑注水令牌桶机制：根据上游余量与实际用量自动微调全天上限与保底</div></div>
             <div id="qaBody"><div class="skel" style="height:80px"></div></div>
           </div>
           <div class="card panel" id="autopilot">
@@ -994,18 +1017,18 @@ td.note{min-width:220px}
           </div>
           <details class="card panel fold">
             <summary class="panel-head"><h2>账号保护与排队</h2><span class="desc" id="fs-guard">0 = 关闭该项，保存后立即生效</span></summary>
-            <div id="guardLive" class="hint" style="margin-bottom:12px">正在读取…</div>
+            <div id="guardLive" class="hint muted sm" style="margin-bottom:12px">正在读取当前状态…</div>
             <div class="form-grid" id="guardFields"></div>
             <button class="btn primary" data-act="save-guard">保存账号保护</button>
           </details>
           <details class="card panel fold">
             <summary class="panel-head"><h2>Anlas 自动分配</h2><span class="desc" id="fs-anlas">每 10 分钟重算，供活跃成员在 V5 用完后续杯</span></summary>
-            <div id="anlasLive" class="hint" style="margin-bottom:12px;white-space:pre-line">正在读取…</div>
+            <div id="anlasLive" class="hint muted sm" style="margin-bottom:12px;white-space:pre-line">正在读取当前状态…</div>
             <div class="form-grid" id="anlasFields"></div>
             <button class="btn primary" data-act="save-anlas">保存并重算</button>
           </details>
           <details class="card panel fold">
-            <summary class="panel-head"><h2>图片排队与冷却</h2><span class="desc" id="fs-runtime"></span></summary>
+            <summary class="panel-head"><h2>图片排队与冷却</h2><span class="desc" id="fs-runtime">排队等待与任务间隔限制</span></summary>
             <div class="form-grid">
               <div class="field"><label for="r_queue_timeout">单阶段排队等待上限（秒）</label><input id="r_queue_timeout" type="number" min="15" max="300" step="1"><div class="hint">范围 15～300</div></div>
               <div class="field"><label for="r_key_image_min_interval">用户 Key 图片任务间隔（秒）</label><input id="r_key_image_min_interval" type="number" min="15" max="120" step="1"><div class="hint">范围 15～120</div></div>
@@ -1015,7 +1038,7 @@ td.note{min-width:220px}
             <button class="btn primary" data-act="save-runtime">保存运行限制</button>
           </details>
           <details class="card panel fold">
-            <summary class="panel-head"><h2>Anlas 与 V5 预算</h2><span class="desc" id="fs-budget"></span></summary>
+            <summary class="panel-head"><h2>Anlas 与 V5 预算</h2><span class="desc" id="fs-budget">全站月度 Anlas 与每日 V5 额度</span></summary>
             <div class="form-grid">
               <div class="field">
                 <label for="s_budget">全站月度 Anlas 预算</label>
@@ -1040,11 +1063,21 @@ td.note{min-width:220px}
         <section id="tab-set" hidden>
           <div class="card panel">
             <div class="panel-head"><h2>服务端概况</h2><div class="desc">只读摘要；上游 Token 在「上游」页管理，其余敏感配置在 .env</div></div>
-            <dl id="cfgInfo" class="kv"></dl>
+            <dl id="cfgInfo" class="kv"><div class="skel" style="height:120px"></div></dl>
           </div>
           <div class="card panel">
-            <div class="panel-head"><h2>站点公告</h2><div class="desc">用户访问首页看到的内容，支持 HTML</div></div>
+            <div class="panel-head">
+              <h2>站点公告</h2>
+              <div class="desc">用户访问首页看到的内容，支持 HTML 语法</div>
+              <div style="margin-left:auto;display:flex;gap:8px">
+                <button class="btn sm ghost" type="button" id="btnPreviewAnnounce">预览效果</button>
+              </div>
+            </div>
             <textarea id="announce" rows="10" placeholder="&lt;h2&gt;欢迎&lt;/h2&gt;&lt;p&gt;申请 Key 请联系……&lt;/p&gt;" aria-label="站点公告"></textarea>
+            <div id="announcePreviewBox" hidden style="margin-top:12px;padding:14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-2)">
+              <div class="muted sm" style="margin-bottom:8px">预览效果（仅供排版参考）：</div>
+              <div id="announcePreview" class="prose"></div>
+            </div>
             <div style="margin-top:16px"><button class="btn primary" data-act="save-announce">保存公告</button></div>
           </div>
           <details class="card panel fold">
@@ -1223,7 +1256,7 @@ td.note{min-width:220px}
 })('admin');
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
-let editingId = null, keysCache = [], logPage = 1, auditPage = 1, auditPer = 24, auditView = 'grid';
+let editingId = null, keysCache = [], logPage = 1, logPer = 20, logExportCooldown = 0, feedbackExportCooldown = 0, auditPage = 1, auditPer = 24, auditView = 'grid';
 let membersCache = null, statusCache = null, memberSort = 'today', memberDir = 'desc', memberQuery = '', memberFilter = 'all', memberMeta = {};
 let allowanceTimer = null, allowanceLoading = false;
 let reconBusy = false, reconReady = false, reconRemoteRunning = false, reconRetryAt = 0, reconTimer = null, reconVersion = 0;
@@ -1514,10 +1547,11 @@ const TABS = ['ov','members','ops','audit','up','bugs','logs','actions','feedbac
 // 生成记录 / 用量日志 / 操作日志 / Bug 追踪 合并成边栏一项「日志」，页内用标签切换（10/10 站长：边栏太多）
 const LOG_TABS = [['audit','生成记录'],['logs','用量日志'],['actions','操作日志'],['bugs','Bug 追踪'],['feedback','成员反馈']];
 function logSubtabs(){
+  const openBugs = bugsCache ? bugsCache.open : 0;
   LOG_TABS.forEach(([t])=>{
     const sec = $('#tab-'+t); if(!sec || sec.querySelector('.subtabs')) return;
     const bar = document.createElement('div'); bar.className = 'subtabs'; bar.setAttribute('role','tablist');
-    bar.innerHTML = LOG_TABS.map(([k,l])=>`<button type="button" role="tab" data-sub="${k}" aria-selected="${k===t}" class="${k===t?'on':''}">${l}${k==='bugs'?'<span class="sub-badge" hidden></span>':''}</button>`).join('');
+    bar.innerHTML = LOG_TABS.map(([k,l])=>`<button type="button" role="tab" data-sub="${k}" aria-selected="${k===t}" class="${k===t?'on':''}">${l}${k==='bugs'?`<span class="sub-badge"${openBugs?'':' hidden'}>${openBugs||''}</span>`:''}</button>`).join('');
     sec.prepend(bar);
   });
 }
@@ -1536,7 +1570,7 @@ function tab(name){
   if(name==='actions') loadActions();
   if(name==='set' || name==='limits') loadSettings();
   if(name==='limits'){ loadQuotaAlgo(); loadAutopilot(); }
-  if(name==='up'){ loadOverview(); loadReconciliation(); loadPerf(); loadShadow(); }
+  if(name==='up'){ loadOverview(); loadReconciliation(); loadPerf(); loadShadow(); loadAllowance(); }
   if(name==='bugs') loadBugs();
   if(name==='feedback') loadFeedback();
   if(name==='discord') loadBot();
@@ -1587,7 +1621,7 @@ async function loadPerf(){
           <td class="num" data-label="平均排队">${sec(w.avg_wait_ms)}</td>
           <td class="num" data-label="实际 / 上限（张/时）" title="${w.member_capacity_per_hour==null?'':'单个成员最多约 '+w.member_capacity_per_hour+' 张/时（与他人共享全站上限）'}">${w.actual_per_hour==null?'—':w.actual_per_hour} / ${w.capacity_per_hour==null?'—':w.capacity_per_hour}</td></tr>`);
       }
-      if(!f.baseline_ready) rows.push(`<tr><td></td><td colspan="8" class="hint">${esc(fam)} 基线样本不足：需要先积累几天带耗时的日志才能判断「变慢」。</td></tr>`);
+      if(!f.baseline_ready) rows.push(`<tr><td colspan="9" class="hint full" data-label="说明">${esc(fam)} 基线样本不足：需要先积累几天带耗时的日志才能判断「变慢」。</td></tr>`);
     }
     $('#perfBody').innerHTML = rows.join('') || '<tr><td colspan="9" class="empty-cell">暂无出图记录</td></tr>';
   }catch(e){ $('#perfBody').innerHTML = '<tr><td colspan="9" class="empty-cell">读取失败</td></tr>'; }
@@ -1647,7 +1681,7 @@ function drawChart(){
     v5: ['今日 V5', t.v5 || 0, '/ ' + (d.v5_limit > 0 ? d.v5_limit : '∞'), '全站日限；每人另有个人 V5 上限'],
     requests: ['今日请求数', t.requests, '次', '含查额度以外的所有调用'],
     anlas: ['今日消耗 Anlas（估算）', t.anlas, 'Anlas', `本月 ${d.month.anlas} / 预算 ${d.anlas_budget > 0 ? d.anlas_budget : '∞'}`],
-    text_tokens: ['今日文本 tokens', fmt(t.text_tokens), '', '文本 / 聊天功能'],
+    text_tokens: ['今日文本 tokens', fmt(t.text_tokens), 'tokens', '文本 / 聊天功能'],
   }[k];
   $('#chartLabel').textContent = M[0];
   $('#chartToday').innerHTML = `${esc(M[1])} <small class="muted" style="font-size:14px;font-weight:400">${esc(M[2])}</small>`;
@@ -1662,40 +1696,176 @@ function drawChart(){
   document.querySelectorAll('[data-chart]').forEach(b => { const on = b.dataset.chart === k; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); });
 }
 document.addEventListener('click', e => { const b = e.target.closest('[data-chart]'); if(b){ chartMetric = b.dataset.chart; drawChart(); } });
-const BUG_SRC = {request:'接口异常', upstream:'上游故障', gate:'网关故障', accounting:'记账写入', disconnect:'客户端提前断开',
-  audit:'生成记录', key_sources:'来源统计', anlas_pool:'Anlas 分配', cleanup:'闲置回收', registration_reset:'定时清空'};
-function bugSource(s){ return BUG_SRC[s] || (s.startsWith('maintenance:') ? '维护任务 · ' + s.slice(12) : s.startsWith('web:') ? '网页脚本 · ' + (s.slice(4)==='admin'?'后台':'首页') : s); }
+const BUG_SRC = {
+  request: '接口异常', upstream: '上游故障', gate: '网关故障', accounting: '记账写入', disconnect: '客户端断开',
+  audit: '生成记录', key_sources: '来源统计', anlas_pool: 'Anlas 分配', cleanup: '闲置回收', registration_reset: '定时清空',
+  scheduling: '出图调度', share_guard: '防分享', quota_algo: '动态额度', audit_image_purge: '原图清理',
+  touch_key: '活跃心跳', guard_seed: '账号保护', kernel: '规则内核', 'log:rejected': '拦截日志'
+};
+const MAINT_TASKS = { perf: '性能采集', registrar: '名额发放', disk: '磁盘监控', purge: '历史清理', quota: '额度重置' };
+const WEB_PAGES = { admin: '后台', landing: '首页', status: '状态页', claim: '领 Key 页' };
+function bugSource(s){
+  if(BUG_SRC[s]) return BUG_SRC[s];
+  if(s.startsWith('maintenance:')) return '维护任务 · ' + (MAINT_TASKS[s.slice(12)] || s.slice(12));
+  if(s.startsWith('web:')) return '网页脚本 · ' + (WEB_PAGES[s.slice(4)] || s.slice(4));
+  if(s.startsWith('module:')) return '模块 · ' + s.slice(7);
+  if(s.startsWith('check:')) return '交叉校验 · ' + s.slice(6);
+  return s;
+}
+let feedbackCache = null;
+function formatAnswer(qid, ans){
+  if(!ans) return '—';
+  if(qid === 'score'){
+    if(ans === '非常满意') return `<span class="tag on"><i class="dot"></i>非常满意</span>`;
+    if(ans === '满意') return `<span class="tag ok">满意</span>`;
+    if(ans === '一般') return `<span class="tag warn">一般</span>`;
+    if(ans === '不太满意') return `<span class="tag warn">不太满意</span>`;
+    if(ans === '很不满意') return `<span class="tag off"><i class="dot"></i>很不满意</span>`;
+  }
+  if(qid === 'pain'){
+    if(ans === '出图失败或报错') return `<span class="tag off">${esc(ans)}</span>`;
+    if(ans.startsWith('排队太久')) return `<span class="tag warn">${esc(ans)}</span>`;
+  }
+  return esc(ans);
+}
 async function loadFeedback(){
   try{
     const d = await api('/admin/api/feedback');
+    feedbackCache = d;
     const qs = d.questions || [];
-    $('#fbHead').innerHTML = `<tr><th>时间</th><th>成员</th>${qs.map(q=>`<th>${esc(q.label)}</th>`).join('')}</tr>`;
-    $('#fbBody').innerHTML = d.items.length ? d.items.map(it=>`<tr><td class="mono" style="white-space:nowrap">${new Date(it.ts*1000).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</td>
-      <td>${esc(it.key_name || it.username || it.discord_id)}</td>${qs.map(q=>`<td style="white-space:pre-wrap;min-width:140px">${esc(it.answers[q.id]||'')}</td>`).join('')}</tr>`).join('')
-      : `<tr><td class="empty" colspan="${qs.length+2}">还没有反馈</td></tr>`;
+    const items = d.items || [];
+    const total = items.length;
+    const satisfied = items.filter(it => (it.answers||{}).score === '非常满意' || (it.answers||{}).score === '满意').length;
+    const satRate = total ? Math.round((satisfied / total) * 100) : 0;
+    const painCounts = {};
+    items.forEach(it => { const p = (it.answers||{}).pain; if(p && p !== '没什么困扰') painCounts[p] = (painCounts[p]||0) + 1; });
+    const topPain = Object.entries(painCounts).sort((a,b) => b[1] - a[1])[0];
+    const wishCounts = {};
+    items.forEach(it => { const w = (it.answers||{}).wish; if(w && w !== '保持现状就好') wishCounts[w] = (wishCounts[w]||0) + 1; });
+    const topWish = Object.entries(wishCounts).sort((a,b) => b[1] - a[1])[0];
+
+    if($('#fbStats')) $('#fbStats').textContent = `共 ${total} 份成员问卷反馈`;
+    if($('#fbSummary')){
+      $('#fbSummary').innerHTML = total ? [
+        statCard('问卷总数', total, '', '全部历史提交'),
+        statCard('好评满意率', satRate + '%', `${satisfied}/${total} 人满意`, '非常满意与满意占比', satRate >= 80 ? 'good' : satRate >= 60 ? 'warn' : 'bad'),
+        statCard('主要困扰 Top 1', topPain ? topPain[0] : '暂无', topPain ? `${topPain[1]} 人提到` : '', '成员反映最多的问题'),
+        statCard('优先期望 Top 1', topWish ? topWish[0] : '暂无', topWish ? `${topWish[1]} 人希望` : '', '最希望改进的功能或额度'),
+      ].join('') : '';
+    }
+
+    const sf = ($('#fbScoreFilter')||{}).value || '';
+    const qf = (($('#fbSearch')||{}).value || '').trim().toLowerCase();
+    const filtered = items.filter(it => {
+      const score = (it.answers||{}).score || '';
+      if(sf === 'good' && score !== '非常满意' && score !== '满意') return false;
+      if(sf === 'bad' && score !== '一般' && score !== '不太满意' && score !== '很不满意') return false;
+      if(qf){
+        const text = [it.key_name, it.username, it.discord_id, ...Object.values(it.answers||{})].filter(Boolean).join(' ').toLowerCase();
+        if(!text.includes(qf)) return false;
+      }
+      return true;
+    });
+
+    $('#fbHead').innerHTML = `<tr><th class="t">时间</th><th>成员</th>${qs.map(q=>`<th>${esc(q.label)}</th>`).join('')}</tr>`;
+    $('#fbBody').innerHTML = filtered.length ? filtered.map(it=>{
+      const mLabel = esc(it.key_name || it.username || it.discord_id || '—');
+      const mLink = it.key_id
+        ? `<a href="#" data-act="fb-member" data-kid="${esc(it.key_id)}" title="点击查看用量日志">${mLabel}</a>`
+        : mLabel;
+      return `<tr>
+        <td class="mono nw t" data-label="时间">${new Date(it.ts*1000).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</td>
+        <td data-label="成员">${mLink}</td>
+        ${qs.map(q=>`<td data-label="${esc(q.label)}" style="white-space:pre-wrap;min-width:140px">${formatAnswer(q.id, it.answers[q.id])}</td>`).join('')}
+      </tr>`;
+    }).join('') : `<tr><td class="empty" colspan="${qs.length+2}">${total ? '未找到符合条件的反馈' : '还没有反馈'}</td></tr>`;
   }catch(e){ toastErr(e); }
 }
+let bugsCache = null;
 async function loadBugs(){
   try{
     const d = await api('/admin/api/errors' + ($('#bugAll').checked ? '?all=true' : ''));
+    bugsCache = d;
     $('#navBugs').hidden = !d.open; $('#navBugs').textContent = d.open;
     $$('.subtabs .sub-badge').forEach(x=>{ x.hidden = !d.open; x.textContent = d.open; });
-    $('#bugBody').innerHTML = d.errors.map(e=>`
+    const lvl = $('#bugLevel') ? $('#bugLevel').value : '';
+    const filtered = lvl ? d.errors.filter(e => e.level === lvl) : d.errors;
+    const errCount = d.errors.filter(e => !e.resolved_at && e.level === 'error').length;
+    const warnCount = d.errors.filter(e => !e.resolved_at && e.level === 'warn').length;
+    if($('#bugStats')){
+      $('#bugStats').textContent = d.open
+        ? `${d.open} 个未处理${errCount ? '（' + errCount + ' 个错误）' : warnCount ? '（均为注意）' : ''}`
+        : '暂无未处理的 Bug';
+    }
+    if($('#bugResolveAll')){
+      $('#bugResolveAll').disabled = !d.open;
+    }
+    $('#bugBody').innerHTML = filtered.map(e=>`
       <tr${e.resolved_at?' class="muted"':''}>
         <td class="st" data-label="级别">${e.level==='error'?'<span class="tag off">错误</span>':'<span class="tag warn">注意</span>'}</td>
         <td class="bug-src" data-label="来源">${esc(bugSource(e.source))}</td>
-        <td class="bug-content" data-label="内容"><details><summary>${esc(e.title)}</summary><pre class="mono bug-detail">${esc(e.detail||'（无堆栈）')}${e.last_path?'\n路径：'+esc(e.last_path):''}${e.key_name?'\nKey：'+esc(e.key_name):''}</pre></details></td>
+        <td class="bug-content full" data-label="内容">
+          <details>
+            <summary>${esc(e.title)}</summary>
+            <div style="position:relative">
+              <button class="btn mini ghost cp-btn" data-act="copy-trace" title="复制完整堆栈与上下文" style="position:absolute;right:8px;top:8px;padding:2px 8px;font-size:11px;z-index:1"><span data-ic="copy"></span>复制堆栈</button>
+              <pre class="mono bug-detail">${esc(e.detail||'（无堆栈）')}${e.last_path?'\n路径：'+esc(e.last_path):''}${e.key_name?'\nKey：'+esc(e.key_name):''}</pre>
+            </div>
+          </details>
+        </td>
         <td class="num" data-label="次数">${esc(e.count)}</td>
         <td class="t" data-label="首次 / 最近" title="${esc(fullTime(e.first_seen) + ' / ' + fullTime(e.last_seen))}"><span class="muted">首</span> ${esc(shortTime(e.first_seen))}<br><span class="muted">近</span> ${esc(shortTime(e.last_seen))}</td>
-        <td class="mono nw" data-label="最近错误编号">${e.last_rid?`<a href="#" data-rid="${esc(e.last_rid)}">${esc(e.last_rid)}</a>`:'—'}</td>
+        <td class="mono nw" data-label="最近错误编号">${e.last_rid?`<a href="#" data-rid="${esc(e.last_rid)}" title="点击跳转到用量日志查看对应请求">${esc(e.last_rid)}</a>`:'—'}</td>
         <td class="act" data-label="操作">${e.resolved_at?'<span class="muted">已处理</span>':`<button class="btn mini" data-bug="${esc(e.sig)}">标记已处理</button>`}</td>
-      </tr>`).join('') || '<tr><td colspan="7" class="empty-cell">暂无未处理的 Bug</td></tr>';
+      </tr>`).join('') || `<tr><td colspan="7" class="empty-cell">${$('#bugAll').checked ? '暂无任何 Bug 记录' : '暂无未处理的 Bug'}</td></tr>`;
   }catch(e){ $('#bugBody').innerHTML = '<tr><td colspan="7" class="empty-cell">读取失败</td></tr>'; }
 }
-document.addEventListener('change', e => { if(e.target.id === 'bugAll') loadBugs(); });
+document.addEventListener('change', e => {
+  if(e.target.id === 'bugAll' || e.target.id === 'bugLevel') loadBugs();
+  if(e.target.id === 'fbScoreFilter') loadFeedback();
+});
+document.addEventListener('input', e => {
+  if(e.target.id === 'fbSearch') loadFeedback();
+});
 document.addEventListener('click', async e => {
   const b = e.target.closest('[data-bug]');
-  if(b){ try{ await api('/admin/api/errors/' + encodeURIComponent(b.dataset.bug) + '/resolve', {method:'POST'}); loadBugs(); }catch(err){ toastErr(err); } return; }
+  if(b && !b.disabled){
+    b.disabled = true; b.textContent = '处理中...';
+    try{
+      await api('/admin/api/errors/' + encodeURIComponent(b.dataset.bug) + '/resolve', {method:'POST'});
+      loadBugs();
+    }catch(err){
+      b.disabled = false; b.textContent = '标记已处理';
+      toastErr(err);
+    }
+    return;
+  }
+  if(e.target.closest('[data-act="resolve-all-bugs"]')){
+    if(!bugsCache || !bugsCache.open) return;
+    if(!confirm(`确定将当前 ${bugsCache.open} 个未处理的 Bug 全部标记为已处理？`)) return;
+    try{
+      const d = await api('/admin/api/errors/resolve-all', {method:'POST'});
+      toast(`已标记 ${d.count} 个 Bug 为已处理`, 'ok');
+      loadBugs();
+    }catch(err){ toastErr(err); }
+    return;
+  }
+  const cp = e.target.closest('[data-act="copy-trace"]');
+  if(cp){
+    const pre = cp.parentElement?.querySelector('.bug-detail');
+    if(pre){ copyText(pre.textContent, '堆栈已复制'); }
+    return;
+  }
+  const fm = e.target.closest('[data-act="fb-member"]');
+  if(fm){
+    e.preventDefault();
+    await fillLogFilter();
+    $('#logFilter').value = fm.dataset.kid;
+    logRid = '';
+    logPage = 1;
+    tab('logs');
+    return;
+  }
   const r = e.target.closest('[data-rid]');
   if(r){ e.preventDefault(); logRid = r.dataset.rid; logPage = 1; tab('logs'); }
 });
@@ -1718,49 +1888,56 @@ async function loadOverview(){
         <td class="num" data-label="近 7 天">${cnt(f.week)}</td><td data-label="近 7 天产出">${esc(out(f.week))}</td></tr>`;
     }).join('');
     ovData = d; drawChart();
-    const pool = d.pool.length ? d.pool : [];
-    $('#pool').innerHTML = (!d.pool_configured)
-      ? `<span class="tag warn">未配置上游 Token —— 请点「添加 Token」</span>`
-      : pool.map(p=>{
-        const id = esc(p.token_id);
-        return `
-        <div class="token">
-          <div class="token-head">
-            <span class="mono">#${esc(p.position)} ${esc(p.token)}</span>
-            ${!p.admin_enabled ? '<span class="tag off"><i class="dot"></i>已停用</span>'
-              : p.disabled ? '<span class="tag off"><i class="dot"></i>已失效（401）</span>'
-              : p.blocked_for>0 ? `<span class="tag warn"><i class="dot"></i>限流中 ${esc(p.blocked_for)}s</span>`
-              : '<span class="tag on"><i class="dot"></i>正常</span>'}
-            ${!p.admin_enabled && p.disabled ? '<span class="tag warn">401 失效</span>' : ''}
-            <span class="sp"></span>
-            <details class="menu mx-more"><summary class="btn mini">更多 ${ic('chev')}</summary><div class="menu-pop">
-              <button type="button" data-act="tok-replace" data-id="${id}" data-label="#${esc(p.position)} ${esc(p.token)}">替换 Token</button>
-              <button type="button" ${p.admin_enabled?'class="danger"':''} data-act="up-enabled" data-id="${id}" data-on="${p.admin_enabled?0:1}">${p.admin_enabled?'停用这个账号':'启用这个账号'}</button>
-              ${d.pool.length<=1 ? '' : `<button type="button" class="danger" data-act="tok-del" data-id="${id}" data-label="#${esc(p.position)} ${esc(p.token)}">删除</button>`}
-            </div></details>
-          </div>
-          <div class="token-meta num">今日生成 ${p.images_today||0} 张 · 失败 ${p.fails} · 免费 V5 ${p.v5_used} / ${p.v5_daily_limit||'不限'} · 图片并发 ${esc(p.image_active)} / ${esc(p.image_concurrency)} · Anlas ${p.allow_anlas?'允许':'禁止'}</div>
-          <details class="mx-adj"><summary class="btn mini">${ic('edit')}调整</summary><div class="token-ctrls">
-            <div class="ctrl"><label for="token-limit-${id}">V5 日限</label>
-              <div class="line"><input id="token-limit-${id}" type="number" min="0" max="100000" step="1" value="${esc(p.v5_daily_limit)}" aria-label="第 ${esc(p.position)} 把上游 Token 的免费 V5 每日上限">
-              <button class="btn" data-act="up-v5" data-id="${id}">保存</button></div>
-              <div class="hint">0 = 不限；只限制这把上游 Token</div></div>
-            <div class="ctrl"><label for="token-concurrency-${id}">图片并发</label>
-              <div class="line"><input id="token-concurrency-${id}" type="number" min="1" max="4" step="1" value="${esc(p.image_concurrency)}" aria-label="第 ${esc(p.position)} 把上游 Token 的图片并发上限">
-              <button class="btn" data-act="up-conc" data-id="${id}">保存</button></div>
-              <div class="hint">默认 1，调高会增加上游限流风险</div></div>
-          </div></details>
-        </div>`; }).join('');
+    ovData = d; drawChart();
+    renderPool(d);
   }catch(e){ toastErr(e); }
+}
+
+function renderPool(d){
+  if(!d || $('#tab-up').hidden) return;
+  const pool = (d.pool && d.pool.length) ? d.pool : [];
+  $('#pool').innerHTML = (!d.pool_configured)
+    ? `<span class="tag warn">未配置上游 Token —— 请点「添加 Token」</span>`
+    : pool.map(p=>{
+      const id = esc(p.token_id);
+      return `
+      <div class="token">
+        <div class="token-head">
+          <span class="mono">#${esc(p.position)} ${esc(p.token)}</span>
+          ${!p.admin_enabled ? '<span class="tag off"><i class="dot"></i>已停用</span>'
+            : p.disabled ? '<span class="tag off"><i class="dot"></i>已失效（401）</span>'
+            : p.blocked_for>0 ? `<span class="tag warn"><i class="dot"></i>限流中 ${esc(p.blocked_for)}s</span>`
+            : '<span class="tag on"><i class="dot"></i>正常</span>'}
+          ${!p.admin_enabled && p.disabled ? '<span class="tag warn">401 失效</span>' : ''}
+          <span class="sp"></span>
+          <details class="menu mx-more"><summary class="btn mini">更多 ${ic('chev')}</summary><div class="menu-pop">
+            <button type="button" data-act="tok-replace" data-id="${id}" data-label="#${esc(p.position)} ${esc(p.token)}">替换 Token</button>
+            <button type="button" ${p.admin_enabled?'class="danger"':''} data-act="up-enabled" data-id="${id}" data-on="${p.admin_enabled?0:1}">${p.admin_enabled?'停用这个账号':'启用这个账号'}</button>
+            ${d.pool.length<=1 ? '' : `<button type="button" class="danger" data-act="tok-del" data-id="${id}" data-label="#${esc(p.position)} ${esc(p.token)}">删除</button>`}
+          </div></details>
+        </div>
+        <div class="token-meta num">今日生成 ${p.images_today||0} 张 · 失败 ${p.fails} · 免费 V5 ${p.v5_used} / ${p.v5_daily_limit||'不限'} · 图片并发 ${esc(p.image_active)} / ${esc(p.image_concurrency)} · Anlas ${p.allow_anlas?'允许':'禁止'}</div>
+        <details class="mx-adj"><summary class="btn mini">${ic('edit')}调整</summary><div class="token-ctrls">
+          <div class="ctrl"><label for="token-limit-${id}">V5 日限</label>
+            <div class="line"><input id="token-limit-${id}" type="number" min="0" max="100000" step="1" value="${esc(p.v5_daily_limit)}" aria-label="第 ${esc(p.position)} 把上游 Token 的免费 V5 每日上限">
+            <button class="btn" data-act="up-v5" data-id="${id}">保存</button></div>
+            <div class="hint">0 = 不限；只限制这把上游 Token</div></div>
+          <div class="ctrl"><label for="token-concurrency-${id}">图片并发</label>
+            <div class="line"><input id="token-concurrency-${id}" type="number" min="1" max="4" step="1" value="${esc(p.image_concurrency)}" aria-label="第 ${esc(p.position)} 把上游 Token 的图片并发上限">
+            <button class="btn" data-act="up-conc" data-id="${id}">保存</button></div>
+            <div class="hint">默认 1，调高会增加上游限流风险</div></div>
+        </div></details>
+      </div>`; }).join('');
 }
 
 /* 总览：一句话结论 + 要处理的事（每条带「去看看」）+ 4 个关键数字；系统状态折叠在最下面 */
 async function renderOverviewTop(d){
   const [live, bugs, bot, mods, ap] = await Promise.all([
     fetch('/public/live', {cache:'no-store'}).then(r => r.ok ? r.json() : null).catch(() => null),
-    api('/admin/api/errors').catch(() => null), api('/admin/api/discord-bot').catch(() => null),
-    api('/admin/api/modules').catch(() => null), api('/admin/api/autopilot').catch(() => null),
-    membersCache ? null : loadMembers().catch(() => null)]);
+    bugsCache ? bugsCache : api('/admin/api/errors').catch(() => null),
+    api('/admin/api/discord-bot').catch(() => null),
+    api('/admin/api/modules').catch(() => null),
+    api('/admin/api/autopilot').catch(() => null)]);
   const now = Date.now()/1000, items = [], st = statusCache || {}, up = st.upstream || {};
   const add = (lv, t, dd, go, label='去看看') => items.push({lv, t, d: dd, go, label});
   if(up.image_cooldown_seconds > 0) add('bad', `上游限流，全站暂停出图 ${up.image_cooldown_seconds} 秒`, '会自动恢复；频繁出现要降低每小时上限', 'up');
@@ -1768,29 +1945,40 @@ async function renderOverviewTop(d){
   (d.pool||[]).forEach(p => { if(p.admin_enabled && p.disabled) add('bad', `上游账号 #${p.position} 失效（401）`, 'Token 过期或被改了密码，需要替换', 'up');
     else if(p.admin_enabled && p.blocked_for > 0) add('warn', `上游账号 #${p.position} 限流中`, `约 ${p.blocked_for} 秒后恢复`, 'up'); });
   if(!d.pool_configured) add('bad', '还没有配置上游 Token', '现在所有出图请求都会失败', 'up');
-  if(bot && bot.status && !bot.status.online) add('bad', '奶妹离线', bot.status.seen_at ? '最近心跳 ' + rel(bot.status.seen_at) : '还没收到心跳', 'discord');
+  if(bot && bot.status){
+    const botOnline = !!bot.status.online;
+    if(!botOnline) add('bad', '奶妹离线', bot.status.seen_at ? '最近心跳 ' + rel(bot.status.seen_at) : '还没收到心跳', 'discord');
+    if($('#navBot')) $('#navBot').hidden = botOnline;
+  }
   if(bugs && bugs.open){ const err = bugs.errors.filter(e => !e.resolved_at && e.level === 'error').length;
     add(err ? 'bad' : 'warn', `${bugs.open} 个 Bug 没处理`, err ? `其中 ${err} 个是错误级别` : '都是「注意」级别，多数是客户端断开之类', 'bugs'); }
   const att = (membersCache||[]).filter(m => needsAttention(m, now));
   if(att.length) add('warn', `${att.length} 个成员要处理`, att.slice(0, 3).map(memberLabel).join('、') + (att.length > 3 ? ' 等' : ''), 'members:attention');
-  const badMods = mods && mods.modules ? mods.modules.filter(m => m.enabled && m.last && m.last.ok === false).length : 0;
+  const badMods = mods && mods.modules ? mods.modules.reduce((acc, m) => {
+    const L = m.last || {};
+    const badChecks = (L.checks || []).filter(c => c.level === 'bad').length;
+    return acc + (m.enabled && (L.ok === false || badChecks > 0) ? 1 : 0);
+  }, 0) : 0;
   if(badMods) add('warn', `${badMods} 个模块自检没通过`, '数据对不上或规则没生效', 'modules');
+  if($('#navMods')){ $('#navMods').hidden = !badMods; $('#navMods').textContent = badMods || ''; }
   const dk = st.disk; if(dk && dk.total_mb){ const free = dk.free_mb / dk.total_mb; if(free < 0.2) add(free < 0.1 ? 'bad' : 'warn', `磁盘只剩 ${Math.round(free*100)}%`, '原图和日志会越来越多', 'set'); }
   if((d.today.unconfirmed_anlas||0) > 0) add('warn', `失败请求可能扣了 ${d.today.unconfirmed_anlas} Anlas`, `今天 ${d.today.unconfirmed_requests} 笔，去上游页对一下官方余额`, 'up');
   if(d.anlas_budget > 0 && d.month.anlas >= d.anlas_budget * 0.8) add('warn', `本月 Anlas 用了 ${Math.round(d.month.anlas / d.anlas_budget * 100)}%`, `${fmtNum(d.month.anlas)} / ${fmtNum(d.anlas_budget)}`, 'limits');
   const g = live && live.guard || {}, q = live && live.quota || {};
-  const active = (membersCache||[]).filter(m => !m.is_admin && !m.is_test && m.today.requests > 0).length;
+  const active = d.today && d.today.active_members != null ? d.today.active_members
+    : (membersCache||[]).filter(m => !m.is_admin && !m.is_test && m.today.requests > 0).length;
   const serious = items.filter(x => x.lv !== 'info').length;
   const head = serious ? `有 ${serious} 件事要处理` : '一切正常';
   const tone = items.some(x => x.lv === 'bad') ? 'bad' : serious ? 'warn' : 'ok';
   $('#ovVerdict').dataset.tone = tone;
-  $('#ovVerdict').innerHTML = `<div class="ovv-h"><i aria-hidden="true"></i><div><h2>${esc(head)}</h2></div></div>
+  $('#ovVerdict').innerHTML = `<div class="ovv-h"><i aria-hidden="true"></i><div><h2>${esc(head)}</h2></div><button class="btn mini ghost" type="button" data-act="ov-refresh" title="立即刷新数据" style="margin-left:auto">${ic('refresh')} 刷新</button></div>
     ${items.length ? `<div class="issues">${items.map(x => `<div class="issue ${x.lv}"><div class="is-t"><b>${esc(x.t)}</b><span>${esc(x.d||'')}</span></div><div class="is-a">${
       x.go.startsWith('act:') ? `<button class="btn mini" type="button" data-act="${esc(x.go.slice(4))}">${esc(x.label)}</button>` : `<button class="btn mini" type="button" data-act="ov-go" data-go="${esc(x.go)}">${esc(x.label)}</button>`}</div></div>`).join('')}</div>` : ''}`;
   const reqs = (d.feature_usage||[]).reduce((a, f) => ({rej: a.rej + (f.today.rejected||0), err: a.err + (f.today.error||0)}), {rej:0, err:0});
-  const members = (membersCache||[]).filter(m => !m.is_admin && !m.is_test).length;
+  const members = d.members_total != null ? d.members_total : (membersCache||[]).filter(m => !m.is_admin && !m.is_test).length;
+  const v5Limit = d.v5_limit || q.v5_cap;
   $('#ovCards').innerHTML =
-    statCard('今日出图（全部）', fmtNum(d.today.images), '张', `成员 ${fmtNum(d.today.member_images)} · 站长 / 测试 ${fmtNum(d.today.images - d.today.member_images)} · V5 ${fmtNum(d.today.v5)}${q.v5_cap ? ' / ' + fmtNum(q.v5_cap) : ''}`) +
+    statCard('今日出图（全部）', fmtNum(d.today.images), '张', `成员 ${fmtNum(d.today.member_images)} · 站长 / 测试 ${fmtNum(d.today.images - d.today.member_images)} · V5 ${fmtNum(d.today.v5)}${v5Limit ? ' / ' + fmtNum(v5Limit) : ''}`) +
     statCard('今天在用的成员', active, members ? '/ ' + members : '', `有效 Key ${d.keys_active} / ${d.keys_total}`) +
     statCard('近 60 分钟出图', g.hour ?? '—', g.hour_cap ? '/ ' + g.hour_cap : '', g.hour_cap && g.hour >= g.hour_cap ? '已到上限，新请求要等几分钟' : '每小时上限用来保护上游账号', g.hour_cap && g.hour >= g.hour_cap * 0.95 ? 'hot' : '') +
     statCard('今日被拒 / 失败', fmtNum(reqs.rej), '/ ' + fmtNum(reqs.err), `本月 Anlas ${fmtNum(d.month.anlas)}${d.anlas_budget > 0 ? ' / ' + fmtNum(d.anlas_budget) : ''}`);
@@ -1804,14 +1992,17 @@ async function loadStatusCodes(fresh = true){
   document.querySelectorAll('[data-sc]').forEach(b => b.classList.toggle('on', String(b.dataset.sc) === String(scHours)));
   document.querySelectorAll('[data-scv]').forEach(b => b.classList.toggle('on', b.dataset.scv === scView));
   const hours = scHours, seq = ++scSeq;
-  if(scCache[hours]) renderStatusCodes(scCache[hours]);
-  if(!fresh && scCache[hours]){ $('#scList').classList.remove('busy'); return; }
+  const now = Date.now();
+  const cached = scCache[hours];
+  const freshCache = cached && (now - cached._at < 30000);
+  if(cached) renderStatusCodes(cached.data);
+  if(!fresh && freshCache){ $('#scList').classList.remove('busy'); return; }
   $('#scList').classList.add('busy');
   try{
     const d = await api('/admin/api/status-codes?hours=' + encodeURIComponent(hours));
-    scCache[hours] = d;
+    scCache[hours] = {_at: Date.now(), data: d};
     if(seq === scSeq) renderStatusCodes(d);       /* 连点时只画最后一次 */
-  }catch(e){ if(seq === scSeq && !scCache[hours]) $('#scList').innerHTML = '<div class="muted sm">读取失败</div>'; }
+  }catch(e){ if(seq === scSeq && (!cached || now - cached._at >= 30000)) $('#scList').innerHTML = '<div class="muted sm">读取失败</div>'; }
   finally{ if(seq === scSeq) $('#scList').classList.remove('busy'); }
 }
 function renderStatusCodes(d){
@@ -1824,8 +2015,10 @@ function renderStatusCodes(d){
            : `成员接口共 ${fmtNum(total)} 次请求，成功 ${ok}%（这里的 429 / 402 等是网关返回的，切到「NovelAI→网关」看上游）`;
     document.querySelectorAll('[data-scv]').forEach(b => b.classList.toggle('on', b.dataset.scv === scView));
     $('#scList').innerHTML = codes.length ? codes.map(c => { const k = 'c' + (c.code ? String(c.code)[0] : '4');
+      const pctLabel = (c.n > 0 && c.pct === 0) ? '<0.1%' : (c.pct + '%');
+      const barWidth = c.n > 0 ? Math.max(1, c.pct) : 0;
       return `<div class="sc-row"><span class="sc-pill ${k}">${c.code || '未发出'}</span><div class="sc-main"><span class="sc-n">${fmtNum(c.n)} 次</span><span class="sc-m">${esc(c.meaning)}</span></div>
-        <span class="sc-pct">${c.pct}%</span><div class="sc-bar"><i class="${k}" style="width:${c.pct}%"></i></div></div>`; }).join('')
+        <span class="sc-pct">${pctLabel}</span><div class="sc-bar"><i class="${k}" style="width:${barWidth}%${c.n > 0 ? ';min-width:3px' : ''}"></i></div></div>`; }).join('')
       : '<div class="muted sm">还没有数据</div>';
   }
 }
@@ -1892,26 +2085,30 @@ async function sendTestAlert(btn){
   }finally{ btn.disabled = false; }
 }
 
-async function saveUpstreamV5Limit(tokenId){
+async function saveUpstreamV5Limit(tokenId, btn){
   const input = document.getElementById('token-limit-' + tokenId);
   const limit = Number(input.value);
   if(!Number.isInteger(limit) || limit<0 || limit>100000){ toast('请输入 0～100000 的整数', 'err'); return; }
+  if(btn){ btn.disabled = true; btn.textContent = '保存中…'; }
   try{
     await api('/admin/api/upstream-tokens/' + tokenId + '/v5-limit', {
       method:'PUT', body:JSON.stringify({v5_daily_limit:limit})});
     toast('上游 V5 日限已保存', 'ok');
     loadOverview();
   }catch(e){ toastErr(e); }
+  finally{ if(btn){ btn.disabled = false; btn.textContent = '保存'; } }
 }
-async function saveUpstreamImageConcurrency(tokenId){
+async function saveUpstreamImageConcurrency(tokenId, btn){
   const limit = Number(document.getElementById('token-concurrency-' + tokenId).value);
   if(!Number.isInteger(limit) || limit<1 || limit>4){ toast('请输入 1～4 的整数', 'err'); return; }
+  if(btn){ btn.disabled = true; btn.textContent = '保存中…'; }
   try{
     await api('/admin/api/upstream-tokens/' + tokenId + '/image-concurrency', {
       method:'PUT', body:JSON.stringify({image_concurrency:limit})});
     toast('上游图片并发已保存', 'ok');
     loadOverview();
   }catch(e){ toastErr(e); }
+  finally{ if(btn){ btn.disabled = false; btn.textContent = '保存'; } }
 }
 async function setUpstreamEnabled(tokenId, enabled){
   const others = ((ovData && ovData.pool) || []).filter(p => p.token_id !== tokenId && p.admin_enabled && !p.disabled).length;
@@ -2406,8 +2603,9 @@ function fillMemberFilter(){
   sel.innerHTML = '<option value="">全部成员</option>' + (membersCache||[]).map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('');
   sel.value = cur;
 }
-function viewAudit(id){
+async function viewAudit(id){
   auditPage = 1;
+  if(!membersCache){ await ensureMembers(); }
   fillMemberFilter();
   $('#auditFilter').value = String(id);
   const xb = $('#auditExport'); if(xb) xb.disabled = !$('#auditFilter').value;   // 程序设值不触发 change，要手动同步
@@ -2477,12 +2675,21 @@ async function loadAudit(){
   }catch(e){ toastErr(e); grid.innerHTML = ''; }
 }
 let lbId = null;
+function closeLightbox(){
+  closeOverlay('#lightbox');
+  $('#lbImg').removeAttribute('src');
+}
 function openLightbox(id){
   const m = auditPrompts.get(id) || {}, it = m.it || {}, pr = m.pr || {};
   lbId = id;
   const pic = it.has_image || it.has_thumb;
   $('#lbImg').hidden = !pic; $('#lbNone').hidden = !!pic;
-  if(pic) $('#lbImg').src = `/admin/api/audit/${Number(id)}/${it.has_image ? 'image' : 'thumb'}`; else $('#lbImg').removeAttribute('src');
+  if(pic){
+    $('#lbImg').src = `/admin/api/audit/${Number(id)}/${it.has_image ? 'image' : 'thumb'}`;
+  } else {
+    $('#lbImg').removeAttribute('src');
+    $('#lbNone').textContent = (it.status && it.status !== 'ok') ? '生成未成功（无图）' : '未记录原图';
+  }
   const sz = (pr.width && pr.height) ? `${pr.width}×${pr.height}` : '';
   const params = [pr.seed != null ? `种子 ${pr.seed}` : '', pr.sampler || '', pr.steps ? pr.steps + ' 步' : '', pr.scale != null ? 'CFG ' + pr.scale : '', sz].filter(Boolean).join(' · ');
   const blk = (title, text, act) => text ? `<div class="blk"><div class="blk-h"><span>${title}</span>${act ? `<button class="btn mini" data-act="${act}" data-id="${Number(id)}">${ic('copy')}复制</button>` : ''}</div><div class="txt">${esc(text)}</div></div>` : '';
@@ -2519,6 +2726,7 @@ function pager(el, d, kind, sizes){
 const FEAT = {image:['文生图','文生图'], upscale:['放大','放大图片'], augment:['导演工具','线稿、上色等导演工具'],
   vibe:['Vibe 编码','Vibe Transfer 编码'], tags:['标签补全','提示词标签补全'], text:['文本 / 聊天','文本生成与 OpenAI 兼容聊天'], voice:['语音合成','文字转语音']};
 const FEAT_NAMES = Object.keys(FEAT);
+const ANLAS_FEATURES = {vibe: '每次参考图约 2 Anlas', upscale: '按图片尺寸扣除 Anlas', augment: '按图片尺寸扣除 Anlas'};
 /* 说明和名称说的是同一件事（「放大 / 放大图片」）就不重复显示 */
 function featDescUseful(n){ const l = featLabel(n) + FEAT[n][0], d = FEAT[n][1].replace(/[与等的、\s]/g, ''); return [...d].filter(c => !l.includes(c)).length > 2; }
 function featLabel(n){ return (opsData && opsData.features.labels[n]) || FEAT[n][0]; }
@@ -2528,17 +2736,51 @@ function featChips(list){
   return list.map(n=>`<span class="tag mini info">${esc((FEAT[n]||[n])[0])}</span>`).join('');
 }
 function featChecks(list, name, disabled){
-  return FEAT_NAMES.map(n=>`<label class="check"><input type="checkbox" data-fname="${name}" value="${n}" ${list&&list.includes(n)?'checked':''}><span>${esc(FEAT[n][0])}</span></label>`).join('');
+  const g = (opsData && opsData.features && opsData.features.global) || {};
+  return FEAT_NAMES.map(n=>{
+    const off = g[n] === false;
+    return `<label class="check"><input type="checkbox" data-fname="${name}" value="${n}" ${list&&list.includes(n)?'checked':''}><span>${esc(FEAT[n][0])}${off ? ' <span class="tag mini off">全局已关</span>' : ''}</span></label>`;
+  }).join('');
+}
+function updateRegFeatBadges(){
+  const g = (opsData && opsData.features && opsData.features.global) || {};
+  $$('#reg_feat_list label.check').forEach(lbl=>{
+    const inp = lbl.querySelector('input');
+    if(!inp) return;
+    const n = inp.value;
+    const oldTag = lbl.querySelector('.tag.mini.off');
+    if(g[n] === false){
+      if(!oldTag){
+        const sp = lbl.querySelector('span');
+        if(sp) sp.insertAdjacentHTML('beforeend', ' <span class="tag mini off">全局已关</span>');
+      }
+    } else if(oldTag){
+      oldTag.remove();
+    }
+  });
+}
+function setAllRegFeats(checked){
+  $$('#reg_feat_list input[type=checkbox]').forEach(c => { c.checked = checked; });
 }
 function sameFeat(a,b){ return (a==null||b==null) ? a==b : [...a].sort().join()===[...b].sort().join(); }
 function readFeatMode(modeName, listSel){
-  const mode = document.querySelector(`input[name="${modeName}"]:checked`).value;
+  const mode = document.querySelector(`input[name="${modeName}"]:checked`)?.value;
   if(mode==='legacy') return null;
   return $$(`${listSel} input[type=checkbox]`).filter(c=>c.checked).map(c=>c.value);
 }
 function syncFeatMode(modeName, listSel){
-  const custom = document.querySelector(`input[name="${modeName}"]:checked`).value==='custom';
-  $(listSel).classList.toggle('off', !custom);
+  const custom = document.querySelector(`input[name="${modeName}"]:checked`)?.value==='custom';
+  const box = $(listSel);
+  if(box){
+    box.classList.toggle('off', !custom);
+    if(custom){
+      const cbs = box.querySelectorAll('input[type=checkbox]');
+      const anyChecked = Array.from(cbs).some(c => c.checked);
+      if(!anyChecked){
+        cbs.forEach(c => { c.checked = true; });
+      }
+    }
+  }
 }
 
 /* ---------- ops page ---------- */
@@ -2554,16 +2796,28 @@ async function loadOps(){
 }
 function renderOpsFeatures(){
   const g = opsData.features.global;
-  $('#opsFeatures').innerHTML = FEAT_NAMES.map(n=>`<div class="feat-row"><div class="body"><div class="t">${esc(featLabel(n))}</div>${featDescUseful(n) ? `<div class="d">${esc(FEAT[n][1])}</div>` : ''}</div>
-    <label class="switch"><input type="checkbox" data-feat="${n}" ${g[n]?'checked':''} aria-label="${esc(featLabel(n))}"><span></span></label></div>`).join('')
-;
+  $('#opsFeatures').innerHTML = FEAT_NAMES.map(n=>{
+    const anlas = ANLAS_FEATURES[n];
+    return `<div class="feat-row"><div class="body">
+      <div class="t">${esc(featLabel(n))}${anlas ? ` <span class="tag mini warn" title="此功能消耗上游官方付费点数（Anlas）">消耗 Anlas</span>` : ''}</div>
+      <div class="d">${featDescUseful(n) ? esc(FEAT[n][1]) : ''}${anlas ? (featDescUseful(n) ? ' · ' : '') + esc(anlas) : ''}</div>
+    </div>
+    <label class="switch"><input type="checkbox" data-feat="${n}" ${g[n]?'checked':''} aria-label="${esc(featLabel(n))}"><span></span></label></div>`;
+  }).join('');
 }
 async function toggleFeature(input){
   const name = input.dataset.feat, val = input.checked;
+  if(val && ANLAS_FEATURES[name]){
+    if(!await askConfirm(`开启「${featLabel(name)}」将允许成员使用消耗官方 Anlas（付费点数）的功能，可能会消耗您的上游付费点数余额。\n确定开启？`, '确认开启')){
+      input.checked = false;
+      return;
+    }
+  }
   input.disabled = true;
   try{
     opsData = await api('/admin/api/ops/features', {method:'PUT', body:JSON.stringify({flags:{[name]:val}})});
     toast(`${featLabel(name)}已${val?'开启':'关闭'}`, 'ok');
+    updateRegFeatBadges();
   }catch(e){ input.checked = !val; toastErr(e); }
   finally{ input.disabled = false; }
 }
@@ -2573,7 +2827,7 @@ function renderOpsReg(){
   const cls = r.max_users>0 && r.active>=r.max_users ? 'bad' : pct>=80 ? 'warn' : '';
   // 动态额度开启时，这三项由算法接管：直接禁用
   const algo = quotaAlgoOn ? ' disabled title="由「额度与保护 › 动态额度」自动设置"' : '';
-  const algoHint = quotaAlgoOn ? '由动态额度设置' : '0 = 不限';
+  const algoHint = quotaAlgoOn ? '由 <a href="javascript:tab(\'limits\')">动态额度</a> 自动管理' : '0 = 不限';
   $('#opsReg').innerHTML = `
     ${r.configured?'':'<div class="notice-box">Discord 机器人尚未配置，以下设置会保存，但在机器人启用后才会生效。</div>'}
     ${r.v5_capacity&&r.v5_capacity.short?`<div class="notice-box warn">${ic('alert')}${esc(r.v5_capacity.message)}</div>`:''}
@@ -2581,7 +2835,21 @@ function renderOpsReg(){
       <div class="body"><div class="t">${r.open?'可领取':'未开放'}</div><div class="hint" style="margin:0">${r.open?'成员可通过 Discord /register 自助领取 Key':'新成员暂时无法领取 Key'}${r.reset_at?` · 重置时间 ${esc(r.reset_at)}`:''}</div></div>
       <div style="min-width:200px;flex:1;max-width:280px"><div class="quota"><div class="row"><span>名额</span><span class="num"><b>${esc(r.active)}</b> / ${r.max_users>0?esc(r.max_users):'不限'}</span></div>
       <div class="bar ${cls}"><i style="width:${pct}%"></i></div></div></div></div>
-    ${(r.waitlist||[]).length ? `<div class="notice-box">候补 ${r.waitlist.length} 人。名额满时 /register 自动排队；有空位后按顺序保留名额 24 小时，并在公告频道通知（不私信）。<br>${r.waitlist.map((w,i)=>`${i+1}. ${esc(w.name||('Discord '+w.discord_id))}${w.invited_at?'（已邀请，'+esc(fullTime(w.invited_at))+'）':''}`).join('<br>')}</div>` : ''}
+    ${(r.waitlist||[]).length ? `
+      <details class="notice-box" style="padding:10px 14px" ${r.waitlist.length <= 3 ? 'open' : ''}>
+        <summary style="cursor:pointer;font-weight:600;display:flex;align-items:center;justify-content:space-between">
+          <span>${ic('users')} 候补排队中：共 ${r.waitlist.length} 人</span>
+          <span class="muted sm" style="font-weight:normal">名额满时 /register 自动排队 · 点击展开/收起</span>
+        </summary>
+        <div class="hint" style="margin:6px 0 8px">名额满时 /register 自动排队；有空位后按顺序保留名额 24 小时，并在公告频道通知（不私信）。</div>
+        <div style="max-height:160px;overflow-y:auto;border-top:1px solid var(--border);padding-top:6px">
+          ${r.waitlist.map((w,i)=>`<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12.5px">
+            <span>${i+1}. <b>${esc(w.name||('Discord '+w.discord_id))}</b></span>
+            <span class="${w.invited_at?'ok':'muted'}">${w.invited_at ? '已邀请（' + esc(fullTime(w.invited_at)) + '）' : (w.joined_at ? '排队于 ' + esc(rel(w.joined_at)) : '排队中')}</span>
+          </div>`).join('')}
+        </div>
+      </details>
+    ` : ''}
     <div class="cols-3">
       <div class="field"><label for="reg_max">名额上限</label><input id="reg_max" type="number" min="0" value="${esc(r.max_users)}"><div class="hint">0 = 不限</div></div>
       <div class="field"><label for="reg_exp">有效期（天）</label><input id="reg_exp" type="number" min="0" value="${esc(r.expires_days)}"><div class="hint">0 = 永久</div></div>
@@ -2595,8 +2863,11 @@ function renderOpsReg(){
       <input id="reg_role_id" inputmode="numeric" maxlength="21" placeholder="身份组 ID" aria-label="限定身份组：身份组 ID" value="${esc(r.role_id||'')}">
       <input id="reg_role_note" maxlength="60" placeholder="显示名，如「创作者」" aria-label="限定身份组：显示名" value="${esc(r.role_note||'')}">
     </div></fieldset>
-    <label>新成员默认开通的功能</label>
-    <div class="opt-group">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px">
+      <label style="margin:0">新成员默认开通的功能</label>
+      <div class="tools-sm"><button type="button" class="btn mini ghost" data-act="reg-feat-all">全选</button><button type="button" class="btn mini ghost" data-act="reg-feat-none">清空</button></div>
+    </div>
+    <div class="opt-group" style="margin-top:6px">
       <label class="check"><input type="radio" name="reg_feat_mode" value="legacy" ${r.features==null?'checked':''}><span>全部已开放功能（含以后新开放的）</span></label>
       <label class="check"><input type="radio" name="reg_feat_mode" value="custom" ${r.features!=null?'checked':''}><span>仅选中的功能</span></label>
     </div>
@@ -2615,34 +2886,54 @@ async function toggleRegOpen(input){
   try{ await putReg({open:val}, val?'已开放领 Key':'已关闭领 Key'); }
   catch(e){ input.checked = !val; input.disabled = false; toastErr(e); }
 }
-async function saveReg(){
+async function saveReg(btn){
   let vals;
   try{
-    vals = {max_users:readNum('reg_max','名额上限',{max:1000}), expires_days:readNum('reg_exp','有效期',{max:3650}),
-            daily_images:readNum('reg_img','每日图片',{max:100000}), daily_v5:readNum('reg_v5','每日 V5',{max:100000})};
+    vals = {max_users:readNum('reg_max','名额上限',{max:1000}), expires_days:readNum('reg_exp','有效期',{max:3650})};
+    if(!quotaAlgoOn){
+      vals.daily_images = readNum('reg_img','每日图片',{max:100000});
+      vals.daily_v5 = readNum('reg_v5','每日 V5',{max:100000});
+    }
   }catch(e){ toastErr(e); return; }
   const role = {role_guild:$('#reg_role_guild').value.trim(), role_id:$('#reg_role_id').value.trim(), role_note:$('#reg_role_note').value.trim()};
+  if(Boolean(role.role_guild) !== Boolean(role.role_id)){
+    toast('限定身份组的服务器 ID 与身份组 ID 必须同时填写（或同时留空）', 'err');
+    if(!role.role_guild) $('#reg_role_guild').focus(); else $('#reg_role_id').focus();
+    return;
+  }
   for(const [k, label] of [['role_guild','服务器 ID'],['role_id','身份组 ID']]){
     if(role[k] && !/^\d{15,21}$/.test(role[k])){ toast(label + '应为 Discord 数字 ID，或留空', 'err'); $('#reg_'+k).focus(); return; }
   }
-  try{ await putReg({...vals, ...role, image_scope:$('#reg_scope').value, features:readFeatMode('reg_feat_mode','#reg_feat_list')}, '开放设置已保存'); }
-  catch(e){ toastErr(e); }
+  const payload = {...vals, ...role, features:readFeatMode('reg_feat_mode','#reg_feat_list')};
+  if(!quotaAlgoOn){
+    payload.image_scope = $('#reg_scope').value;
+  }
+  const saveBtn = btn || document.querySelector('[data-act="save-reg"]');
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = '保存中…'; }
+  try{
+    await putReg(payload, '开放设置已保存');
+  }catch(e){
+    toastErr(e);
+  }finally{
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = '保存'; }
+  }
 }
 async function purgeImages(){
   if(!await askConfirm('确定清空服务器上的全部原图？\n只删原图，提示词和参数保留。删掉后成员就打包不到了，不能恢复。', '清空')) return;
   try{
     const d = await api('/admin/api/audit/purge-images', {method:'POST', body:JSON.stringify({confirm:'清空'})});
     toast(`已清空 ${d.purged} 张原图`, 'ok');
-    opsData = await api('/admin/api/ops'); renderAuditSettings();
+    opsData = await api('/admin/api/ops'); renderAuditSettings(); loadAudit();
   }catch(e){ toastErr(e); }
 }
 
 async function saveAudit(){
-  const days = Number($('#aud_days').value), cap = Number($('#aud_img_cap').value);
+  const days = Number($('#aud_days').value), cap = Number($('#aud_img_cap').value), keepH = Number($('#aud_keep_h').value);
   if(!Number.isInteger(days) || days<0 || days>3650){ toast('提示词保留天数须为 0～3650 的整数（0 = 长期保留）', 'err'); return; }
   if(!Number.isInteger(cap) || cap<0 || cap>500000){ toast('原图容量上限须为 0～500000 的整数 MB（0 = 不限）', 'err'); return; }
+  if(!Number.isInteger(keepH) || keepH<0 || keepH>8760){ toast('原图保存小时数须为 0～8760 的整数（0 = 只按容量上限删）', 'err'); return; }
   try{
-    opsData = await api('/admin/api/ops/audit', {method:'PUT', body:JSON.stringify({prompts:$('#aud_prompts').checked, thumbs:$('#aud_thumbs').checked, retention_days:days, image_cap_mb:cap, image_keep_hours:Number($('#aud_keep_h').value)||0, member_download:$('#aud_download').checked, notify:$('#aud_notify').checked})});
+    opsData = await api('/admin/api/ops/audit', {method:'PUT', body:JSON.stringify({prompts:$('#aud_prompts').checked, thumbs:$('#aud_thumbs').checked, retention_days:days, image_cap_mb:cap, image_keep_hours:keepH, member_download:$('#aud_download').checked, notify:$('#aud_notify').checked})});
     statusCache = null;
     toast('生成记录设置已保存', 'ok'); auditSetOpen = null; renderAuditSettings(); loadAudit();
   }catch(e){ toastErr(e); }
@@ -3039,7 +3330,7 @@ async function loadLogs(){
     const kf = $('#logFilter').value, ff = $('#logFeature').value, ht = $('#logHideTest').checked && !kf && !logRid;
     $('#logRid').value = logRid;
     const d = await api('/admin/api/logs?' + (kf?`key_id=${encodeURIComponent(kf)}&`:'') + (logRid?`rid=${encodeURIComponent(logRid)}&`:'') +
-                        (ff?`feature=${encodeURIComponent(ff)}&`:'') + (ht?'hide_test=true&':'') + `page=${logPage}`);
+                        (ff?`feature=${encodeURIComponent(ff)}&`:'') + (ht?'hide_test=true&':'') + `per_page=${logPer}&page=${logPage}`);
     logPage = d.page;
     $('#logBody').innerHTML = d.logs.map(l=>{
       const cost = [l.images ? `<span class="nw">${esc(l.images)} 张</span>` : '', l.anlas ? `<span class="nw">${esc(+(+l.anlas).toFixed(2))} Anlas</span>` : '',
@@ -3056,7 +3347,7 @@ async function loadLogs(){
         <td class="num cost" data-label="消耗">${cost?`<span>${cost}</span>`:''}</td>
         <td class="muted note" data-label="备注">${esc(l.detail)}${l.rid?`<div class="mono" style="font-size:11px" title="错误编号（响应头 X-Request-Id）">#${esc(l.rid)}</div>`:''}</td>
       </tr>`; }).join('') || '<tr><td colspan="8" class="empty-cell">暂无记录</td></tr>';
-    pager($('#logPager'), d, 'log');
+    pager($('#logPager'), d, 'log', [20, 50, 100]);
   }catch(e){ toastErr(e); }
 }
 let actionPage = 1, actionKindsLoaded = false;
@@ -3064,13 +3355,13 @@ let actionPage = 1, actionKindsLoaded = false;
 const ACTION_ALIAS = {'POST /gift':'奖励成员', 'PUT /ops/economy':'节约模式（已下线）', '节约模式':'节约模式（已下线）',
   'POST /keys/invite':'新建邀请 Key', '创建邀请 Key':'新建邀请 Key', '网页登录':'Key 登录网页',
   '领取 Key 失败（授权回调）':'领取 Key 失败', '领取 Key 失败（/register）':'领取 Key 失败', '领取 Key（/register 直发）':'领取 Key',
-  '移除成员标签':'成员标签', '取消候补':'候补', '邀请候补':'候补', '候补邀请过期':'候补', '关闭 Bug':'处理 Bug', '标记 Bug 已处理':'处理 Bug',
-  '调整名额上限':'领 Key 名额', '动态额度调整':'动态额度', '动态额度应用':'动态额度'};
+  '移除成员标签':'成员标签', '取消候补':'候补', '邀请候补':'候补', '候补邀请过期':'候补', '关闭 Bug':'处理 Bug', '标记 Bug 已处理':'处理 Bug', '全部标记 Bug 已处理':'处理 Bug',
+  '调整名额上限':'领 Key 名额', '动态额度调整':'动态额度', '动态额度应用':'动态额度', '全站重置 Key':'全站杀头重置'};
 const ACTION_GROUPS = [
   ['成员', ['领取 Key', '领取 Key 失败', 'Key 登录网页', '成员重置 Key（/resetkey）', '成员确认网络情况', '提交反馈（/反馈）', '成员使用重置券', '候补']],
-  ['后台 · 成员与 Key', ['新建 Key', '新建邀请 Key', '修改 Key', '删除 Key', '重置今日额度', '奖励成员', '成员标签', '待查：疑似小号', '私信成员']],
-  ['后台 · 设置', ['修改开放注册设置', '领 Key 名额', '修改账号保护与排队设置', '修改生成记录设置', '自动驾驶模式', '处理 Bug', '清理日志', '导出客户端日志', '登录后台', '节约模式（已下线）']],
-  ['系统自动', ['动态额度', 'Anlas 自动分配', 'Anlas 核对', '自动驾驶（观察）', '自动调整：每小时上限']],
+  ['后台 · 成员与 Key', ['新建 Key', '新建邀请 Key', '修改 Key', '删除 Key', '重置今日额度', '奖励成员', '成员标签', '待查：疑似小号', '私信成员', '手动绑定 Discord', '修改账号身份组', '添加黑名单', '移出黑名单', '全站杀头重置']],
+  ['后台 · 设置', ['修改开放注册设置', '领 Key 名额', '修改账号保护与排队设置', '修改生成记录设置', '自动驾驶模式', '处理 Bug', '清理日志', '导出客户端日志', '导出成员反馈', '清空原图', '登录后台', '节约模式（已下线）']],
+  ['系统自动', ['动态额度', 'Anlas 自动分配', 'Anlas 核对', '自动驾驶（观察）', '自动调整：每小时上限', '退群回收 Key', 'Key 到期释放名额', '闲置回收 Key', '闲置回收前提醒', '每日清空自助注册', '闲置计时重置']],
 ];
 const actionLabel = a => ACTION_ALIAS[a] || a;
 function actionKindOptions(kinds){
@@ -3113,24 +3404,43 @@ async function loadSettings(){
   loadGuard(); loadAnlasPool();
   try{
     const [a, s, o, r] = await Promise.all([
-      api('/admin/api/announcement'), api('/admin/api/settings'),
-      api('/admin/api/overview'), api('/admin/api/runtime-limits')]);
-    $('#announce').value = a.html || '';
-    $('#s_budget').value = s.global_monthly_anlas;
-    $('#s_v5').value = s.global_daily_v5;
+      api('/admin/api/announcement').catch(()=>({})), api('/admin/api/settings'),
+      api('/admin/api/overview').catch(()=>({})), api('/admin/api/runtime-limits')]);
+    if($('#announce')) $('#announce').value = a.html || '';
+    if($('#s_budget')) $('#s_budget').value = s.global_monthly_anlas;
+    if($('#s_v5')) $('#s_v5').value = s.global_daily_v5;
     showV5Cap(s.v5_capacity);
-    $('#s_v5_alert').value = s.v5_alert_threshold;
+    if($('#s_v5_alert')) $('#s_v5_alert').value = s.v5_alert_threshold;
     for(const name of ['queue_timeout','key_image_min_interval','image_min_interval','image_429_cooldown_seconds']){
-      $('#r_'+name).value = r[name];
+      if($('#r_'+name)) $('#r_'+name).value = r[name];
     }
-    $('#fs-runtime').textContent = `每张间隔 ${r.image_min_interval} 秒 · 排队最多等 ${r.queue_timeout} 秒 · 429 后冷却 ${r.image_429_cooldown_seconds} 秒`;
-    $('#fs-budget').textContent = `每月 Anlas ${s.global_monthly_anlas > 0 ? s.global_monthly_anlas : '不限'} · 每天 V5 ${s.global_daily_v5 > 0 ? s.global_daily_v5 : '不限'} · 余量低于 ${s.v5_alert_threshold}% 告警`;
-    $('#cfgInfo').innerHTML =
-      `<dt>上游令牌池</dt><dd class="mono">${o.pool_configured ? o.pool.map(p=>esc(p.token)).join(', ') : '未配置（在「上游」页添加 Token）'}</dd>` +
-      `<dt>本月 Anlas</dt><dd>${esc(o.month.anlas)} / 预算 ${o.anlas_budget>0?esc(o.anlas_budget):'∞'}</dd>` +
-      `<dt>今日请求</dt><dd>${esc(o.today.requests)}</dd>` +
-      `<dt>今日图片</dt><dd>${esc(o.today.images)}</dd>` +
-      `<dt>今日 Anlas</dt><dd>${esc(o.today.anlas)}</dd>`;
+    if($('#fs-runtime')) $('#fs-runtime').textContent = `每张间隔 ${r.image_min_interval} 秒 · 排队最多等 ${r.queue_timeout} 秒 · 429 后冷却 ${r.image_429_cooldown_seconds} 秒`;
+    if($('#fs-budget')) $('#fs-budget').textContent = `每月 Anlas ${s.global_monthly_anlas > 0 ? s.global_monthly_anlas : '不限'} · 每天 V5 ${s.global_daily_v5 > 0 ? s.global_daily_v5 : '不限'} · 余量低于 ${s.v5_alert_threshold}% 告警`;
+    if($('#cfgInfo') && o.month){
+      const st = statusCache || {};
+      const dk = (st.disk && st.disk.total_mb) ? `${Math.round(st.disk.free_mb/1024)} GB / ${Math.round(st.disk.total_mb/1024)} GB (${Math.round(st.disk.free_mb/st.disk.total_mb*100)}%)` : '—';
+      const since = o.log_since ? fullTime(o.log_since) : '—';
+      $('#cfgInfo').innerHTML =
+        `<dt>上游令牌池</dt><dd class="mono">${o.pool_configured ? o.pool.map(p=>esc(p.token)).join(', ') : '未配置（在「上游」页添加 Token）'}</dd>` +
+        `<dt>本月 Anlas</dt><dd>${esc(o.month.anlas)} / 预算 ${o.anlas_budget>0?esc(o.anlas_budget):'∞'}</dd>` +
+        `<dt>今日用量</dt><dd>${esc(o.today.requests)} 次请求 · 出图 ${esc(o.today.images)} 张 · 消耗 Anlas ${esc(o.today.anlas)}</dd>` +
+        `<dt>磁盘可用空间</dt><dd>${esc(dk)}</dd>` +
+        `<dt>系统记录起点</dt><dd class="muted">${esc(since)}</dd>`;
+    }
+    const btnPrev = $('#btnPreviewAnnounce');
+    if(btnPrev && !btnPrev.dataset.bound){
+      btnPrev.dataset.bound = '1';
+      btnPrev.addEventListener('click', () => {
+        const box = $('#announcePreviewBox');
+        if(!box) return;
+        const willShow = box.hidden;
+        box.hidden = !willShow;
+        btnPrev.textContent = willShow ? '收起预览' : '预览效果';
+        if(willShow){
+          $('#announcePreview').innerHTML = $('#announce').value || '<span class="muted">（公告内容为空）</span>';
+        }
+      });
+    }
   }catch(e){ toastErr(e); }
 }
 async function changePassword(){
@@ -3171,7 +3481,9 @@ function showV5Cap(c){
   box.textContent = c && c.short ? c.message : '';
   box.classList.toggle('warn', !!(c && c.short));
 }
-async function saveBudget(){
+async function saveBudget(btn){
+  const saveBtn = btn || document.querySelector('[data-act="save-budget"]');
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = '保存中…'; }
   try{
     const d = await api('/admin/api/settings', {method:'PUT', body: JSON.stringify({
       global_monthly_anlas: readNum('s_budget', '全站月度 Anlas 预算', {max:1000000, int:false}),
@@ -3181,7 +3493,11 @@ async function saveBudget(){
     toast('已保存：月预算 ' + d.global_monthly_anlas + ' Anlas，V5 日限 ' + d.global_daily_v5 + ' 张', 'ok');
     showV5Cap(d.v5_capacity);
     loadAllowance();
+    loadQuotaAlgo();
   }catch(e){ toastErr(e); }
+  finally{
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = '保存预算'; }
+  }
 }
 let guardData = null;
 async function loadGuard(){
@@ -3233,25 +3549,55 @@ async function loadModules(){
       const lastLine = !m.enabled ? '已关闭' : L.ok === false ? `上次运行出错：${L.error}` : L.summary || (runs.length ? '' : '等待第一轮（每 10 分钟）');
       const hot = checks.filter(c => c.level === 'bad' || c.level === 'warn');
       const calm = checks.filter(c => !hot.includes(c));
-      const row = c => `<div class="mod-check"><span class="mf ${LV[c.level]||''}">${LV_TXT[c.level]||''}</span><b>${esc(c.name)}</b><span class="muted">${esc(c.detail)}</span>${(c.evidence||[]).length ? `<div class="mod-ev">${c.evidence.map(e => `<div>${esc(e)}</div>`).join('')}</div>` : ''}</div>`;
+      const row = c => `<div class="mod-check"><span class="mf ${LV[c.level]||''}">${LV_TXT[c.level]||''}</span><b>${esc(c.name)}</b><span class="muted">${esc(c.detail)}</span>${(c.evidence||[]).length ? `<details class="mod-ev-wrap"><summary>查看判定证据 (${c.evidence.length} 条)</summary><div class="mod-ev">${c.evidence.map(e => `<div>${esc(e)}</div>`).join('')}</div></details>` : ''}</div>`;
       return `<div class="card panel mod${m.enabled?'':' off'}">
         <div class="panel-head"><h2>${esc(m.title)}</h2>
           <label class="switch" title="${esc(m.hard_note)}"><input type="checkbox" data-mod="${esc(m.name)}" ${m.enabled?'checked':''} aria-label="启用 ${esc(m.title)}"><span></span></label><div class="desc">${esc(m.question)}</div></div>
         ${strip}${lastLine ? `<div class="sm ${L.ok===false?'bad-text':'muted'}" style="margin-top:6px">${esc(lastLine)}</div>` : ''}
         ${hot.map(row).join('')}
         ${calm.length ? `<div class="mod-checks">${calm.map(c => `<span class="mf ${LV[c.level]||''}" title="${esc(c.detail)}">${esc(c.name)}</span>`).join('')}</div>` : ''}
-        ${m.params.length ? `<dl class="kv mod-kv">${m.params.map(p => `<dt>${esc(p.name)}</dt><dd>${esc(p.value)}${p.note ? `<span class="muted">（${esc(p.note)}）</span>` : ''}</dd>`).join('')}</dl>` : ''}
+        ${m.params.length ? `<dl class="kv mod-kv">${m.params.map(p => `<dt>${esc(p.name)}</dt><dd>${p.value != null && p.value !== '' ? esc(p.value) : '<span class="muted">—</span>'}${p.note ? `<span class="muted">（${esc(p.note)}）</span>` : ''}</dd>`).join('')}</dl>` : ''}
       </div>`;
     }).join('');
     $('#navMods').hidden = !bad; $('#navMods').textContent = bad || '';
     $$('#modList [data-mod]').forEach(el => el.addEventListener('change', () => toggleModule(el)));
+    const runBtn = $('#btnRunModules');
+    if(runBtn && !runBtn.dataset.bound){
+      runBtn.dataset.bound = '1';
+      runBtn.addEventListener('click', runAllModules);
+    }
   }catch(e){ $('#modList').innerHTML = '<div class="muted">读取失败</div>'; }
 }
 async function toggleModule(el){
+  if(el.disabled) return;
+  el.disabled = true;
   try{
     await api('/admin/api/modules/' + encodeURIComponent(el.dataset.mod), {method:'PUT', body: JSON.stringify({enabled: el.checked})});
-    toast(el.checked ? '已启用' : '已关闭', 'ok'); loadModules();
-  }catch(e){ el.checked = !el.checked; toastErr(e); }
+    toast(el.checked ? '已启用' : '已关闭', 'ok');
+    await loadModules();
+  }catch(e){
+    el.checked = !el.checked;
+    toastErr(e);
+  }finally{
+    el.disabled = false;
+  }
+}
+async function runAllModules(){
+  const btn = $('#btnRunModules');
+  if(!btn || btn.disabled) return;
+  btn.disabled = true;
+  const oldText = btn.innerHTML;
+  btn.textContent = '运行中…';
+  try{
+    await api('/admin/api/modules/run', {method:'POST'});
+    toast('全部模块校验已完成', 'ok');
+    await loadModules();
+  }catch(e){
+    toastErr(e);
+  }finally{
+    btn.disabled = false;
+    btn.innerHTML = oldText;
+  }
 }
 
 /* Discord 机器人：状态（心跳）、跑图分享设置、最近动作（/admin/api/discord-bot，机器人侧见 integration/discord_bot.py） */
@@ -3260,42 +3606,99 @@ async function loadBot(){
   try{
     const d = await api('/admin/api/discord-bot'), st = d.status || {}, c = d.config;
     $('#navBot').hidden = !!st.online;
+    const verTag = st.version ? ` <span class="tag sm mono">${esc(st.version)}</span>` : '';
+    const latText = st.latency_ms != null ? `<span class="${st.latency_ms > 1000 ? 'bad-text' : 'muted'}" style="font-size:13px">${esc(st.latency_ms)} ms</span>` : '';
     $('#botStatus').innerHTML = `<div class="cols-3">
-      <div><div class="muted sm">状态</div><div style="font-size:18px;font-weight:700">${st.online ? '<span class="tag on">在线</span>' : '<span class="tag off">离线</span>'} <span class="muted" style="font-size:13px">${st.latency_ms!=null ? esc(st.latency_ms)+' ms' : ''}</span></div></div>
-      <div><div class="muted sm">账号 · 服务器</div><div style="font-weight:600">${esc(st.user || '—')}<div class="muted sm">${esc(st.guild || '')}</div></div></div>
-      <div><div class="muted sm">AI 评论</div><div style="font-weight:600">${st.ai_ready ? '已配置 API Key' : '<span class="tag off">没有配置 API Key</span>'}<div class="muted sm">今天 ${esc(st.ai_today ?? 0)} / ${esc(c.gallery_ai_daily)} 条</div></div></div>
+      <div><div class="muted sm">状态${verTag}</div><div style="font-size:18px;font-weight:700">${st.online ? '<span class="tag on">在线</span>' : '<span class="tag off">离线</span>'} ${latText}</div></div>
+      <div><div class="muted sm">账号 · 服务器</div><div style="font-weight:600">${esc(st.user || '—')}<div class="muted sm">${esc(st.guild || '—')}</div></div></div>
+      <div><div class="muted sm">AI 评论</div><div style="font-weight:600">${st.ai_ready ? '<span class="tag on">API Key 就绪</span>' : '<span class="tag off">未配置 API Key</span>'}<div class="muted sm">今天 ${esc(st.ai_today ?? 0)} / ${esc(c.gallery_ai_daily)} 条</div></div></div>
     </div><div class="muted sm" style="margin-top:8px">${st.seen_at ? '最近心跳 ' + esc(fullTime(st.seen_at)) + (st.ready_at ? ' · 启动于 ' + esc(fullTime(st.ready_at)) : '') : '还没有收到心跳（机器人更新后每分钟上报一次）'}</div>`;
-    const sw = (id, on, label) => `<div class="feat-row"><div class="body"><div class="t">${label}</div></div><label class="switch"><input type="checkbox" id="${id}" ${on?'checked':''} aria-label="${label}"><span></span></label></div>`;
-    $('#botCfg').innerHTML = sw('bot_like', c.gallery_like, '新帖自动点赞') + sw('bot_ai', c.gallery_ai, '看图写评论') + `
+    const sw = (id, on, label, hint) => `<div class="feat-row" style="padding:10px 0"><div class="body"><div class="t">${label}</div>${hint ? `<div class="d">${hint}</div>` : ''}</div><label class="switch"><input type="checkbox" id="${id}" ${on?'checked':''} aria-label="${label}"><span></span></label></div>`;
+    const aiWarn = (!st.ai_ready && c.gallery_ai) ? '<div class="notice-box warn sm" style="margin:6px 0 10px">⚠️ 机器人未在服务器配置 AI API Key，即使开启也不会生成评论</div>' : '';
+    $('#botCfg').innerHTML = sw('bot_like', c.gallery_like, '新帖自动点赞', '新帖自动点 ❤️。请谨慎开启，高频互动可能被 Discord 视作机器人滥用')
+      + sw('bot_ai', c.gallery_ai, '看图写评论', '使用多模态大模型对新帖图片生成简评') + aiWarn + `
       <div class="cols-3" style="margin-top:12px">
-        <div class="field"><label for="bot_forum">论坛频道名包含</label><input id="bot_forum" maxlength="50" value="${esc(c.gallery_forum)}"></div>
-        <div class="field"><label for="bot_daily">AI 评论每天最多</label><input id="bot_daily" type="number" min="0" max="500" step="1" value="${esc(c.gallery_ai_daily)}"></div>
-        <div class="field"><label for="bot_model">模型</label><input id="bot_model" maxlength="80" value="${esc(c.gallery_ai_model)}"></div>
-      </div><div style="margin-top:12px"><button class="btn primary" data-act="save-bot">保存</button></div>`;
+        <div class="field"><label for="bot_forum">论坛频道名包含</label><input id="bot_forum" maxlength="50" value="${esc(c.gallery_forum)}"><div class="hint">匹配该关键词的论坛频道才会被监听</div></div>
+        <div class="field"><label for="bot_daily">AI 评论每天最多</label><input id="bot_daily" type="number" min="0" max="500" step="1" value="${esc(c.gallery_ai_daily)}"><div class="hint">超出上限后只点赞不评论，次日 0 点重置</div></div>
+        <div class="field"><label for="bot_model">模型标识</label><input id="bot_model" maxlength="80" value="${esc(c.gallery_ai_model)}"><div class="hint">例如 LongCat-2.5-Preview</div></div>
+      </div><div style="margin-top:12px"><button class="btn primary" data-act="save-bot">保存设置</button></div>`;
     const ev = d.events || [];
     $('#botEvents').innerHTML = ev.length ? `<div class="table-wrap"><table class="rt"><thead><tr><th class="t">时间</th><th class="nw">动作</th><th>帖子</th><th class="nw">作者</th><th>内容</th></tr></thead><tbody>${
-      ev.map(e => `<tr><td class="t" data-label="时间" title="${esc(fullTime(e.at))}">${esc(shortTime(e.at))}</td><td data-label="动作"><span class="tag ${BOT_TAG[e.kind]||''}">${esc(d.kinds[e.kind]||e.kind)}</span></td><td class="clip" data-label="帖子">${e.url?`<a href="${esc(safeUrl(e.url, 'https://discord.com/'))}" target="_blank" rel="noopener">${esc(e.title||'帖子')}</a>`:esc(e.title)}</td><td data-label="作者">${esc(e.author)}</td><td class="muted clip" data-label="内容">${esc(e.detail)}</td></tr>`).join('')
+      ev.map(e => `<tr><td class="t" data-label="时间" title="${esc(fullTime(e.at))}">${esc(shortTime(e.at))}</td><td data-label="动作"><span class="tag ${BOT_TAG[e.kind]||''}">${esc(d.kinds[e.kind]||e.kind)}</span></td><td class="clip" data-label="帖子">${e.url?`<a href="${esc(safeUrl(e.url, 'https://discord.com/'))}" target="_blank" rel="noopener">${esc(e.title||'帖子')}</a>`:esc(e.title)}</td><td data-label="作者">${esc(e.author)}</td><td class="muted clip" data-label="内容" title="${esc(e.detail)}">${esc(e.detail)}</td></tr>`).join('')
     }</tbody></table></div>` : '<div class="muted">还没有记录（跑图分享有新帖时出现）</div>';
+    const refBtn = $('#btnRefreshBot');
+    if(refBtn && !refBtn.dataset.bound){
+      refBtn.dataset.bound = '1';
+      refBtn.addEventListener('click', async () => {
+        refBtn.disabled = true;
+        await loadBot();
+        refBtn.disabled = false;
+        toast('机器人状态已刷新', 'ok');
+      });
+    }
   }catch(e){ $('#botStatus').innerHTML = '<div class="muted">读取失败</div>'; }
 }
 async function saveBot(){
+  const btn = $('[data-act="save-bot"]');
+  if(btn && btn.disabled) return;
+  if(btn){ btn.disabled = true; btn.textContent = '保存中…'; }
   try{
     const body = {gallery_like: $('#bot_like').checked ? 1 : 0, gallery_ai: $('#bot_ai').checked ? 1 : 0,
       gallery_forum: $('#bot_forum').value.trim(),
       gallery_ai_daily: readNum('bot_daily', 'AI 评论每天最多', {min:0, max:500}), gallery_ai_model: $('#bot_model').value.trim()};
     await api('/admin/api/discord-bot', {method:'PUT', body: JSON.stringify(body)});
-    toast('已保存，机器人一分钟内生效', 'ok'); loadBot();
-  }catch(e){ toastErr(e); }
+    toast('已保存，机器人一分钟内生效', 'ok');
+    await loadBot();
+  }catch(e){
+    toastErr(e);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '保存设置'; }
+  }
 }
 async function loadQuotaAlgo(){
   try{
     const d = await api('/admin/api/quota-algo'), l = d.last || {}, v = l.v5 || {};
-    const hs = d.history || [];
+    const hs = d.history || [], p = d.params || {};
+    const autoOn = String(p.quota_auto_enabled ?? 1) !== '0' && l.enabled !== false;
     // V5 剩余：每天 0 点记一次；和前一天比的净变化 = 恢复 − 用掉
     const v5cell = (h, i) => { if(h.v5_pct == null) return '—'; const prev = hs[i-1]; const dlt = prev && prev.v5_pct != null ? h.v5_pct - prev.v5_pct : null;
       return `${Math.round(h.v5_pct)}%${dlt != null ? ` <span class="${dlt < 0 ? 'bad-text' : 'muted'}">${dlt >= 0 ? '+' : ''}${dlt.toFixed(1)}</span>` : ''}${h.v5_rate ? `<div class="muted sm">恢复 ${h.v5_rate}%/天</div>` : ''}`; };
     const rows = hs.map((h, i) => [h, i]).slice(-7).reverse().map(([h, i]) => `<tr><td class="t" data-label="日期">${esc(h.day)}</td><td class="num" data-label="用量 / 账号日上限">${esc(h.used)} / ${esc(h.cap)}</td><td class="num" data-label="次日 0 点 V5 剩余">${v5cell(h, i)}</td><td class="num" data-label="每小时拦截">${esc(h.hourly_blocks)}</td><td class="num" data-label="顶格人数">${esc(h.ceiling_hits)}</td><td class="num" data-label="每人（昨 → 今）">${esc(h.from[0])}→${esc(h.to[0])}</td><td class="muted" data-label="理由">${esc((h.reasons||[]).join('；'))}</td></tr>`).join('');
-    $('#qaBody').innerHTML = l.enabled === false ? '<div class="muted">动态额度已关闭</div>' : `
+
+    const paramsHtml = `
+      <details class="qa-params" style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px" ${!autoOn ? 'open' : ''}>
+        <summary style="cursor:pointer;font-weight:600;display:flex;align-items:center;justify-content:space-between">
+          <span>${ic('sliders')} 算法参数与控制</span>
+          <span class="muted sm" style="font-weight:normal">${autoOn ? '<span class="tag on">运行中</span>' : '<span class="tag off">已关闭</span>'} · 点击展开调整</span>
+        </summary>
+        <div style="margin-top:12px">
+          <div class="feat-row" style="padding:8px 0">
+            <div class="body"><div class="t">动态额度总开关</div><div class="d">关闭后由站长在后台完全手动分配每把 Key 的额度</div></div>
+            <label class="switch"><input type="checkbox" id="qa_auto_enabled" ${autoOn ? 'checked' : ''} aria-label="动态额度总开关"><span></span></label>
+          </div>
+          <div class="cols-3" style="margin-top:10px">
+            <div class="field"><label for="qa_target_avg">目标上限 A（每人每天）</label><input id="qa_target_avg" type="number" min="10" max="2000" value="${esc(p.quota_target_avg ?? 150)}"><div class="hint">基准出图张数</div></div>
+            <div class="field"><label for="qa_ceiling_max">上限峰值（最高）</label><input id="qa_ceiling_max" type="number" min="10" max="5000" value="${esc(p.quota_ceiling_max ?? 300)}"><div class="hint">空闲时最高放宽至</div></div>
+            <div class="field"><label for="qa_step">每次微调步长</label><input id="qa_step" type="number" min="1" max="500" value="${esc(p.quota_step ?? 25)}"><div class="hint">每天 0 点微调增减量</div></div>
+            <div class="field"><label for="qa_v5_min">V5 每人最低（张）</label><input id="qa_v5_min" type="number" min="0" max="500" value="${esc(p.quota_v5_min ?? 3)}"><div class="hint">保底 V5 张数</div></div>
+            <div class="field"><label for="qa_v5_max">V5 每人最高（张）</label><input id="qa_v5_max" type="number" min="1" max="500" value="${esc(p.quota_v5_max ?? 30)}"><div class="hint">封顶 V5 张数</div></div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:12px">
+            <button class="btn primary" data-act="save-qa">保存参数并重算</button>
+            <button class="btn" data-act="run-qa">立即重算一次</button>
+          </div>
+        </div>
+      </details>`;
+
+    if(!autoOn){
+      $('#qaBody').innerHTML = `
+        <div class="notice-box warn" style="margin-bottom:12px">
+          <b>动态额度当前已关闭</b>：新老成员额度不会自动跟随上游余量与用量注水微调。可在下方参数中重新开启并保存。
+        </div>` + paramsHtml;
+      return;
+    }
+
+    $('#qaBody').innerHTML = `
       <div class="cols-3">
         <div><div class="muted sm">V4.5 每人每天</div><div class="num" style="font-size:22px;font-weight:700">${esc(l.ceiling ?? '—')}</div></div>
         <div><div class="muted sm">V5 每人每天 / 全站</div><div class="num" style="font-size:22px;font-weight:700">${esc(v.each ?? '—')} <span class="muted" style="font-size:13px">/ ${esc(v.global ?? '—')}</span></div></div>
@@ -3303,9 +3706,50 @@ async function loadQuotaAlgo(){
       </div>
       ${v5Derivation(v)}
       <div class="muted sm" style="margin:8px 0">由算法管理 ${esc(l.members ?? 0)} 人 · V5 按 ${esc(v.people ?? '—')} 人分 · 更新于 ${l.updated_at?esc(fullTime(l.updated_at)):'—'}</div>
-      ${rows?`<div class="table-wrap"><table class="rt"><thead><tr><th class="t">日期</th><th class="num">用量 / 账号日上限</th><th class="num" title="每天 0 点记一次账号 V5 剩余；括号里是和前一天比的净变化（恢复 − 用掉）">次日 0 点 V5 剩余</th><th class="num">每小时拦截</th><th class="num">顶格人数</th><th class="num">每人（昨 → 今）</th><th>理由</th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="muted sm">每天 0 点的调整记录会出现在这里</div>'}`;
+      ${rows?`<div class="table-wrap"><table class="rt"><thead><tr><th class="t">日期</th><th class="num">用量 / 账号日上限</th><th class="num" title="每天 0 点记一次账号 V5 剩余；括号里是和前一天比的净变化（恢复 − 用掉）">次日 0 点 V5 剩余</th><th class="num">每小时拦截</th><th class="num">顶格人数</th><th class="num">每人（昨 → 今）</th><th>理由</th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="muted sm">每天 0 点的调整记录会出现在这里</div>'}
+      ${paramsHtml}`;
   }catch(e){ $('#qaBody').innerHTML = '<div class="muted">读取失败</div>'; }
 }
+
+async function saveQuotaAlgo(btn){
+  const saveBtn = btn || document.querySelector('[data-act="save-qa"]');
+  let body;
+  try{
+    body = {
+      quota_auto_enabled: $('#qa_auto_enabled').checked ? 1 : 0,
+      quota_target_avg: readNum('qa_target_avg', '目标上限 A', {min:10, max:2000}),
+      quota_ceiling_max: readNum('qa_ceiling_max', '上限峰值', {min:10, max:5000}),
+      quota_step: readNum('qa_step', '每次微调步长', {min:1, max:500}),
+      quota_v5_min: readNum('qa_v5_min', 'V5 每人最低', {min:0, max:500}),
+      quota_v5_max: readNum('qa_v5_max', 'V5 每人最高', {min:1, max:500}),
+    };
+  }catch(e){ toastErr(e); return; }
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = '保存中…'; }
+  try{
+    await api('/admin/api/quota-algo', {method:'PUT', body:JSON.stringify(body)});
+    toast('动态额度参数已保存并完成重算', 'ok');
+    loadQuotaAlgo();
+    loadAllowance();
+  }catch(e){ toastErr(e); }
+  finally{
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = '保存参数并重算'; }
+  }
+}
+
+async function runQuotaAlgo(btn){
+  const runBtn = btn || document.querySelector('[data-act="run-qa"]');
+  if(runBtn){ runBtn.disabled = true; runBtn.textContent = '计算中…'; }
+  try{
+    await api('/admin/api/quota-algo', {method:'PUT', body:JSON.stringify({})});
+    toast('动态额度重算完成', 'ok');
+    loadQuotaAlgo();
+    loadAllowance();
+  }catch(e){ toastErr(e); }
+  finally{
+    if(runBtn){ runBtn.disabled = false; runBtn.textContent = '立即重算一次'; }
+  }
+}
+
 async function loadAnlasPool(){
   try{
     const d = await api('/admin/api/anlas-pool'), v = d.settings, L = d.last;
@@ -3317,17 +3761,25 @@ async function loadAnlasPool(){
       : `账号剩余 ${L.anlas} Anlas · 约 ${L.days_to_refill} 天后补满 · 今日池 ${L.daily_pool}\n合格成员 ${L.members.length} 人${L.members.length ? '（' + L.members.slice(0, 8).join('、') + (L.members.length > 8 ? '…' : '') + '）' : ''} · 每人每天 ${L.per_member}${L.per_member ? '（约 ' + Math.floor(L.per_member / 30) + ' 张续杯 V5）' : '（不足一张付费 V5，本轮不分）'}\n更新于 ${fullTime(L.updated_at)}`;
   }catch(e){ $('#anlasLive').textContent = '读取失败'; }
 }
-async function saveAnlasPool(){
+async function saveAnlasPool(btn){
+  const saveBtn = btn || document.querySelector('[data-act="save-anlas"]');
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = '保存中…'; }
   try{
     const body = {};
     for(const k of Object.keys(ANLAS_LABELS)) body[k] = readNum('a_' + k, ANLAS_LABELS[k][0], {min:ANLAS_LABELS[k][1], max:ANLAS_LABELS[k][2]});
     await api('/admin/api/anlas-pool', {method:'PUT', body: JSON.stringify(body)});
     toast('已保存并重算 Anlas 分配', 'ok'); loadAnlasPool();
   }catch(e){ toastErr(e); }
+  finally{
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = '保存并重算'; }
+  }
 }
 /* 由额度算法每天 0 点写入的字段：后台不让手动改（改了会在 0 点被覆盖，且当天会和「每人 N 张」打架） */
 const GUARD_ALGO_OWNED = new Set(['base_daily_images']);
-async function saveGuard(){
+async function saveGuard(btn){
+  if(!guardData || !guardData.fields){ toast('数据尚未加载完成，请稍候', 'err'); return; }
+  const saveBtn = btn || document.querySelector('[data-act="save-guard"]');
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = '保存中…'; }
   try{
     const body = {};
     for(const k of Object.keys(guardData.fields)){
@@ -3338,14 +3790,21 @@ async function saveGuard(){
     // 每小时 / 3 小时 / 每日上限是保护唯一上游账号的硬闸门：填 0 = 关掉该项，必须确认
     const zeroCaps = ['account_hourly_cap','account_3h_cap','account_daily_cap'].filter(k => k in body && body[k] === 0)
       .map(k => guardData.fields[k].label);
-    if(zeroCaps.length && !await askConfirm(`「${zeroCaps.join('、')}」填了 0，等于关掉这项对上游账号的保护（不再限量）。确定保存？`, '关掉保护')) return;
+    if(zeroCaps.length && !await askConfirm(`「${zeroCaps.join('、')}」填了 0，等于关掉这项对上游账号的保护（不再限量）。确定保存？`, '关掉保护')){
+      if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = '保存账号保护'; }
+      return;
+    }
     await api('/admin/api/guard', {method:'PUT', body: JSON.stringify(body)});
     toast('账号保护设置已保存，立即生效', 'ok'); loadGuard();
   }catch(e){ toastErr(e); }
+  finally{
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = '保存账号保护'; }
+  }
 }
 const RUNTIME_LABELS = {queue_timeout:'单阶段排队等待上限', key_image_min_interval:'用户 Key 图片任务间隔',
   image_min_interval:'每把上游 Key 图片请求间隔', image_429_cooldown_seconds:'上游 429 最短冷却'};
-async function saveRuntimeLimits(){
+async function saveRuntimeLimits(btn){
+  const saveBtn = btn || document.querySelector('[data-act="save-runtime"]');
   const body = {};
   const bounds = {queue_timeout:[15,300],key_image_min_interval:[15,120],
     image_min_interval:[15,120],image_429_cooldown_seconds:[60,3600]};
@@ -3356,16 +3815,29 @@ async function saveRuntimeLimits(){
     }
     body[name] = value;
   }
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = '保存中…'; }
   try{
     await api('/admin/api/runtime-limits', {method:'PUT',body:JSON.stringify(body)});
     toast('运行限制已保存并生效', 'ok');
   }catch(e){ toastErr(e); }
+  finally{
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = '保存运行限制'; }
+  }
 }
 async function saveAnnounce(){
+  const btn = $('[data-act="save-announce"]');
+  if(btn && btn.disabled) return;
+  if(btn){ btn.disabled = true; btn.textContent = '保存中…'; }
   try{
     await api('/admin/api/announcement', {method:'PUT', body: JSON.stringify({html: $('#announce').value})});
     toast('公告已保存', 'ok');
-  }catch(e){ toastErr(e); }
+    const box = $('#announcePreviewBox');
+    if(box && !box.hidden) $('#announcePreview').innerHTML = $('#announce').value || '<span class="muted">（公告内容为空）</span>';
+  }catch(e){
+    toastErr(e);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '保存公告'; }
+  }
 }
 
 /* ---------- events ---------- */
@@ -3392,40 +3864,61 @@ document.addEventListener('click', ev=>{
   if(!el){
     // 点遮罩不关闭确认框与 Key 编辑框（避免误触丢失未保存的修改）。
     if(ev.target.classList && ev.target.classList.contains('overlay') && !['confirmModal','modal'].includes(ev.target.id)){
-      if(ev.target.id==='tokModal') closeTokModal(); else closeOverlay('#'+ev.target.id);
+      if(ev.target.id==='tokModal') closeTokModal(); else if(ev.target.id==='lightbox') closeLightbox(); else closeOverlay('#'+ev.target.id);
     }
     return;
   }
   const id = Number(el.dataset.id);
   switch(el.dataset.act){
     case 'ov-go': { const [t, f] = el.dataset.go.split(':'); if(t === 'members' && f){ memberFilter = f; memberFilterAuto = false; } tab(t); break; }
+    case 'ov-refresh': loadOverview(); break;
     case 'feat-logs': $('#logFeature').value = el.dataset.feat; $('#logFilter').value = ''; logPage = 1; tab('logs'); break;
     case 'save-bot': saveBot(); break;
     case 'recon-reload': loadReconciliation(); break;
     case 'recon-run': runReconciliation(); break;
     case 'alert-test': sendTestAlert(el); break;
     case 'up-enabled': setUpstreamEnabled(el.dataset.id, el.dataset.on==='1'); break;
-    case 'up-v5': saveUpstreamV5Limit(el.dataset.id); break;
-    case 'up-conc': saveUpstreamImageConcurrency(el.dataset.id); break;
+    case 'up-v5': saveUpstreamV5Limit(el.dataset.id, el); break;
+    case 'up-conc': saveUpstreamImageConcurrency(el.dataset.id, el); break;
     case 'view-audit': viewAudit(id); break;
     case 'zoom': openLightbox(id); break;
-    case 'close-lightbox': closeOverlay('#lightbox'); $('#lbImg').removeAttribute('src'); break;
+    case 'close-lightbox': closeLightbox(); break;
     case 'lb-prev': lbStep(-1); break;
     case 'lb-next': lbStep(1); break;
     case 'expand': el.classList.toggle('open'); break;
         case 'copy-pos': { const m = auditPrompts.get(Number(el.dataset.id)); if(m) copyText(m.p, '已复制正面提示词'); break; }
     case 'copy-neg': { const m = auditPrompts.get(Number(el.dataset.id)); if(m) copyText(m.n, '已复制负面提示词'); break; }
-    case 'copy-chars': { const m = auditPrompts.get(Number(el.dataset.id)); if(m) copyText((m.chars||[]).map((c,i)=>`角色${i+1}: ${c}`).join('\n'), '已复制角色提示词'); break; }
-    case 'feedback-export': window.open('/admin/api/feedback/export', '_blank'); break;
-    case 'logs-export': window.open('/admin/api/logs/export?days=30', '_blank'); break;
+    case 'feedback-export': {
+      const now = Date.now();
+      if(now < feedbackExportCooldown){
+        const left = Math.ceil((feedbackExportCooldown - now) / 1000);
+        toast(`导出太频繁，请 ${left} 秒后再试`, 'err');
+        break;
+      }
+      feedbackExportCooldown = now + 60000;
+      window.open('/admin/api/feedback/export', '_blank');
+      break;
+    }
+    case 'logs-export': {
+      const now = Date.now();
+      if(now < logExportCooldown){
+        const left = Math.ceil((logExportCooldown - now) / 1000);
+        toast(`导出太频繁，请 ${left} 秒后再试`, 'err');
+        break;
+      }
+      logExportCooldown = now + 60000;
+      window.open('/admin/api/logs/export?days=30', '_blank');
+      break;
+    }
     case 'audit-export': { const kf = $('#auditFilter').value; if(kf) window.open('/admin/api/audit/export?key_id=' + encodeURIComponent(kf), '_blank'); break; }
     case 'audit-page': auditPage = Math.max(1, auditPage + Number(el.dataset.d)); loadAudit(); break;
     case 'audit-goto': auditPage = Math.max(1, Number(el.dataset.p)); loadAudit(); break;
     case 'log-page': changeLogPage(Number(el.dataset.d)); break;
     case 'log-goto': logPage = Math.max(1, Number(el.dataset.p)); loadLogs(); break;
     case 'action-page': actionPage=Math.max(1,actionPage+Number(el.dataset.d)); loadActions(); break;
-    case 'action-goto': actionPage = Math.max(1, Number(el.dataset.p)); loadActions(); break;
-    case 'save-reg': saveReg(); break;
+    case 'save-reg': saveReg(el); break;
+    case 'reg-feat-all': setAllRegFeats(true); break;
+    case 'reg-feat-none': setAllRegFeats(false); break;
     case 'purge-images': purgeImages(); break;
     case 'save-audit': saveAudit(); break;
     case 'toggle-audit-set': auditSetOpen = !auditSetOpen; renderAuditSettings(); break;
@@ -3473,10 +3966,12 @@ document.addEventListener('click', ev=>{
     case 'copy-modal-msg': { const v=$('#keyModalText').value; copyText(v, '已复制整段消息').then(ok=>{ if(!ok){ $('#keyModalText').select(); toast('请按 Ctrl/Cmd+C 复制', 'err'); } }); break; }
     case 'copy-modal-key': { const v=$('#keyModalVal').value; copyText(v).then(ok=>{ if(!ok){ $('#keyModalVal').select(); toast('请按 Ctrl/Cmd+C 复制', 'err'); } }); break; }
     case 'close-keymodal': closeOverlay('#keyModal'); $('#keyModalVal').value=''; break;
-    case 'save-budget': saveBudget(); break;
-    case 'save-runtime': saveRuntimeLimits(); break;
-    case 'save-guard': saveGuard(); break;
-    case 'save-anlas': saveAnlasPool(); break;
+    case 'save-budget': saveBudget(el); break;
+    case 'save-runtime': saveRuntimeLimits(el); break;
+    case 'save-guard': saveGuard(el); break;
+    case 'save-anlas': saveAnlasPool(el); break;
+    case 'save-qa': saveQuotaAlgo(el); break;
+    case 'run-qa': runQuotaAlgo(el); break;
     case 'save-announce': saveAnnounce(); break;
     case 'open-bans': openBansModal(); break;
     case 'close-bans': closeBansModal(); break;
@@ -3505,7 +4000,10 @@ $('#logHideTest').addEventListener('change', ()=>{ logPage=1; loadLogs(); });
 $('#shadowRange').addEventListener('change', loadShadow);
 $('#auditFilter').addEventListener('change', ()=>{ auditPage=1; const b=$('#auditExport'); if(b) b.disabled=!$('#auditFilter').value; loadAudit(); });
 $('#auditView').addEventListener('change', e=>{ auditView=e.target.value; loadAudit(); });
-document.addEventListener('change', e=>{ if(e.target.dataset.act==='audit-per'){ auditPer=Number(e.target.value); auditPage=1; loadAudit(); } });
+document.addEventListener('change', e=>{
+  if(e.target.dataset.act==='audit-per'){ auditPer=Number(e.target.value); auditPage=1; loadAudit(); }
+  else if(e.target.dataset.act==='log-per'){ logPer=Number(e.target.value); logPage=1; loadLogs(); }
+});
 document.addEventListener('change', e=>{ if(e.target.id==='actionActor'||e.target.id==='actionKind'){ actionPage=1; loadActions(); return; } const a=e.target.dataset&&e.target.dataset.act; if(a&&a.endsWith('-jump')){ const kind=a.slice(0,-5); const v=Math.max(1,Number(e.target.value)||1); if(kind==='audit'){auditPage=v;loadAudit();}else if(kind==='log'){logPage=v;loadLogs();}else if(kind==='action'){actionPage=v;loadActions();} } });
 $('#memberSearch').addEventListener('input', e=>{ memberQuery = e.target.value; renderMembers(); });
 $('#memberFilter').addEventListener('change', e=>{ if(e.target.id !== 'memberMore') return; memberFilter = e.target.value || 'all'; renderMembers(); });
@@ -3540,7 +4038,7 @@ document.addEventListener('keydown', e=>{
   }
   if(e.key!=='Escape') return;
   if($('#confirmModal').classList.contains('show')) settleConfirm(false);
-  else if($('#lightbox').classList.contains('show')){ closeOverlay('#lightbox'); }
+  else if($('#lightbox').classList.contains('show')){ closeLightbox(); }
   else if($('#keyModal').classList.contains('show')){ closeOverlay('#keyModal'); $('#keyModalVal').value=''; }
   else if($('#tokModal').classList.contains('show')) closeTokModal();
   else if($('#modal').classList.contains('show')) closeModal();

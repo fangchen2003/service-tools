@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS generation_audit (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON generation_audit(ts);
 CREATE INDEX IF NOT EXISTS idx_audit_key ON generation_audit(key_id, ts);
+CREATE INDEX IF NOT EXISTS idx_audit_key_id ON generation_audit(key_id, id DESC);
 CREATE TABLE IF NOT EXISTS usage_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts REAL NOT NULL,
@@ -175,6 +176,7 @@ CREATE TABLE IF NOT EXISTS feedback (      -- 成员用 /反馈 提交的问卷�
     answers TEXT NOT NULL                  -- JSON：{问题 id: 回答}
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_ts ON feedback (ts);
+CREATE INDEX IF NOT EXISTS idx_feedback_discord_id_ts ON feedback (discord_id, ts DESC);
 CREATE TABLE IF NOT EXISTS coupons (       -- 成员的券（现在只有「重置券」：在首页自己点一下，重置当天的 V5 / Anlas 额度）
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     key_id INTEGER NOT NULL,
@@ -220,6 +222,7 @@ CREATE TABLE IF NOT EXISTS error_events (
     last_path TEXT NOT NULL DEFAULT '',
     resolved_at REAL               -- 站长标记已处理；之后再出现视为「复发」
 );
+CREATE INDEX IF NOT EXISTS idx_error_events_resolved_last_seen ON error_events (resolved_at, last_seen DESC);
 CREATE TABLE IF NOT EXISTS waitlist (
     discord_id TEXT PRIMARY KEY,
     name TEXT NOT NULL DEFAULT '',
@@ -241,6 +244,7 @@ CREATE TABLE IF NOT EXISTS admin_actions (
     ok INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_admin_actions_ts ON admin_actions (ts DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_actions_action ON admin_actions (action);
 CREATE TABLE IF NOT EXISTS key_sources (
     key_id INTEGER NOT NULL,
     net_hash TEXT NOT NULL,       -- 加盐哈希后的来源网段（IPv4 /24、IPv6 /48），不存完整 IP
@@ -464,6 +468,20 @@ class Database:
                     (images, key_id, day),
                 )
             await self._db.commit()
+        for idx_sql in (
+            "CREATE INDEX IF NOT EXISTS idx_log_ts_upstatus ON usage_log (ts, up_status)",
+            "CREATE INDEX IF NOT EXISTS idx_log_key_id ON usage_log (key_id, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_log_rid ON usage_log (rid)",
+            "CREATE INDEX IF NOT EXISTS idx_audit_key_id ON generation_audit (key_id, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_admin_actions_action ON admin_actions (action)",
+            "CREATE INDEX IF NOT EXISTS idx_error_events_resolved_last_seen ON error_events (resolved_at, last_seen DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_feedback_discord_id_ts ON feedback (discord_id, ts DESC)",
+        ):
+            try:
+                await self._db.execute(idx_sql)
+                await self._db.commit()
+            except Exception:
+                pass
 
     async def close(self) -> None:
         if self._db:
@@ -677,6 +695,7 @@ class Database:
         await self._db.execute("DELETE FROM key_sources WHERE key_id=?", (key_id,))
         await self._db.execute("DELETE FROM key_idle_reminders WHERE key_id=?", (key_id,))
         await self._db.execute("DELETE FROM key_tags WHERE key_id=?", (key_id,))
+        await self._db.execute("DELETE FROM discord_registrations WHERE key_id=?", (key_id,))
         await self._db.execute("DELETE FROM api_keys WHERE id=?", (key_id,))
         await self._db.commit()
 
@@ -1454,6 +1473,14 @@ class Database:
             "SELECT COUNT(*) FROM api_keys WHERE enabled=1 AND (expires_at IS NULL OR expires_at>?)",
             (time.time(),),
         )
+        active_members = await one(
+            """SELECT COUNT(DISTINCT c.key_id)
+               FROM counters AS c
+               JOIN api_keys AS k ON k.id = c.key_id
+               WHERE c.day=? AND k.is_admin=0 AND k.is_test=0 AND c.requests>0""",
+            (today,),
+        )
+        members_total = await one("SELECT COUNT(*) FROM api_keys WHERE is_admin=0 AND is_test=0")
         # 日志按时间戳保存；统计边界必须与配额使用同一时区。
         day_start = datetime.fromisoformat(today).replace(tzinfo=ZoneInfo(self.tz))
         anomaly = {}
@@ -1464,13 +1491,17 @@ class Database:
                 (start.timestamp(), (day_start + timedelta(days=1)).timestamp()),
             )).fetchone()
             anomaly[period] = {"unconfirmed_requests": int(row[0]),
-                               "unconfirmed_anlas": round(float(row[1]), 2)}
+                                "unconfirmed_anlas": round(float(row[1]), 2)}
         ph = ",".join("?" * len(week_days))
         cur = await self._db.execute(
-            f"""SELECT day,
-                       SUM(images) AS images, SUM(anlas) AS anlas,
-                       SUM(text_tokens) AS text_tokens, SUM(requests) AS requests, SUM(v5) AS v5
-                FROM counters WHERE day IN ({ph}) GROUP BY day""",
+            f"""SELECT c.day,
+                       SUM(c.images) AS images, SUM(c.anlas) AS anlas,
+                       SUM(c.text_tokens) AS text_tokens, SUM(c.requests) AS requests,
+                       SUM(CASE WHEN COALESCE(k.exclude_global_v5, d.exclude_global_v5, 1)=0 THEN c.v5 ELSE 0 END) AS v5
+                FROM counters AS c
+                LEFT JOIN api_keys AS k ON k.id = c.key_id
+                LEFT JOIN deleted_key_usage_flags AS d ON d.key_id = c.key_id
+                WHERE c.day IN ({ph}) GROUP BY c.day""",
             tuple(week_days),
         )
         by_day = {r["day"]: dict(r) for r in await cur.fetchall()}
@@ -1498,6 +1529,8 @@ class Database:
                 "v5": int(today_v5),
                 **anomaly["today"],
             },
+            "active_members": int(active_members),
+            "members_total": int(members_total),
             "keys_total": int(keys_total),
             "keys_active": int(keys_active),
             "week": week,

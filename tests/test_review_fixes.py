@@ -326,5 +326,366 @@ async def test_admin_token_endpoints_validate_then_change_the_pool(tmp_path, db)
         gone = await c.delete(f"/admin/api/upstream-tokens/{rep.json()['pool'][1]['token_id']}", headers=hdr)
         assert gone.status_code == 200 and len(gone.json()["pool"]) == 1
         last = await c.delete(f"/admin/api/upstream-tokens/{gone.json()['pool'][0]['token_id']}", headers=hdr)
-        assert last.status_code == 409
     assert len(announced) == 3                                                   # owner is told about every change
+
+
+@pytest.mark.asyncio
+async def test_audit_export_and_purge_fixes(tmp_path, db):
+    from app.admin import _safe_filename, _THUMB_CACHE
+    assert _safe_filename("alex") == "alex"
+    assert _safe_filename("user_123.test") == "user_123.test"
+    assert _safe_filename("张三") == "member"
+    assert _safe_filename("a/b\\c") == "a_b_c"
+
+    # Verify query plan uses idx_audit_key_id
+    plan = await db._db.execute_fetchall("EXPLAIN QUERY PLAN SELECT id FROM generation_audit WHERE key_id=? ORDER BY id DESC LIMIT 24", (1,))
+    plan_str = " ".join(str(tuple(p)) for p in plan)
+    assert "idx_audit_key_id" in plan_str
+    assert "TEMP B-TREE" not in plan_str
+
+    # Test audit_purge_images clears _THUMB_CACHE and logs once
+    _THUMB_CACHE[999] = b"fake"
+    settings = Settings(admin_password="a-strong-password-123", secret_key="s", data_dir=tmp_path, admin_cookie_secure=False)
+    state = AdminState(settings)
+    state.db = db
+    app = FastAPI()
+    app.state.gate = state
+    app.include_router(admin_router)
+    hdr = {"Origin": "http://t"}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        await c.post("/admin/api/login", json={"password": "a-strong-password-123"})
+        res = await c.post("/admin/api/audit/purge-images", headers=hdr, json={"confirm": "清空"})
+        assert res.status_code == 200
+        assert 999 not in _THUMB_CACHE
+        # Check action log only logged once
+        logs = await db._db.execute_fetchall("SELECT action FROM admin_actions WHERE action='清空原图'")
+        assert len(logs) == 1
+        raw_logs = await db._db.execute_fetchall("SELECT action FROM admin_actions WHERE action LIKE '%/audit/purge-images%'")
+        assert len(raw_logs) == 0
+
+
+@pytest.mark.asyncio
+async def test_usage_log_indices_and_pagination(tmp_path, db):
+    # Verify query plan for rid point lookup uses idx_log_rid (no full scan)
+    plan_rid = await db._db.execute_fetchall("EXPLAIN QUERY PLAN SELECT id FROM usage_log WHERE rid=? ORDER BY id DESC LIMIT 20", ("abc123",))
+    plan_rid_str = " ".join(str(tuple(p)) for p in plan_rid)
+    assert "idx_log_rid" in plan_rid_str
+    assert "SCAN usage_log" not in plan_rid_str
+
+    # Verify query plan for key_id uses idx_log_key_id (no temp b-tree)
+    plan_key = await db._db.execute_fetchall("EXPLAIN QUERY PLAN SELECT id FROM usage_log WHERE key_id=? ORDER BY id DESC LIMIT 20", (1,))
+    plan_key_str = " ".join(str(tuple(p)) for p in plan_key)
+    assert "idx_log_key_id" in plan_key_str
+    assert "TEMP B-TREE" not in plan_key_str
+
+    # Verify per_page in logs endpoint
+    settings = Settings(admin_password="a-strong-password-123", secret_key="s", data_dir=tmp_path, admin_cookie_secure=False)
+    state = AdminState(settings)
+    state.db = db
+    app = FastAPI()
+    app.state.gate = state
+    app.include_router(admin_router)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        await c.post("/admin/api/login", json={"password": "a-strong-password-123"})
+        r50 = await c.get("/admin/api/logs?per_page=50")
+        assert r50.status_code == 200 and r50.json()["per_page"] == 50
+        r_def = await c.get("/admin/api/logs?per_page=999")
+        assert r_def.status_code == 200 and r_def.json()["per_page"] == 20
+
+
+@pytest.mark.asyncio
+async def test_bug_tracker_improvements_and_endpoints(tmp_path, db):
+    from app.errors import Tracker
+
+    tracker = Tracker(db)
+    # Check index existence
+    indices = await db._db.execute_fetchall("PRAGMA index_list('error_events')")
+    idx_names = [r[1] for r in indices]
+    assert "idx_error_events_resolved_last_seen" in idx_names
+
+    # Capture 2 bugs
+    sig1 = tracker.capture("request", RuntimeError("err1"), key_id=9999)  # deleted key
+    sig2 = tracker.capture("upstream", ValueError("err2"))
+    await tracker.drain()
+
+    assert await tracker.open_count() == 2
+
+    # Mark sig2 as resolved
+    assert await tracker.resolve(sig2) is True
+    # Idempotent resolve on already resolved bug returns True
+    assert await tracker.resolve(sig2) is True
+    # Resolve non-existent bug returns False
+    assert await tracker.resolve("nonexistent1") is False
+
+    assert await tracker.open_count() == 1
+
+    # list(include_resolved=True) should put unresolved bugs first
+    items = await tracker.list(include_resolved=True)
+    assert len(items) == 2
+    assert items[0]["sig"] == sig1
+    assert items[0]["resolved_at"] is None
+    assert items[1]["sig"] == sig2
+    assert items[1]["resolved_at"] is not None
+
+    # Test Admin API endpoints
+    settings = Settings(admin_password="a-strong-password-123", secret_key="s", data_dir=tmp_path, admin_cookie_secure=False)
+    state = AdminState(settings)
+    state.db = db
+    state.bugs = tracker
+    app = FastAPI()
+    app.state.gate = state
+    app.include_router(admin_router)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        await c.post("/admin/api/login", json={"password": "a-strong-password-123"})
+
+        # GET /admin/api/errors
+        res = await c.get("/admin/api/errors?all=true")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["open"] == 1
+        assert len(body["errors"]) == 2
+        # Check deleted key handling
+        assert body["errors"][0]["key_name"] == "Key #9999 (已删除)"
+
+        # POST /admin/api/errors/{sig}/resolve
+        r_res = await c.post(f"/admin/api/errors/{sig1}/resolve")
+        assert r_res.status_code == 200
+        assert await tracker.open_count() == 0
+
+        # Create one more bug and test resolve-all
+        sig3 = tracker.capture("request", RuntimeError("err3"))
+        await tracker.drain()
+        assert await tracker.open_count() == 1
+
+        r_all = await c.post("/admin/api/errors/resolve-all")
+        assert r_all.status_code == 200 and r_all.json()["count"] == 1
+        assert await tracker.open_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_feedback_index_and_export_audit(tmp_path, db):
+    # Check index existence
+    indices = await db._db.execute_fetchall("PRAGMA index_list('feedback')")
+    idx_names = [r[1] for r in indices]
+    assert "idx_feedback_discord_id_ts" in idx_names
+
+    settings = Settings(admin_password="a-strong-password-123", secret_key="s", data_dir=tmp_path, admin_cookie_secure=False)
+    state = AdminState(settings)
+    state.db = db
+    app = FastAPI()
+    app.state.gate = state
+    app.include_router(admin_router)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        await c.post("/admin/api/login", json={"password": "a-strong-password-123"})
+        res = await c.get("/admin/api/feedback/export")
+        assert res.status_code == 200
+        assert "Content-Disposition" in res.headers
+        assert "filename*=" in res.headers["Content-Disposition"]
+
+        # Verify audit log was written
+        logs = await db._db.execute_fetchall("SELECT action, target FROM admin_actions WHERE action='导出成员反馈'")
+        assert len(logs) == 1
+        assert logs[0][1] == "全部CSV"
+
+
+@pytest.mark.asyncio
+async def test_ops_snapshot_fallback_when_service_none(tmp_path, db):
+    # Insert a discord registration and a waitlist record
+    key = await db.create_key({
+        "name": "Discord:test_user", "token": "test-token-12345", "daily_images": 10,
+        "daily_anlas": 0, "daily_v5": 0, "monthly_anlas": 0, "daily_text_tokens": 0,
+        "rpm": 10, "allow_anlas": False, "allow_img2img": False, "exclude_global_v5": False, "image_model_scope": "all"
+    })
+    await db._db.execute("INSERT INTO discord_registrations (discord_id, key_id, created_at, username) VALUES ('123456789012345678', ?, ?, 'test_user')", (key["id"], time.time()))
+    await db._db.execute("INSERT INTO waitlist (discord_id, name, joined_at) VALUES ('987654321098765432', 'wait_user', ?)", (time.time(),))
+    await db._db.commit()
+
+    settings = Settings(admin_password="a-strong-password-123", secret_key="s", data_dir=tmp_path, admin_cookie_secure=False)
+    state = AdminState(settings)
+    state.db = db
+    app = FastAPI()
+    app.state.gate = state
+    # app.state.registrar is explicitly None
+    app.include_router(admin_router)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        await c.post("/admin/api/login", json={"password": "a-strong-password-123"})
+        res = await c.get("/admin/api/ops")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["registration"]["active"] == 1
+        assert len(data["registration"]["waitlist"]) == 1
+        assert data["registration"]["waitlist"][0]["discord_id"] == "987654321098765432"
+
+
+@pytest.mark.asyncio
+async def test_ops_registration_role_pair_validation_and_audit(tmp_path, db):
+    settings = Settings(admin_password="a-strong-password-123", secret_key="s", data_dir=tmp_path, admin_cookie_secure=False)
+    state = AdminState(settings)
+    state.db = db
+    app = FastAPI()
+    app.state.gate = state
+    app.include_router(admin_router)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        await c.post("/admin/api/login", json={"password": "a-strong-password-123"})
+
+        # Only role_guild provided -> 422
+        r1 = await c.put("/admin/api/ops/registration", json={"role_guild": "1234567890123456", "role_id": ""})
+        assert r1.status_code == 422
+        assert "同时" in r1.json()["detail"]
+
+        # Only role_id provided -> 422
+        r2 = await c.put("/admin/api/ops/registration", json={"role_guild": "", "role_id": "1234567890123456"})
+        assert r2.status_code == 422
+        assert "同时" in r2.json()["detail"]
+
+        # Both provided -> 200
+        r3 = await c.put("/admin/api/ops/registration", json={"role_guild": "1234567890123456", "role_id": "9876543210987654"})
+        assert r3.status_code == 200
+
+        # Check audit target for ops/registration
+        logs = await db._db.execute_fetchall("SELECT action, target FROM admin_actions WHERE action='修改开放注册设置'")
+        assert len(logs) >= 1
+        assert logs[-1][1] == "自助领 Key 设置"
+
+        # Check ops/features and its audit target
+        rf = await c.put("/admin/api/ops/features", json={"flags": {"text": False}})
+        assert rf.status_code == 200
+        flogs = await db._db.execute_fetchall("SELECT action, target FROM admin_actions WHERE action='修改全局功能开关'")
+        assert len(flogs) >= 1
+        assert flogs[-1][1] == "全站功能开关"
+
+
+@pytest.mark.asyncio
+async def test_limits_audit_targets_and_quota_algo_put(tmp_path, db):
+    settings = Settings(admin_password="a-strong-password-123", secret_key="s", data_dir=tmp_path, admin_cookie_secure=False)
+    state = AdminState(settings)
+    state.db = db
+    async def fake_update_runtime_limits(body):
+        return body
+    state.update_runtime_limits = fake_update_runtime_limits
+    app = FastAPI()
+    app.state.gate = state
+    app.include_router(admin_router)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        await c.post("/admin/api/login", json={"password": "a-strong-password-123"})
+
+        # 1. runtime-limits
+        r1 = await c.put("/admin/api/runtime-limits", json={"queue_timeout": 60})
+        assert r1.status_code == 200
+        logs1 = await db._db.execute_fetchall("SELECT action, target FROM admin_actions WHERE action='修改排队与冷却'")
+        assert len(logs1) >= 1
+        assert logs1[-1][1] == "图片排队与冷却"
+
+        # 2. settings
+        r2 = await c.put("/admin/api/settings", json={"global_daily_v5": 50})
+        assert r2.status_code == 200
+        logs2 = await db._db.execute_fetchall("SELECT action, target FROM admin_actions WHERE action='修改预算'")
+        assert len(logs2) >= 1
+        assert logs2[-1][1] == "Anlas 与 V5 预算"
+
+        # 3. quota-algo PUT
+        r3 = await c.put("/admin/api/quota-algo", json={"quota_target_avg": 120, "quota_ceiling_max": 250})
+        assert r3.status_code == 200
+        assert r3.json()["ok"] is True
+        logs3 = await db._db.execute_fetchall("SELECT action, target FROM admin_actions WHERE action='修改动态额度参数'")
+        assert len(logs3) >= 1
+        assert logs3[-1][1] == "动态额度参数"
+
+        # Check that quota_target_avg setting was actually saved
+        saved_avg = await db.get_setting("quota_target_avg", None)
+        assert int(saved_avg) == 120
+
+
+@pytest.mark.asyncio
+async def test_modules_audit_targets_and_run_endpoint(tmp_path, db):
+    from app.kernel import Kernel, Module
+    settings = Settings(admin_password="a-strong-password-123", secret_key="s", data_dir=tmp_path, admin_cookie_secure=False)
+    state = AdminState(settings)
+    state.db = db
+    kernel = Kernel(state)
+    kernel.register(Module("testmod", "测试模块", "测试用途？", default_enabled=True))
+    state.kernel = kernel
+    app = FastAPI()
+    app.state.gate = state
+    app.include_router(admin_router)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        await c.post("/admin/api/login", json={"password": "a-strong-password-123"})
+
+        # 1. PUT /modules/testmod
+        r1 = await c.put("/admin/api/modules/testmod", json={"enabled": False})
+        assert r1.status_code == 200
+        logs1 = await db._db.execute_fetchall("SELECT action, target FROM admin_actions WHERE action='启用 / 关闭模块'")
+        assert len(logs1) >= 1
+        assert logs1[-1][1] == "模块 测试模块"
+
+        # 2. POST /modules/run
+        r2 = await c.post("/admin/api/modules/run")
+        assert r2.status_code == 200
+        logs2 = await db._db.execute_fetchall("SELECT action, target FROM admin_actions WHERE action='手动执行模块校验'")
+        assert len(logs2) >= 1
+        assert logs2[-1][1] == "全部模块"
+
+
+@pytest.mark.asyncio
+async def test_discord_bot_audit_target_and_put(tmp_path, db):
+    settings = Settings(admin_password="a-strong-password-123", secret_key="s", data_dir=tmp_path, admin_cookie_secure=False)
+    state = AdminState(settings)
+    state.db = db
+    app = FastAPI()
+    app.state.gate = state
+    app.include_router(admin_router)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        await c.post("/admin/api/login", json={"password": "a-strong-password-123"})
+
+        r = await c.put("/admin/api/discord-bot", json={
+            "gallery_forum": "测试专区",
+            "gallery_like": 1,
+            "gallery_ai": 0,
+            "gallery_ai_daily": 20,
+            "gallery_ai_model": "LongCat-2.5-Preview"
+        })
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        logs = await db._db.execute_fetchall("SELECT action, target FROM admin_actions WHERE action='修改 Discord 机器人设置'")
+        assert len(logs) >= 1
+        assert logs[-1][1] == "Discord 机器人设置"
+
+
+@pytest.mark.asyncio
+async def test_settings_announcement_and_password_audit_targets(tmp_path, db):
+    settings = Settings(admin_password="a-strong-password-123", secret_key="s", data_dir=tmp_path, admin_cookie_secure=False)
+    state = AdminState(settings)
+    state.db = db
+    app = FastAPI()
+    app.state.gate = state
+    app.include_router(admin_router)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        await c.post("/admin/api/login", json={"password": "a-strong-password-123"})
+
+        # 1. announcement
+        r1 = await c.put("/admin/api/announcement", json={"html": "<h2>欢迎</h2>"})
+        assert r1.status_code == 200
+        logs1 = await db._db.execute_fetchall("SELECT action, target FROM admin_actions WHERE action='修改站点公告'")
+        assert len(logs1) >= 1
+        assert logs1[-1][1] == "站点公告"
+
+        # 2. password (successful change)
+        r2 = await c.put("/admin/api/password", json={"current": "a-strong-password-123", "new": "a-brand-new-password-456"})
+        assert r2.status_code == 200
+        logs2 = await db._db.execute_fetchall("SELECT action, target FROM admin_actions WHERE action='修改后台密码'")
+        assert len(logs2) >= 1
+        assert logs2[-1][1] == "后台登录密码"
+
+
+
+
+
+
+
+

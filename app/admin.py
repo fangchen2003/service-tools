@@ -12,7 +12,7 @@ import math
 import os
 import shutil
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, quote
 from typing import Any, Optional
 
 import json
@@ -71,7 +71,7 @@ class AuditedRoute(APIRoute):
                 if authed:
                     await _log(request, label, target, f"失败（{exc.status_code}）：{exc.detail}"[:200], ok=False)
                 raise
-            if authed:
+            if authed and not getattr(request.state, "action_logged", False):
                 if path == "/keys" and isinstance(body, dict):
                     target = str(body.get("name") or "")
                 if path == "/keys/{key_id}" and request.method == "DELETE" and \
@@ -102,6 +102,37 @@ async def _audit_target(request: Request, path: str) -> str:
             return f"Key #{request.path_params['key_id']} {key['name'] if key else '(不存在)'}"
         if "{token_id}" in path:
             return "上游 " + str(request.path_params.get("token_id", ""))[:24]
+        if "{sig}" in path:
+            return f"Bug {str(request.path_params.get('sig', ''))[:12]}"
+        if path.endswith("/errors/resolve-all"):
+            return "全部未处理 Bug"
+        if path.endswith("/ops/registration"):
+            return "自助领 Key 设置"
+        if path.endswith("/ops/features"):
+            return "全站功能开关"
+        if path.endswith("/guard"):
+            return "账号保护与排队"
+        if path.endswith("/anlas-pool"):
+            return "Anlas 自动分配"
+        if path.endswith("/runtime-limits"):
+            return "图片排队与冷却"
+        if path.endswith("/settings"):
+            return "Anlas 与 V5 预算"
+        if path.endswith("/quota-algo"):
+            return "动态额度参数"
+        if "{name}" in path and "/modules/" in path:
+            m_name = str(request.path_params.get("name", ""))
+            kernel = getattr(request.app.state.gate, "kernel", None)
+            title = kernel.modules[m_name].title if (kernel and m_name in kernel.modules) else m_name
+            return f"模块 {title}"
+        if path.endswith("/modules/run"):
+            return "全部模块"
+        if path.endswith("/discord-bot"):
+            return "Discord 机器人设置"
+        if path.endswith("/announcement"):
+            return "站点公告"
+        if path.endswith("/password"):
+            return "后台登录密码"
     except Exception:
         pass
     return ""
@@ -112,7 +143,9 @@ router = APIRouter(prefix=PREFIX, route_class=AuditedRoute)
 
 def _safe_filename(name: str) -> str:
     import re as _re
-    return _re.sub(r'[^\\w.-]', '_', str(name))[:40] or 'member'
+    cleaned = _re.sub(r'[^a-zA-Z0-9_.-]', '_', str(name)).strip('_.')
+    return cleaned[:40] or 'member'
+
 
 COOKIE = "nai_gate_admin"
 
@@ -1000,9 +1033,10 @@ async def delete_ban(request: Request, discord_id: str):
 
 @router.get("/logs")
 async def logs(request: Request, key_id: Optional[int] = None, page: int = 1,
-               feature: Optional[str] = None, hide_test: bool = False, rid: str = ""):
+               feature: Optional[str] = None, hide_test: bool = False, rid: str = "",
+               per_page: int = 20):
     require_admin(request)
-    per_page = 20
+    per_page = per_page if per_page in (20, 50, 100) else 20
     page = max(1, min(int(page), 1_000_000))
     db = request.app.state.gate.db
     if feature and feature not in feature_defs.FEATURES:
@@ -1153,6 +1187,17 @@ async def modules_put(request: Request, name: str):
     return {"ok": True, "modules": await kernel.snapshot()}
 
 
+@router.post("/modules/run")
+async def modules_run_all(request: Request):
+    """手动立即执行一轮模块任务与交叉校验。"""
+    require_admin(request)
+    kernel = getattr(request.app.state.gate, "kernel", None)
+    if kernel is None:
+        raise HTTPException(503, "模块内核未就绪")
+    await kernel.tick_all()
+    return {"ok": True, "modules": await kernel.snapshot()}
+
+
 @router.get("/errors")
 async def errors_list(request: Request, all: bool = False):
     """Bug 追踪：按特征归并的错误（未处理的在前）。detail 含堆栈，只在后台显示。"""
@@ -1161,13 +1206,26 @@ async def errors_list(request: Request, all: bool = False):
     items = await tracker.list(include_resolved=all)
     keys = {r["last_key"] for r in items if r["last_key"]}
     names = {}
-    for key_id in keys:
-        row = await request.app.state.gate.db.get_key(key_id)
-        if row:
-            names[key_id] = row["name"]
+    if keys:
+        try:
+            placeholders = ",".join("?" for _ in keys)
+            rows = await (await request.app.state.gate.db._db.execute(
+                f"SELECT id, name FROM keys WHERE id IN ({placeholders})", tuple(keys)
+            )).fetchall()
+            names = {r[0]: r[1] for r in rows}
+        except Exception:
+            for key_id in keys:
+                row = await request.app.state.gate.db.get_key(key_id)
+                if row:
+                    names[key_id] = row["name"]
     for r in items:
-        r["key_name"] = names.get(r["last_key"], "")
-    return {"errors": items, "open": sum(1 for r in items if r["resolved_at"] is None)}
+        key_id = r["last_key"]
+        if key_id:
+            r["key_name"] = names.get(key_id) or f"Key #{key_id} (已删除)"
+        else:
+            r["key_name"] = ""
+    open_cnt = await tracker.open_count() if hasattr(tracker, "open_count") else sum(1 for r in items if r["resolved_at"] is None)
+    return {"errors": items, "open": open_cnt}
 
 
 @router.post("/errors/{sig}/resolve")
@@ -1175,8 +1233,16 @@ async def errors_resolve(sig: str, request: Request):
     """标记已处理；之后再出现会作为「复发」重新提醒。"""
     require_admin(request)
     if not await request.app.state.gate.bugs.resolve(sig[:12]):
-        raise HTTPException(404, "没有这条未处理的错误")
+        raise HTTPException(404, "没有这条错误记录")
     return {"ok": True}
+
+
+@router.post("/errors/resolve-all")
+async def errors_resolve_all(request: Request):
+    """一键标记所有未处理 Bug 为已处理。"""
+    require_admin(request)
+    count = await request.app.state.gate.bugs.resolve_all()
+    return {"ok": True, "count": count}
 
 
 @router.get("/perf")
@@ -1271,7 +1337,7 @@ async def admin_actions(request: Request, page: int = 1, actor: str = "", action
     where, args = [], []
     kind = (actor or "").strip()
     if kind == "admin":
-        where.append("actor LIKE '后台%'")
+        where.append("(actor LIKE '后台%' OR actor = '站长')")
     elif kind == "system":
         where.append("actor = '系统'")
     elif kind == "member":
@@ -1647,8 +1713,16 @@ async def members(request: Request):
         e["count"] += 1
         if a_ts > e["last_ts"]:
             e["last_ts"] = a_ts
+    today_counters = {
+        int(r["key_id"]): dict(r)
+        for r in await (await st.db._db.execute(
+            "SELECT key_id, images, v5, anlas, text_tokens, requests FROM counters WHERE day=?",
+            (today,),
+        )).fetchall()
+    }
+    default_counter = {"images": 0, "v5": 0, "anlas": 0.0, "text_tokens": 0, "requests": 0}
     for row in await st.db.list_keys():
-        counter = await st.db.get_counter(row["id"], today)
+        counter = today_counters.get(row["id"], default_counter)
         w = week.get(row["id"], {})
         m_tags = [t["tag"] for t in manual_tags.get(row["id"], [])]
         if row["is_admin"]:
@@ -1740,8 +1814,8 @@ async def audit_thumb(request: Request, audit_id: int):
 @router.get("/audit/{audit_id}/image")
 async def audit_image(request: Request, audit_id: int):
     """原图（清晰版）。没有原图时回退到缩略图。"""
-    db = request.app.state.gate.db
     require_admin(request)
+    db = request.app.state.gate.db
     data, ctype = await db.audit_image(audit_id)
     if data is None:
         data = await db.audit_thumb(audit_id)
@@ -1758,16 +1832,20 @@ async def audit_export(request: Request, key_id: Optional[int] = None):
     if key_id is None:
         raise HTTPException(400, "缺少 key_id")
     db = request.app.state.gate.db
-    rows = await db.audit_images_for(key_id)
+    rows = await db.audit_images_for(key_id, max_bytes=200 * 1024 * 1024)
     if not rows:
         raise HTTPException(404, "该成员没有可导出的原图")
     name = await db._db.execute_fetchall("SELECT name FROM api_keys WHERE id=?", (key_id,))
     who = (name[0][0] if name else str(key_id)) or str(key_id)
     from . import exporter
     blob = await run_in_threadpool(exporter.build_zip, rows, who)
-    fname = f"owl-{_safe_filename(who)}-{len(rows)}.zip"
+    safe_who = _safe_filename(who)
+    fname = f"owl-{safe_who}-{len(rows)}.zip"
+    import urllib.parse
+    enc_name = urllib.parse.quote(f"owl-{who}-{len(rows)}.zip")
+    disposition = f'attachment; filename="{fname}"; filename*=UTF-8\'\'{enc_name}'
     return Response(blob, media_type="application/zip",
-                    headers={"Content-Disposition": f"attachment; filename=\"{fname}\"", "Cache-Control": "no-store"})
+                    headers={"Content-Disposition": disposition, "Cache-Control": "no-store"})
 
 
 _LAST_LOG_EXPORT = 0.0
@@ -1806,8 +1884,10 @@ async def feedback_export(request: Request):
     require_admin(request)
     from . import feedback
     blob = feedback.to_csv(await feedback.listing(request.app.state.gate.db, 100000))
+    await log_action(request.app.state.gate.db, _actor(request), "导出成员反馈", "全部CSV")
+    fn = f"owl-feedback-{time.strftime('%Y%m%d-%H%M')}.csv"
     return Response(blob, media_type="text/csv; charset=utf-8",
-                    headers={"Content-Disposition": f"attachment; filename=\"owl-feedback-{time.strftime('%Y%m%d-%H%M')}.csv\"",
+                    headers={"Content-Disposition": f"attachment; filename=\"{fn}\"; filename*=UTF-8''{quote(fn)}\"",
                              "Cache-Control": "no-store"})
 
 
@@ -1841,16 +1921,26 @@ async def audit_purge_images(request: Request):
         raise HTTPException(422, "需要 confirm=清空")
     st = request.app.state.gate
     n = await st.db.purge_audit_images_before_id(2 ** 62)
+    _THUMB_CACHE.clear()
+    request.state.action_logged = True
     await log_action(st.db, "站长", "清空原图", "", f"{n} 张")
     return {"ok": True, "purged": n}
+
+
+_last_alert_test_time = 0.0
 
 
 @router.post("/alerts/test")
 async def alerts_test(request: Request):
     require_admin(request)
+    global _last_alert_test_time
+    now = time.time()
+    if now - _last_alert_test_time < 10.0:
+        raise HTTPException(429, f"测试告警发送过于频繁，请等待 {int(10.0 - (now - _last_alert_test_time))} 秒后再试")
     alerter = request.app.state.gate.alerter
     if not alerter.configured:
         raise HTTPException(409, "尚未配置告警渠道（ALERT_USER_ID / ALERT_CHANNEL_ID / ALERT_WEBHOOK_URL）")
+    _last_alert_test_time = now
     alerter.notify("test", "这是一条测试告警，收到说明告警渠道正常。", cooldown=0)
     return {"ok": True}
 
@@ -1861,10 +1951,20 @@ async def _ops_snapshot(request: Request) -> dict:
     st = request.app.state.gate
     service = getattr(request.app.state, "registrar", None)
     reg = await ops.registration_settings(st.db, service)
-    reg["active"] = await service.count_active() if service else 0
+    if service:
+        reg["active"] = await service.count_active()
+        reg["waitlist"] = await service.waitlist()
+    else:
+        reg["active"] = await ops._active_count(st.db)
+        try:
+            rows = await st.db.execute_fetchall_compat(
+                "SELECT discord_id, name, joined_at, invited_at FROM waitlist ORDER BY joined_at"
+            )
+            reg["waitlist"] = [{"discord_id": r[0], "name": r[1], "joined_at": r[2], "invited_at": r[3]} for r in rows]
+        except Exception:
+            reg["waitlist"] = []
     reg["reset_at"] = service.reset_at if service else ""
     reg["v5_capacity"] = await ops.v5_capacity(st.db, st.settings, service)
-    reg["waitlist"] = await service.waitlist() if service else []
     prompts, thumbs, days = await ops.audit_flags(st.db, st.settings)
     return {
         "registration": reg,
@@ -1875,8 +1975,8 @@ async def _ops_snapshot(request: Request) -> dict:
                   "image_retention_days": await audit_image_days(st.db),
                   "image_cap_mb": await audit_image_cap_mb(st.db), "image_bytes": await st.db.audit_image_bytes(),
                   "image_keep_hours": await audit_image_keep_hours(st.db),
-                  "announce_configured": st.announcer.configured},
-        "upstream": st.upstream_health(),
+                  "announce_configured": bool(getattr(getattr(st, "announcer", None), "configured", False))},
+        "upstream": st.upstream_health() if hasattr(st, "upstream_health") else {},
     }
 
 
@@ -1943,5 +2043,7 @@ async def ops_reset_all_keys(request: Request):
     await st.db._db.execute("DELETE FROM key_tags WHERE key_id NOT IN (SELECT id FROM api_keys WHERE is_admin=1)")
     await st.db._db.execute("DELETE FROM share_state")
     await st.db._db.commit()
+    request.state.action_logged = True
+    await log_action(st.db, "站长", "全站重置 Key", "全部非管理员", f"已失效 {disabled_count} 把 Key 并清空 Discord 绑定")
     return {"ok": True, "disabled_count": disabled_count, "message": f"全站已成功重置！已失效 {disabled_count} 把 Key 并解除 Discord 绑定。"}
 
