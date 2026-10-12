@@ -393,9 +393,9 @@ async def authenticate(request: Request, *, passive: bool = False):
         getattr(STATE, "record_auth_failure", lambda _ip: None)(client_id)
         raise err(401, "无效的 API Key")
     if not row["enabled"]:
-        raise err(403, "该 Key 已被禁用")
+        raise err(403, "该 Key 已被停用")
     if row["expires_at"] and row["expires_at"] < time.time():
-        raise err(403, "该 Key 已过期，请联系站长续期")
+        raise err(403, "该 Key 已过期")
     if passive:          # 首页每秒查排队位置：只读，不算使用，不参与防分享统计
         return row
     share = getattr(STATE, "share", None)
@@ -403,8 +403,8 @@ async def authenticate(request: Request, *, passive: bool = False):
         until = time.strftime("%m-%d %H:%M", time.localtime(share.paused_until(row["id"])))
         reason = getattr(share, "pause_reasons", {}).get(row["id"])
         if reason:
-            raise err(403, f"{reason}，{until} 自动恢复。如有疑问请联系站长。", reasons.KEY_PAUSED)
-        raise err(403, f"你的 Key 因检测到多人共用已暂停，{until} 自动恢复。Key 仅限本人使用；如果是误判，请联系站长。",
+            raise err(403, f"{reason}，{until} 自动恢复。", reasons.KEY_PAUSED)
+        raise err(403, f"检测到异常多地使用，Key 已临时暂停至 {until}，仅限本人使用。",
                   reasons.KEY_PAUSED)
     # 只要 Key 实际通过鉴权即视为使用，避免 Launcher 登录/上游暂时失败时被误删。
     # 记「最后使用时间」只是记账：写失败（如 database is locked）不能让成员的请求 500（10/11 02:01 实际发生一次）。

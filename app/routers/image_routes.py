@@ -168,7 +168,7 @@ async def _acquire_slots(key, *, image: bool):
                 if not image:
                     await resources.enter_async_context(state.global_sem)
         except TimeoutError:
-            raise _main().err(429, "当前排队人数过多，请稍后再试")
+            raise _main().err(429, "排队等待超时，当前站点繁忙，请稍后再试")
         finally:
             state.global_waiting -= 1
         state.global_active += 1
@@ -195,7 +195,7 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
     if legacy_free_images and key["daily_images"] > 0:
         used_legacy = c["legacy_free_images"] + sum(r.legacy for r in own_day)
         if used_legacy + legacy_free_images > key["daily_images"]:
-            raise main.err(402, f"今日 V4.5 及以下免费图额度已用完（{key['daily_images']} 张/天），明日恢复")
+            raise main.err(402, f"今日 V4.5 免费图额度已用完（{key['daily_images']} 张/天），明日恢复")
         # 平滑注水令牌桶机制：底仓 30 张，每小时自动注水恢复 4 张，全天恢复上限为 key['daily_images']。
         # 手动 Key（_manual(key) 为 True）不走注水限制，直接使用静态额度。
         if not _manual(key):
@@ -216,8 +216,8 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
                 needed_hours = needed / refill_rate
                 wait_minutes = max(1, int(round((needed_hours - hours_today) * 60)))
                 raise main.err(429, reasons.Reason(
-                    f"当前额度蓄水池已用完（今日已用 {used_legacy} / 每日上限 {key['daily_images']} 张）。"
-                    f"额度每小时自动恢复 4 张，约 {wait_minutes} 分钟后恢复 1 张，请稍后再试",
+                    f"当前出图速度过快（今日已用 {used_legacy} / 每日上限 {key['daily_images']} 张）。"
+                    f"额度每小时自动恢复 4 张，约 {wait_minutes} 分钟后可用，请稍后再试",
                     reasons.PACED
                 ))
         # 保底与借用：超过每日保底后，只在全站空闲（没人排队、本小时用量不高）时放行，直到 Key 的每日上限。
@@ -228,12 +228,10 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
             # 按时段放行时，超出保底的部分只能用「这个时段放出来、还剩得多」的份额：至少留半小时的量给保底内的人
             reserve = guard.values["account_daily_cap"] / 48 * len(tokens)
             if not guard.site_idle(key["id"], tokens):
-                raise main.err(429, reasons.Reason(f"今天的保底 {base} 张已用完。全站空闲时可以继续用到 {key['daily_images']} 张，"
-                                      "现在有其他人在排队或用量较高，请过几分钟再试", reasons.OVER_BASE))
+                raise main.err(429, reasons.Reason(f"已用完保底 {base} 张。当前高峰期有排队，空闲时可继续用到 {key['daily_images']} 张，请稍后再试", reasons.OVER_BASE))
             if await guard.paced_headroom(state.db, tokens, state.day()) <= reserve:
                 # 文案不能含「其他人在排队」：每日复盘按它数 base_blocks（「有余量还被拦」），这里是份额紧（Sonnet 审查 P1）
-                raise main.err(429, reasons.Reason(f"今天的保底 {base} 张已用完。这个时段放出的出图份额所剩不多，先留给还没用到保底的成员；"
-                                      f"份额充裕时可以继续用到 {key['daily_images']} 张，请稍后再试", reasons.OVER_BASE))
+                raise main.err(429, reasons.Reason(f"已用完保底 {base} 张。此时段余量优先供给保底成员，空闲时可继续用到 {key['daily_images']} 张，请稍后再试", reasons.OVER_BASE))
     if est["v5"] > 0:
         # V5 周额度是账户级共享资源，用全站日计数镜像（恢复量 ~190 张/天）
         try:
@@ -242,7 +240,7 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
             manual = False
         borrow = quota_algo.borrow_for(key["id"]) if key["daily_v5"] > 0 and not manual else 0    # 手动 Key 填多少就是多少，不借
         if key["daily_v5"] > 0 and c["v5"] + sum(r.v5 for r in own_day) + est["v5"] > key["daily_v5"] + borrow:
-            raise main.err(402, f"已达今日 V5 额度（{key['daily_v5']} 张/天" + (f"，含空闲借用 {borrow} 张" if borrow else "")
+            raise main.err(402, f"今日 V5 额度已用完（{key['daily_v5']} 张/天" + (f"，含空闲借用 {borrow} 张" if borrow else "")
                       + "），明天恢复后再用")
         g = await site_flags.get(state.db, site_flags.GLOBAL_DAILY_V5, state.settings)
         if g > 0 and quota_algo.BORROW.get("open"):
@@ -284,7 +282,7 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
         if budget > 0:
             all_used = await state.db.month_anlas_all(state.month())
             if all_used + sum(r.anlas for r in global_month) + est["anlas"] > budget:
-                raise main.err(402, f"全站本月 Anlas 预算已耗尽（{budget:.0f}），请联系站长")
+                raise main.err(402, f"全站本月 Anlas 预算已耗尽（{budget:.0f}）")
 
 
 class ImageReservation:
@@ -534,7 +532,7 @@ async def _generate_image(request: Request, *, streaming: bool):
     request_timing.set_model(str(body.get("model") or ""))
     request_timing.refine_client_from_payload(body)
     if not isinstance(body.get("parameters"), dict):
-        raise main.err(400, "缺少 parameters 对象")
+        raise main.err(400, "生图参数缺失或格式无效")
     try:
         normalize_image_request(body)
     except ValueError as exc:
@@ -568,8 +566,7 @@ async def _generate_image(request: Request, *, streaming: bool):
             _bug("share_guard", exc)
     if model_tier == "v5" and not key["is_admin"] and key["image_model_scope"] != "all":
         main.record(key, "image", model, "rejected", detail="模型权限：仅允许 V4.5 及更低")
-        raise main.err(403, "你的 Key 目前只能用 V4.5 及更低模型（V5 是全站共享的有限额度，暂时只开放给早期成员）。"
-                       "请在客户端把模型换成 NAI Diffusion V4.5 再生成")
+        raise main.err(403, "你的 Key 目前只能用 V4.5 及更低模型")
 
     # 图生图功能权限与费用分开判断；免费规格也沿用 Anlas 权限要求。
     if body.get("image") or body.get("mask"):
@@ -614,9 +611,9 @@ async def _generate_image(request: Request, *, streaming: bool):
     try:
         image_count = int(p.get("n_samples", 1) or 1)
     except (TypeError, ValueError):
-        raise main.err(400, "n_samples 必须是正整数")
+        raise main.err(400, "一次生成张数必须是正整数")
     if image_count < 1:
-        raise main.err(400, "n_samples 必须是正整数")
+        raise main.err(400, "一次生成张数必须是正整数")
 
     try:
         est = estimate_image_cost(body, is_opus=True)
@@ -652,7 +649,7 @@ async def _generate_image(request: Request, *, streaming: bool):
         nonlocal est, detail
         if exhausted and not key["allow_anlas"]:
             # 账号的 V5 免费额度刚用完：直说原因，不要报成「你的 Key 没开通付费权限」（审查 P2）
-            raise main.err(402, "账号今天的 V5 免费额度刚用完（不是你的个人额度）。可以先改用 V4.5，额度恢复后再用 V5", reasons.V5_EXHAUSTED)
+            raise main.err(402, "上游账号今日 V5 免费额度已耗尽（非个人原因），请改用 V4.5 生成", reasons.V5_EXHAUSTED)
         updated = estimate_image_cost(body, is_opus=True, v5_allowance_available=not exhausted)
         await reservation.update(key, updated, legacy_free_images)
         est = updated
