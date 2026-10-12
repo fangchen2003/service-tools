@@ -1,0 +1,16 @@
+#!/bin/bash
+# 用法：naigate-snapshot <输出文件.db.gz>
+# 部署前快照和每晚备份共用：在网关容器里做一份不含原图的一致快照（snapshot.py）→ 完整性校验 → gzip（权限 600）。
+# 原图是临时数据（3 天自动删、成员可在首页自行打包下载），占整库 90% 以上，不备份。
+# 不要再用宿主机 sqlite3 .backup 整库复制：1.3GB 时要几分钟、磁盘 IO 打满，网关写库超时 → 成员收到 500（2026-10-10）。
+set -euo pipefail
+OUT=${1:?usage: naigate-snapshot <out.db.gz>}
+DATA=/opt/service-tools/data
+NAME=.snap-$$-$(date +%s).db
+trap 'rm -f "$DATA/$NAME"' EXIT
+RES=$(docker exec -i nai-gate python - "/app/data/$NAME" < /opt/backups/snapshot.py)
+CHK=${RES% *}; KEYS=${RES#* }
+[ "$CHK" = "ok" ] || { echo "snapshot FAILED integrity_check: $RES" >&2; exit 1; }
+gzip -c "$DATA/$NAME" > "$OUT"
+chmod 600 "$OUT"
+echo "snapshot $OUT ($(du -h "$OUT" | cut -f1), integrity ok, keys=$KEYS)"

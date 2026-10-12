@@ -182,3 +182,83 @@ async def test_collision_does_not_destroy_existing_credentials(env):
     assert (await state.db.get_key(key['id']))['token'] == key['token']
     assert (await state.db.get_key(other['id']))['token'] == other['token']
     await state.db._db.rollback()
+
+
+@pytest.mark.asyncio
+async def test_noop_scope_patch_keeps_algorithm_and_pin_goes_manual(env):
+    # 2026-10-10：提交一个没变的「模型 = 全部」就把 Key 转成手动、V5 冻结在 18；只有值真的变了才转手动
+    state, client, key = env
+    await login(client)
+    r = await client.patch(f"/admin/api/keys/{key['id']}", json={'image_model_scope': 'all', 'notify': False})
+    assert r.status_code == 200
+    assert (await state.db.get_key(key['id']))['quota_auto'] == 1
+    r = await client.patch(f"/admin/api/keys/{key['id']}", json={'v5_pinned': 30, 'notify': False})
+    row = await state.db.get_key(key['id'])
+    assert r.status_code == 200 and row['quota_auto'] == -1 and row['v5_pinned'] == 30 and row['image_model_scope'] == 'all'
+    r = await client.patch(f"/admin/api/keys/{key['id']}", json={'quota_mode': 'auto', 'notify': False})
+    row = await state.db.get_key(key['id'])
+    assert row['quota_auto'] == 1 and row['v5_pinned'] is None            # 交回算法：清掉手动基础值
+
+
+@pytest.mark.asyncio
+async def test_quota_two_modes_auto_and_manual(env):
+    # 2026-10-11 站长：额度只有「算法」和「手动」两种。手动 = 填多少就是多少；算法 = 全部交给算法，忽略填的数字
+    state, client, key = env
+    await login(client)
+    manual = {'quota': 'manual', 'notify': False, 'daily_images': 40, 'daily_v5': 80, 'daily_anlas': 150,
+              'monthly_anlas': 1500, 'allow_anlas': True, 'exclude_global_v5': True, 'image_model_scope': 'all',
+              'features': ['image', 'vibe', 'upscale']}
+    r = await client.patch(f"/admin/api/keys/{key['id']}", json=manual)
+    row = await state.db.get_key(key['id'])
+    assert r.status_code == 200
+    assert (row['quota_auto'], row['anlas_auto'], row['v5_pinned']) == (-1, -1, None)        # 没有「基础值」中间状态
+    assert (row['daily_images'], row['daily_v5'], row['daily_anlas'], row['exclude_global_v5']) == (40, 80, 150.0, 1)
+    assert row['features'] == 'image,upscale,vibe'
+    r = await client.patch(f"/admin/api/keys/{key['id']}", json={'quota': 'auto', 'notify': False,
+                                                                  'daily_images': 999, 'exclude_global_v5': True})
+    row = await state.db.get_key(key['id'])
+    assert r.status_code == 200
+    assert (row['quota_auto'], row['anlas_auto'], row['v5_pinned'], row['features'], row['exclude_global_v5']) == (1, 0, None, None, 0)
+    assert row['daily_images'] != 999                                                        # 算法模式忽略填的数字
+    assert (row['allow_anlas'], row['daily_anlas']) == (0, 0.0)                              # 手动的 Anlas 授权收回，交给算法
+    assert (await client.patch(f"/admin/api/keys/{key['id']}", json={'quota': 'half'})).status_code == 422
+    await state.db.update_key(key['id'], {'is_test': True})
+    r = await client.patch(f"/admin/api/keys/{key['id']}", json={'quota': 'auto', 'notify': False})
+    assert r.status_code == 422 and '测试 Key' in r.json()['detail']                          # 测试 Key 只能手动
+    listed = {k['id']: k for k in (await client.get('/admin/api/keys')).json()['keys']}
+    assert listed[key['id']]['quota_auto'] is True
+
+
+@pytest.mark.asyncio
+async def test_member_tags_manual_and_auto(env):
+    # 后台标签：手动（带备注）+ 自动（近 24 小时因成员自己能改的原因被拒）；删 Key 时标签一起清掉
+    state, client, key = env
+    await login(client)
+    await state.db.add_log(key['id'], key['name'], 'image', 'm', 'rejected',
+                           detail='403 Vibe 编码会消耗 Anlas（每次编码参考图约 2 Anlas）')
+    r = await client.put(f"/admin/api/keys/{key['id']}/tags", json={'tag': '疑似小号', 'note': '和 #100 同前缀'})
+    assert r.status_code == 200
+    assert (await client.put(f"/admin/api/keys/{key['id']}/tags", json={'tag': '  '})).status_code == 422
+    from app.admin import member_tags
+    manual, auto = await member_tags(state.db, time.time() - 86400)
+    assert [t['tag'] for t in manual[key['id']]] == ['疑似小号'] and manual[key['id']][0]['note'] == '和 #100 同前缀'
+    assert auto[key['id']] == [{'tag': '开着 Vibe', 'count': 1}]
+    actions = [a['action'] for a in await state.db.list_admin_actions()]
+    assert '成员标签' in actions
+    assert (await client.delete(f"/admin/api/keys/{key['id']}/tags/疑似小号")).status_code == 200
+    assert (await client.delete(f"/admin/api/keys/{key['id']}/tags/疑似小号")).status_code == 404
+    await client.put(f"/admin/api/keys/{key['id']}/tags", json={'tag': '站长熟人'})
+    await state.db.delete_key(key['id'])
+    assert not await state.db._db.execute_fetchall("SELECT 1 FROM key_tags WHERE key_id=?", (key['id'],))
+
+
+@pytest.mark.asyncio
+async def test_status_codes_also_show_upstream(env):
+    # 后台状态码分布要能分开看「网关返回给成员的」和「NovelAI 返回给网关的」（10-11 站长：分不清 429 是谁返回的）
+    state, client, key = env
+    await login(client)
+    await state.db.add_log(key['id'], key['name'], 'image', 'm', 'rejected', detail='429 本小时出图量已达上限')
+    await state.db.add_log(key['id'], key['name'], 'image', 'm', 'ok', up_status=200)
+    d = (await client.get('/admin/api/status-codes?hours=24')).json()
+    up = {c['code']: c for c in d['upstream']}
+    assert up[0]['n'] == 1 and '没发到' in up[0]['meaning'] and up[200]['n'] == 1 and d['upstream_total'] == 2

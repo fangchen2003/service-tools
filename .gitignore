@@ -4,3 +4,17 @@ data/
 .env
 .venv/
 *.db
+.pytest_cache/
+.local/
+*.packed.html
+.DS_Store
+*.db-wal
+*.db-shm
+
+# Claude Code local session dirs
+.claude/
+.agents/
+exports/
+
+# 含成员身份的审计报告只放本地 exports/，不进公开仓库
+docs/AUDIT_*

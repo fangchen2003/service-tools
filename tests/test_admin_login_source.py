@@ -72,7 +72,7 @@ def test_every_protected_admin_route_rejects_missing_or_forged_session():
             for route in router.routes:
                 if route.path.endswith(("/login", "/logout")):
                     continue
-                path = route.path.replace("{key_id}", "1")
+                path = __import__("re").sub(r"\{[^}]+\}", "1", route.path)
                 for method in route.methods:
                     for headers in ({}, {"Cookie": "nai_gate_admin=9999999999.forged"}):
                         response = await client.request(method, path, headers=headers)

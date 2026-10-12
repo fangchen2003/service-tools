@@ -1,0 +1,61 @@
+gate.davidzhao.top {
+	# 桥接接口只在容器内网使用：整段屏蔽（OAuth 领取回调已删除）；以后新增的桥接路由默认不暴露。
+	@bridge {
+		path /self-register /self-register/*
+	}
+	respond @bridge 404
+	respond /openapi.json 404
+
+	# 【安全红线】边缘剥离外部伪造的内部测试头，严防绕过防分享与风控
+	request_header -X-Admin-Test
+	request_header -X-Test-Channel
+
+	# 只压缩网页、后台和公开 JSON（10/10 后台无压缩，首页 247KB 原样传）；出图接口（含流式）不压缩，避免缓冲
+	@compress path / /admin /admin/* /status /status.json /public/* /static/*
+	encode @compress zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	# NAI 工作台（只给站长）：前端写死了 /api /assets 等根路径，网关没有这些路径，直接整组转给工作台容器。
+	# 先问网关「是不是站长后台登录」，不是就跳到后台登录页。
+	# 工作台登录前用 credentials:omit 查 /api/health（不带 Cookie），只返回 {ok, mode}，公开放行；其余路径仍要站长登录。
+	handle /api/health {
+		reverse_proxy 172.30.0.20:8787
+	}
+	@workbench path /workbench /workbench/ /api/* /assets/* /fonts/* /tokenizers/* /textures/* /LICENSE /THIRD_PARTY_NOTICES.md /third_party_licenses/*
+	handle @workbench {
+		route {
+			forward_auth 172.30.0.10:8000 {
+				uri /admin/api/me
+				@noauth status 401 403
+				handle_response @noauth {
+					redir * /admin 302
+				}
+			}
+			rewrite /workbench* /
+			reverse_proxy 172.30.0.20:8787
+		}
+	}
+
+	# 状态页独立容灾降级：若网关容器重启或 502/503/504，2 秒内快速降级到独立离线状态页，避免同生共死报原始 502
+	handle /status {
+		reverse_proxy 172.30.0.10:8000 {
+			lb_try_duration 2s
+			lb_try_interval 500ms
+			@status_err status 502 503 504
+			handle_response @status_err {
+				header Content-Type "text/html; charset=utf-8"
+				respond `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>系统状态 · 猫头鹰公益站</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:system-ui,-apple-system,sans-serif;background:#0f1117;color:#e6edf3;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px;box-sizing:border-box}.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:32px;max-width:520px;width:100%;text-align:center;box-shadow:0 8px 24px rgba(0,0,0,0.5)}h1{font-size:22px;margin:0 0 16px;color:#f0883e}p{color:#8b949e;line-height:1.6;font-size:14px;margin:0 0 20px}.btn{display:inline-block;padding:10px 20px;background:#238636;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:14px}.btn:hover{background:#2ea043}.badge{display:inline-block;padding:4px 10px;background:#f0883e22;color:#f0883e;border-radius:20px;font-size:12px;font-weight:600;margin-bottom:12px}</style></head><body><div class="card"><div class="badge">容灾降级模式</div><h1>网关自检中</h1><p>网关主服务正在进行版本发布或例行自检，将在数秒内恢复。<br>外部 NovelAI 服务目前正常，请求正在队列中安全等待。</p><p><a class="btn" href="https://status.novelai.net" target="_blank" rel="noopener">查看 NovelAI 官方状态 ↗</a></p><p style="font-size:12px;color:#484f58;margin-top:24px">页面每 15 秒自动重新检查连接…</p></div><script>setTimeout(function(){ location.reload(); }, 15000);</script></body></html>` 200
+			}
+		}
+	}
+
+	# 直连容器固定 IP（不走 127.0.0.1:3003 的 docker-proxy）
+	reverse_proxy 172.30.0.10:8000 {
+		lb_try_duration 150s
+		lb_try_interval 500ms
+	}
+}

@@ -20,10 +20,10 @@ def state(monkeypatch):
     return value
 
 
-async def post(path, body):
+async def post(path, body, token="fixture-1"):
     transport = httpx.ASGITransport(app=main.app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://fixture.invalid") as client:
-        return await client.post(path, json=body, headers={"Authorization": "Bearer fixture-1"})
+        return await client.post(path, json=body, headers={"Authorization": "Bearer " + token})
 
 
 @pytest.mark.asyncio
@@ -39,6 +39,8 @@ async def post(path, body):
 ])
 async def test_http_errors_keep_status_without_upstream_body(state, path, body, status, content_type, content):
     state.nai.status, state.nai.content_type, state.nai.content = status, content_type, content
+    if path == "/ai/generate-voice":          # voice is admin-only (it is billed in Anlas but not metered)
+        state.db.keys["fixture-1"]["is_admin"] = True
     response = await post(path, body)
     await asyncio.sleep(0)
     assert len(state.nai.calls) == 1
@@ -56,5 +58,5 @@ async def test_unexpected_exception_returns_safe_json(state, monkeypatch):
     monkeypatch.setattr(state.db, "get_key_by_token", broken)
     response = await post("/ai/generate-image", image_body())
     assert response.status_code == 500
-    assert response.json()["error"]["message"] == "服务器内部错误，请联系站长"
+    assert response.json()["error"]["message"].startswith("猫头鹰公益站提醒：服务器内部错误，已自动记录")
     assert "fixture-private" not in response.text and not state.nai.calls

@@ -45,7 +45,7 @@ def test_second_upstream_token_free_v5_limit_and_anlas_block():
             # 上游实际成功生成量按成功响应的 n_samples 累加，不影响 V5 额度。
             await client.record_successful_images(second, 3)
             counter = await db.get_upstream_counter(second.token_id, "2026-09-11")
-            assert counter == {"images": 3, "v5": 150}
+            assert {k: counter[k] for k in ("images", "v5")} == {"images": 3, "v5": 150}
         finally:
             await db.close()
             os.unlink(path)
@@ -69,7 +69,8 @@ def test_saved_v5_limit_and_usage_follow_token_after_reorder(tmp_path):
             await db.bump_upstream_image_counter(old_id, "2026-09-11", 3)
             await db.migrate_upstream_token_ids([token.token_id for token in original.pool])
             await db.migrate_upstream_token_ids([token.token_id for token in original.pool])
-            assert await db.get_upstream_counter(second_id, "2026-09-11") == {"images": 3, "v5": 1}
+            c2 = await db.get_upstream_counter(second_id, "2026-09-11")
+            assert {k: c2[k] for k in ("images", "v5")} == {"images": 3, "v5": 1}
             assert await original.set_v5_daily_limit(second_id, 1)
             assert await original.set_image_concurrency(second_id, 2)
             assert await original.set_admin_enabled(second_id, False)

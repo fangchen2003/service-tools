@@ -50,6 +50,7 @@ async def test_delete_preserves_totals_and_removes_only_credentials_and_offsets(
     assert await db.get_key(row["id"]) is None and await db.list_keys() == []
     assert await db.month_anlas_all("2026-09") == 35
     assert await db.day_v5_total(DAY) == (0 if exempt else 2)
+    before["today"].pop("member_images"); after["today"].pop("member_images")   # 成员出图只统计现存 Key，删除后变化是预期的
     assert all(before[k] == after[k] for k in ("today", "week", "month"))
     assert after["keys_total"] == after["keys_active"] == 0
     assert await scalar(db, "SELECT COUNT(*) FROM daily_quota_offsets") == 0

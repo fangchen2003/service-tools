@@ -72,7 +72,7 @@ class FakeDB:
         await asyncio.sleep(0)
         self.v5[token_id] = self.v5.get(token_id, 0) + 1
 
-    async def bump_upstream_image_counter(self, token_id, day, count):
+    async def bump_upstream_image_counter(self, token_id, day, count, weight=1.0):
         await asyncio.sleep(0)
         self.images[token_id] = self.images.get(token_id, 0) + count
 

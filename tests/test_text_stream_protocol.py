@@ -119,3 +119,30 @@ async def test_stream_errors_filtered_before_delivery_and_count_only_prior_token
     assert sum(values.get("text_tokens", 0) for _, values in state.db.charges) == 1
     assert frames.closed and state.global_active == 0
     assert all("fixture-private" not in str(log) for log in state.db.logs)
+
+
+@pytest.mark.asyncio
+async def test_chat_sends_plain_text_flag_upstream(state):
+    """Upstream parses `input` as base64 tokens unless use_string is set."""
+    state.nai.frames.release.set()
+    response = await post("/v1/chat/completions", body(True))
+    assert response.status_code == 200
+    _url, upstream_body = state.nai.calls[0]
+    assert upstream_body["parameters"]["use_string"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/ai/generate-stream", "/ai/generate"])
+async def test_native_text_rejects_unlisted_model_before_upstream(state, path):
+    payload = {"model": "not-a-real-model", "input": "x", "parameters": {"max_length": 5}}
+    response = await post(path, payload)
+    assert response.status_code == 400
+    assert state.nai.calls == []
+
+
+@pytest.mark.asyncio
+async def test_voice_requires_anlas_permission(state):
+    state.db.keys["fixture-1"].update(allow_anlas=False)
+    response = await post("/ai/generate-voice", {"text": "x"})
+    assert response.status_code == 403
+    assert state.nai.calls == []

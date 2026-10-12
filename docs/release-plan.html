@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>NAI Gate 发布修复</title>
+<link rel="stylesheet" href="htmlplan.css">
+<script src="htmlplan.js" defer></script>
+<body>
+<header>
+  <h1>NAI Gate 发布前修复进度</h1>
+  <doc-changes new="3" changed="14"></doc-changes>
+  <details class="thread"><summary>Why · 3 条要求</summary>
+    <doc-quote via="prompt" from="站长">请帮我完成项目优化，一定要细致，challenage每一条代码和功能……并且从总体overall角度总结和给出修复建议。</doc-quote>
+    <doc-quote via="prompt" from="站长">这次完成后就要发布了，所以必须实测</doc-quote>
+    <doc-quote via="prompt" from="站长">直接修完吧</doc-quote>
+  </details>
+</header>
+<main>
+<doc-plan>
+
+  <doc-claim>
+    <p>✅ 已完成：单个成员不能再用大请求体拖垮服务器。</p>
+    <doc-mock frame="terminal" title="B1 · 资源上限" w="470"><template><span class="g">✓</span> 每 Key 同时进行中的请求 ≤ 4（读请求体之前）
+<span class="g">✓</span> 文本路由请求体 25 MB → 1 MB；标签补全 64 KB
+<span class="g">✓</span> 大请求体在线程里解析，不阻塞事件循环
+<span class="g">✓</span> 钳制改为浅拷贝，不再 deepcopy 整个请求
+<span class="g">✓</span> NaN / Infinity / 嵌套 &gt; 32 层 → 400
+<span class="dim">tests/test_review_regressions.py · 9 个用例</span></template></doc-mock>
+    <doc-claim at="app/main.py:362">
+      <p><b>main.py</b> · limit_inflight()</p>
+      <doc-code src="app/main.py" lines="357-384"></doc-code>
+    </doc-claim>
+    <doc-claim at="app/body.py:54">
+      <p><b>body.py</b> · parse_json()</p>
+      <doc-code src="app/body.py" lines="30-77" collapsed></doc-code>
+    </doc-claim>
+  </doc-claim>
+
+  <doc-claim>
+    <p>✅ 已完成：任何请求都不能绕过 V5 与 Anlas 计价。</p>
+    <doc-mock frame="terminal" title="B3 · 计费" w="470"><template><span class="g">✓</span> 模型名入口统一 strip().lower() 并回写
+<span class="g">✓</span> "nai-diffusion-5 " 不再绕过 V5 计数
+<span class="g">✓</span> width/height/steps/n_samples 必须是整数
+<span class="g">✓</span> 局部重绘按两个 strength 中较大者计价
+<span class="dim">线上实测：28.99 步被上游以 500 拒绝，无白嫖</span></template></doc-mock>
+    <doc-claim at="app/policy.py:184">
+      <p><b>policy.py</b> · normalize_image_request()</p>
+      <doc-code src="app/policy.py" lines="184-208"></doc-code>
+    </doc-claim>
+  </doc-claim>
+
+  <doc-claim>
+    <p>✅ 已完成：一个慢请求或异常 429 不会让全站生图停摆。</p>
+    <doc-mock frame="terminal" title="B4 · 上游" w="470"><template><span class="g">✓</span> 文本请求不再全程持有 Token 派发锁
+<span class="g">✓</span> 文本 429 不再冻结整把 Token 的生图
+<span class="g">✓</span> Retry-After 只认数字，钳制 5～3600 秒
+<span class="g">✓</span> 历史持久化的 inf 冷却在启动时作废
+<span class="y">○</span> 排队中断开的“幽灵请求”仍会派发 <span class="dim">（发布后）</span></template></doc-mock>
+    <doc-claim at="app/nai.py:543">
+      <p><b>nai.py</b> · _dispatch_guard()</p>
+      <doc-code src="app/nai.py" lines="542-550"></doc-code>
+    </doc-claim>
+  </doc-claim>
+
+  <doc-claim>
+    <p>✅ 已完成：后台误操作不能静默拆掉额度保护。</p>
+    <doc-mock frame="terminal" title="B2 · B5 · 后台" w="470"><template><span class="g">✓</span> 空值 / 负数 / 小数 / 越界 → 422，不再变成“不限”
+<span class="g">✓</span> 前端逐字段校验，报错时聚焦该输入框
+<span class="g">✓</span> 新建 Key 默认功能 = 注册默认（文生图）
+<span class="g">✓</span> 修复“全部开放”被存成“一个都没有”
+<span class="g">✓</span> 创建按钮防双击；确认框默认聚焦“取消”
+<span class="g">✓</span> /admin 加 CSP + X-Frame-Options；API no-store
+<span class="g">✓</span> /openapi.json 关闭</template></doc-mock>
+    <doc-note tone="ok">站长决定：现有成员保持“功能：全部”。</doc-note>
+  </doc-claim>
+
+  <doc-claim>
+    <p>✅ 已完成：成员能看懂规则，注册流程没有竞态。</p>
+    <doc-mock frame="terminal" title="成员 · 注册 · 文档" w="470"><template><span class="g">✓</span> 落地页与额度卡公示“N 天不用会被回收”
+<span class="g">✓</span> 语音合成对成员显示为未开通
+<span class="g">✓</span> 用户限制说明.md 隐私声明改正
+<span class="g">✓</span> 封禁与注册回调互斥；停用成员保留名额
+<span class="g">✓</span> 角色同步不再持锁等待 Discord
+<span class="g">✓</span> 浏览器实测后台 / 落地页改动
+<span class="g">✓</span> Caddyfile（HSTS、桥接通配）、README、报告
+<span class="g">✓</span> 新增：各功能用量面板 + 日志按功能筛选
+<span class="dim">○</span> 部署到线上并重跑 deploy/live_smoke.py  <span class="dim">需要站长</span></template></doc-mock>
+    <doc-note tone="ok">站长决定：闲置回收保持 3 天，已在页面公示。</doc-note>
+  </doc-claim>
+
+  <doc-claim aux="scope">
+    <p>本次不改（发布后迭代）：</p>
+    <ul>
+      <li>排队中断开的幽灵请求、流式超时包含排队时间</li>
+      <li>会话吊销、登录限流只计失败、敏感操作二次验证</li>
+      <li>依赖锁定、Docker 非 root、harden.sh 的 SSH 端口</li>
+      <li>/v1/chat 没有聊天模板，输出质量差</li>
+      <li>限额模板、站长“今日一屏”、Key 哈希存储</li>
+    </ul>
+  </doc-claim>
+
+</doc-plan>
+</main>
+</body></html>

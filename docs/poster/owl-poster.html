@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>猫头鹰公益站</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1600px; height: 900px; overflow: hidden; }
+  body {
+    font-family: "PingFang SC", "Hiragino Sans GB", "Heiti SC", sans-serif;
+    color: #f4f1ff;
+    background:
+      radial-gradient(ellipse 900px 600px at 78% 35%, rgba(124, 92, 255, .38), transparent 70%),
+      radial-gradient(ellipse 700px 500px at 10% 100%, rgba(56, 189, 248, .16), transparent 70%),
+      linear-gradient(160deg, #141432 0%, #1d1b4b 45%, #0d0f26 100%);
+    position: relative;
+  }
+  .stars { position: absolute; inset: 0; }
+  .wrap { position: absolute; left: 110px; top: 150px; width: 820px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 10px 22px; border-radius: 999px;
+    background: rgba(255, 255, 255, .08); border: 1px solid rgba(255, 255, 255, .18);
+    font-size: 24px; letter-spacing: 2px; color: #d9d2ff;
+  }
+  .badge i { width: 10px; height: 10px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 12px #4ade80; }
+  h1 {
+    margin-top: 34px; font-size: 118px; line-height: 1.1; font-weight: 800; letter-spacing: 4px; white-space: nowrap;
+    background: linear-gradient(100deg, #fff 0%, #e9e2ff 45%, #ffd27a 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    text-shadow: 0 0 60px rgba(167, 139, 250, .25);
+  }
+  .sub { margin-top: 22px; font-size: 38px; color: #cfc8ff; letter-spacing: 3px; }
+  .sub b { color: #ffd27a; font-weight: 700; }
+  .chips { margin-top: 52px; display: flex; gap: 14px; flex-wrap: nowrap; }
+  .chip {
+    padding: 14px 22px; border-radius: 16px; font-size: 26px; font-weight: 600; white-space: nowrap;
+    background: rgba(255, 255, 255, .07); border: 1px solid rgba(255, 255, 255, .14);
+  }
+  .chip em { font-style: normal; color: #ffd27a; font-size: 30px; margin-right: 6px; }
+  .cta { margin-top: 64px; display: flex; align-items: center; gap: 26px; }
+  .cmd {
+    padding: 18px 34px; border-radius: 18px; font-size: 40px; font-weight: 800;
+    font-family: "SF Mono", Menlo, monospace; color: #1b1640;
+    background: linear-gradient(135deg, #ffe08a, #ffb84d); box-shadow: 0 12px 40px rgba(255, 184, 77, .35);
+  }
+  .url { font-size: 30px; color: #bfb7f5; letter-spacing: 1px; }
+  .url span { display: block; font-size: 22px; color: #8f87c9; margin-bottom: 6px; letter-spacing: 3px; }
+  .owl { position: absolute; right: 70px; top: 40px; width: 720px; height: 820px; }
+  .foot { position: absolute; left: 110px; bottom: 44px; font-size: 21px; color: #8f87c9; letter-spacing: 2px; }
+</style>
+</head>
+<body>
+<svg class="stars" viewBox="0 0 1600 900" aria-hidden="true">
+  <g fill="#fff">
+    <circle cx="80" cy="60" r="2" opacity=".7"/><circle cx="260" cy="40" r="1.5" opacity=".5"/>
+    <circle cx="430" cy="80" r="2.2" opacity=".8"/><circle cx="620" cy="36" r="1.4" opacity=".5"/>
+    <circle cx="760" cy="96" r="1.8" opacity=".6"/><circle cx="905" cy="30" r="2" opacity=".7"/>
+    <circle cx="1530" cy="70" r="2" opacity=".7"/><circle cx="1560" cy="300" r="1.5" opacity=".5"/>
+    <circle cx="840" cy="560" r="1.6" opacity=".4"/><circle cx="60" cy="420" r="1.8" opacity=".5"/>
+    <circle cx="980" cy="160" r="1.4" opacity=".5"/><circle cx="700" cy="760" r="1.6" opacity=".35"/>
+  </g>
+  <g fill="#ffe7a3">
+    <path d="M880 230 l6 16 16 6 -16 6 -6 16 -6 -16 -16 -6 16 -6z" opacity=".9"/>
+    <path d="M60 230 l4 11 11 4 -11 4 -4 11 -4 -11 -11 -4 11 -4z" opacity=".7"/>
+    <path d="M1000 820 l5 13 13 5 -13 5 -5 13 -5 -13 -13 -5 13 -5z" opacity=".6"/>
+  </g>
+</svg>
+
+<div class="wrap">
+  <div class="badge"><i></i>NovelAI 社区共享 · 免费公益</div>
+  <h1>猫头鹰公益站</h1>
+  <div class="sub">夜里也在线的 <b>AI 生图</b> 中转站</div>
+  <div class="chips">
+    <div class="chip">每天 <em>300</em>张</div>
+    <div class="chip">支持 <em>V5</em></div>
+    <div class="chip"><em>完全免费</em></div>
+  </div>
+  <div class="cta">
+    <div class="cmd">/register</div>
+    <div class="url"><span>在 DISCORD 输入 · 名额有限 先到先得</span>gate.davidzhao.top</div>
+  </div>
+</div>
+
+<svg class="owl" viewBox="0 0 720 820" aria-hidden="true">
+  <defs>
+    <radialGradient id="moon" cx="40%" cy="40%" r="60%">
+      <stop offset="0" stop-color="#fff6d8"/><stop offset=".7" stop-color="#ffe29a"/><stop offset="1" stop-color="#f5c76a"/>
+    </radialGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8b6cff"/><stop offset="1" stop-color="#4b3bb8"/>
+    </linearGradient>
+    <linearGradient id="wing" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5b45d6"/><stop offset="1" stop-color="#33278c"/>
+    </linearGradient>
+    <linearGradient id="belly" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f3eaff"/><stop offset="1" stop-color="#cbbcff"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="28"/></filter>
+  </defs>
+
+  <!-- 月亮 -->
+  <circle cx="470" cy="250" r="230" fill="#ffe29a" opacity=".35" filter="url(#glow)"/>
+  <circle cx="470" cy="250" r="200" fill="url(#moon)"/>
+  <circle cx="400" cy="200" r="26" fill="#f1c56c" opacity=".45"/>
+  <circle cx="545" cy="330" r="38" fill="#f1c56c" opacity=".35"/>
+  <circle cx="530" cy="160" r="14" fill="#f1c56c" opacity=".4"/>
+
+  <!-- 树枝 -->
+  <path d="M10 690 C 180 660, 360 700, 710 640" stroke="#3a2a1e" stroke-width="30" stroke-linecap="round" fill="none"/>
+  <path d="M560 662 C 610 610, 650 600, 700 590" stroke="#3a2a1e" stroke-width="14" stroke-linecap="round" fill="none"/>
+  <ellipse cx="660" cy="585" rx="34" ry="16" fill="#4ade80" opacity=".85" transform="rotate(-25 660 585)"/>
+  <ellipse cx="90" cy="668" rx="30" ry="14" fill="#4ade80" opacity=".75" transform="rotate(15 90 668)"/>
+
+  <!-- 尾巴 -->
+  <path d="M300 640 L 330 735 L 360 640 Z" fill="#33278c"/>
+
+  <!-- 身体 -->
+  <ellipse cx="330" cy="470" rx="190" ry="215" fill="url(#body)"/>
+  <!-- 翅膀 -->
+  <path d="M150 400 C 110 500, 140 620, 230 660 C 200 570, 195 480, 215 410 Z" fill="url(#wing)"/>
+  <path d="M510 400 C 550 500, 520 620, 430 660 C 460 570, 465 480, 445 410 Z" fill="url(#wing)"/>
+  <!-- 肚子 -->
+  <ellipse cx="330" cy="525" rx="118" ry="140" fill="url(#belly)"/>
+  <g fill="none" stroke="#9f8cf0" stroke-width="5" stroke-linecap="round">
+    <path d="M280 480 q 14 14 28 0"/><path d="M330 480 q 14 14 28 0"/>
+    <path d="M255 530 q 14 14 28 0"/><path d="M305 530 q 14 14 28 0"/><path d="M355 530 q 14 14 28 0"/>
+    <path d="M280 580 q 14 14 28 0"/><path d="M330 580 q 14 14 28 0"/>
+  </g>
+
+  <!-- 头 -->
+  <path d="M175 250 L 160 140 L 245 210 Z" fill="#6f55f0"/>
+  <path d="M485 250 L 500 140 L 415 210 Z" fill="#6f55f0"/>
+  <ellipse cx="330" cy="300" rx="175" ry="140" fill="#7a60ff"/>
+  <!-- 眼盘 -->
+  <circle cx="258" cy="300" r="78" fill="#f6f0ff"/>
+  <circle cx="402" cy="300" r="78" fill="#f6f0ff"/>
+  <circle cx="258" cy="300" r="52" fill="#ffc24d"/>
+  <circle cx="402" cy="300" r="52" fill="#ffc24d"/>
+  <circle cx="264" cy="304" r="30" fill="#1b1640"/>
+  <circle cx="396" cy="304" r="30" fill="#1b1640"/>
+  <circle cx="276" cy="290" r="11" fill="#fff"/>
+  <circle cx="408" cy="290" r="11" fill="#fff"/>
+  <circle cx="256" cy="318" r="5" fill="#fff" opacity=".8"/>
+  <circle cx="388" cy="318" r="5" fill="#fff" opacity=".8"/>
+  <!-- 眉 -->
+  <path d="M190 225 Q 258 195 320 240" stroke="#4b3bb8" stroke-width="10" fill="none" stroke-linecap="round"/>
+  <path d="M470 225 Q 402 195 340 240" stroke="#4b3bb8" stroke-width="10" fill="none" stroke-linecap="round"/>
+  <!-- 嘴 -->
+  <path d="M312 345 L 348 345 L 330 385 Z" fill="#ff9f43"/>
+  <!-- 腮红 -->
+  <ellipse cx="200" cy="370" rx="22" ry="12" fill="#ff8fb1" opacity=".55"/>
+  <ellipse cx="460" cy="370" rx="22" ry="12" fill="#ff8fb1" opacity=".55"/>
+
+  <!-- 爪子 -->
+  <g fill="#ff9f43">
+    <ellipse cx="275" cy="678" rx="16" ry="11"/><ellipse cx="300" cy="684" rx="16" ry="11"/>
+    <ellipse cx="360" cy="684" rx="16" ry="11"/><ellipse cx="385" cy="678" rx="16" ry="11"/>
+  </g>
+
+  <!-- 画笔 + 小画框：生图 -->
+  <g transform="rotate(-28 560 470)">
+    <rect x="545" y="380" width="22" height="170" rx="10" fill="#ffd27a"/>
+    <rect x="545" y="380" width="22" height="34" rx="6" fill="#c0c7ff"/>
+    <path d="M545 550 L 567 550 L 556 590 Z" fill="#ff6b9d"/>
+  </g>
+  <g transform="rotate(-8 120 470)">
+    <rect x="40" y="400" width="150" height="120" rx="14" fill="#fff" opacity=".95"/>
+    <rect x="52" y="412" width="126" height="96" rx="8" fill="#2b2470"/>
+    <circle cx="150" cy="438" r="12" fill="#ffd27a"/>
+    <path d="M52 508 L 95 455 L 125 488 L 145 468 L 178 508 Z" fill="#7a60ff"/>
+  </g>
+
+  <!-- 星光 -->
+  <g fill="#fff">
+    <path d="M640 120 l5 14 14 5 -14 5 -5 14 -5 -14 -14 -5 14 -5z"/>
+    <path d="M90 140 l4 10 10 4 -10 4 -4 10 -4 -10 -10 -4 10 -4z" opacity=".8"/>
+  </g>
+</svg>
+
+<div class="foot">公益测试服务 · 不保证随时可用 · 请勿分享 Key</div>
+</body>
+</html>

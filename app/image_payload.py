@@ -1,13 +1,14 @@
 """Resolve Launcher multipart image pointers before normal Gate validation."""
 import asyncio
 import base64
-import json
 import re
+
+import anyio
 
 from fastapi import HTTPException, Request
 from starlette.datastructures import UploadFile
 
-from .body import read_bounded_body, read_json_body
+from .body import parse_json, read_bounded_body, read_json_body
 from .nai import _wait_cleanup
 from .policy import REFERENCE_LIMIT
 
@@ -45,7 +46,7 @@ async def read_image_body(request: Request, limit: int) -> dict:
         else:
             raise HTTPException(400, "multipart 请求缺少 request JSON 字段")
         try:
-            data = json.loads(raw)
+            data = await anyio.to_thread.run_sync(parse_json, raw)
         except (ValueError, RecursionError):
             raise HTTPException(400, "multipart request 字段不是合法 JSON") from None
         if not isinstance(data, dict):

@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>算法更新计划</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --fg:#1b1f24; --muted:#5b6672; --faint:#8a94a0;
+    --border:#e3e7ec; --accent:#6d5bd0; --accent-soft:#efecfb;
+    --ok:#1f9d55; --ok-soft:#e5f5ec; --warn:#c77700; --warn-soft:#fbf0dd;
+    --bad:#d23b3b; --bad-soft:#fbe6e6; --info:#2b74c7; --info-soft:#e6f0fb;
+    --code:#f0f2f5; --radius:14px; --radius-sm:9px;
+    color-scheme:light;
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --bg:#0f1319; --card:#171c24; --fg:#e8ecf1; --muted:#9aa6b3; --faint:#6b7784;
+    --border:#262d38; --accent:#9d8cf0; --accent-soft:#201d33;
+    --ok:#4ec97e; --ok-soft:#14271b; --warn:#e0a84a; --warn-soft:#2a2112; --bad:#ef6a6a; --bad-soft:#2a1515;
+    --info:#5aa2e8; --info-soft:#122334; --code:#1e242d;
+    color-scheme:dark;
+  }}
+  :root[data-theme="dark"]{
+    --bg:#0f1319; --card:#171c24; --fg:#e8ecf1; --muted:#9aa6b3; --faint:#6b7784;
+    --border:#262d38; --accent:#9d8cf0; --accent-soft:#201d33;
+    --ok:#4ec97e; --ok-soft:#14271b; --warn:#e0a84a; --warn-soft:#2a2112; --bad:#ef6a6a; --bad-soft:#2a1515;
+    --info:#5aa2e8; --info-soft:#122334; --code:#1e242d;
+    color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    line-height:1.65;font-size:15px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:960px;margin:0 auto;padding-block:40px;padding-left:16px;padding-right:16px}
+  header.top{margin-bottom:28px}
+  .eyebrow{font-size:12.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:700}
+  h1{font-size:28px;line-height:1.25;margin:.3em 0 .25em;text-wrap:balance;letter-spacing:-.01em}
+  .sub{color:var(--muted);font-size:14px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .pill{font-size:12px;padding:3px 10px;border-radius:999px;background:var(--card);border:1px solid var(--border);color:var(--muted);font-variant-numeric:tabular-nums}
+  h2{font-size:20px;margin:36px 0 6px;letter-spacing:-.01em;display:flex;align-items:center;gap:9px}
+  h2 .n{font-size:13px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:8px;padding:2px 9px;flex:none}
+  h3{font-size:15.5px;margin:22px 0 6px}
+  p{margin:.5em 0}
+  .lead{color:var(--muted);margin:.2em 0 1em}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin:14px 0}
+  .callout{border-left:4px solid var(--accent);border-radius:var(--radius-sm);padding:14px 16px;margin:16px 0;background:var(--card);border:1px solid var(--border);border-left:4px solid var(--accent)}
+  .callout.ok{border-left-color:var(--ok);background:var(--ok-soft)}
+  .callout.warn{border-left-color:var(--warn);background:var(--warn-soft)}
+  .callout.bad{border-left-color:var(--bad);background:var(--bad-soft)}
+  .callout.info{border-left-color:var(--info);background:var(--info-soft)}
+  .callout h3{margin:0 0 4px;font-size:14.5px}
+  .callout p{margin:.25em 0;font-size:14px}
+  b,strong{font-weight:700}
+  code{background:var(--code);border-radius:5px;padding:1px 6px;font-size:13px;font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+  .tag{display:inline-block;font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:7px;white-space:nowrap}
+  .tag.p0{background:var(--bad-soft);color:var(--bad)}
+  .tag.p1{background:var(--warn-soft);color:var(--warn)}
+  .tag.p2{background:var(--info-soft);color:var(--info)}
+  .tag.have{background:var(--ok-soft);color:var(--ok)}
+  .tag.freeze{background:var(--code);color:var(--muted);border:1px solid var(--border)}
+  .scroll{overflow-x:auto;margin:14px 0;border:1px solid var(--border);border-radius:var(--radius)}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:720px}
+  th,td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{background:var(--card);color:var(--muted);font-weight:700;font-size:12.5px;position:sticky;top:0}
+  tr:last-child td{border-bottom:none}
+  td.c{white-space:nowrap}
+  .num{font-variant-numeric:tabular-nums}
+  .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}
+  .stat{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:13px 15px}
+  .stat .k{font-size:12px;color:var(--muted)}
+  .stat .v{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px}
+  .stat .d{font-size:11.5px;color:var(--faint);margin-top:2px}
+  ul{margin:.4em 0;padding-left:1.25em}
+  li{margin:.25em 0}
+  .foot{margin-top:40px;padding-top:16px;border-top:1px solid var(--border);color:var(--faint);font-size:12.5px}
+  @media (max-width:520px){h1{font-size:23px}.wrap{padding-block:28px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="eyebrow">猫头鹰公益站 · NAI Gate</div>
+  <h1>算法更新计划：对照多号池站经验</h1>
+  <div class="sub">把「minijiu 多号池公益站」的运营经验逐条对到我们自己的日志 + <code>shadow.py</code> 回测，排查 V4.5 信号，规划下一步算法。</div>
+  <div class="meta">
+    <span class="pill">2026-10-10</span>
+    <span class="pill">数据窗口 ~17h（库为近期重建，最早 10-09 18:18）</span>
+    <span class="pill">当前版本 v2.10.0</span>
+    <span class="pill">申诉期 · 冻结纪律生效</span>
+  </div>
+</header>
+
+<!-- ============ 1. V4.5 排查 ============ -->
+<h2><span class="n">1</span>V4.5 成功率排查：结论是「信号误导」</h2>
+<p class="lead">奶妹提示「V4.5 成功率不高」。逐行查线上日志后：<b>V4.5 本身是健康的，失败全部来自上游、且极少；体感「60 秒出不了图」是我们队列排队，不是上游变慢。</b></p>
+
+<div class="stat-grid">
+  <div class="stat"><div class="k">V4.5 成功率</div><div class="v">98.8%</div><div class="d">414 成功 / 5 失败（排除本地拒绝）</div></div>
+  <div class="stat"><div class="k">V5 成功率</div><div class="v">100%</div><div class="d">197 成功 / 0 失败</div></div>
+  <div class="stat"><div class="k">V4.5 失败归因</div><div class="v">5/5 上游</div><div class="d">2× HTTP 500 + 3× 上游流式中断</div></div>
+  <div class="stat"><div class="k">V4.5 生成耗时 p50/max</div><div class="v">8.6s / 22s</div><div class="d">从未到 60s</div></div>
+  <div class="stat"><div class="k">V4.5 排队 wait p99/max</div><div class="v">38s / 63s</div><div class="d">体感「60s」的真正来源</div></div>
+  <div class="stat"><div class="k">失败分布</div><div class="v">2 个时段</div><div class="d">02:39、11:05–11:06，短暂突发</div></div>
+</div>
+
+<div class="callout ok">
+  <h3>生成失败 = 上游，且很小</h3>
+  <p>5 次失败集中在两个几分钟的窗口（02:39 两次 500、11:05 三次「上游流式生成失败」），不是持续问题，也不在我们最忙的时段。<code>up_status=0</code> 的本地失败 = <b>0</b>。</p>
+</div>
+<div class="callout info">
+  <h3>「60 秒」= 我们的队列排队，不是上游慢</h3>
+  <p>真正的<b>生成</b>耗时（<code>dur_ms</code>）V4.5 封顶 22s；「60s」来自<b>排队</b>（<code>wait_ms</code> p99 38s、max 63s）——单上游账号串行 + 晚高峰 + <code>interval_jitter</code> 节流的结果。这是我们在<b>保护共享账号</b>，不是上游故障。要降 V4.5 延迟，杠杆是网关容量设置（<code>account_hourly_cap</code> / <code>key_image_queue</code> / <code>queue_per_account</code> / 间隔），不是改上游。</p>
+</div>
+<div class="callout warn">
+  <h3>奶妹为什么会误报（根因在代码）</h3>
+  <p>指标本身是干净的——<code>image_perf_rows</code> 只取 <code>status IN ('ok','error')</code>，<b>已排除「拒绝」</b>（Vibe/img2img/额度/限流等本地闸）。误报来自 <code>perf._flags</code> 的 <b><code>FAIL_FLOOR_1H</code></b>：当某个<b>低样本小时</b>撞上一次上游 burst（如 11:05 的 3 次流式失败），那一小时成功率跌破 80% 就报「V4.5 最近 1 小时成功率 X%」，读起来像「V4.5 有问题」，实则是<b>一次性上游抖动</b>。又因库只有 ~17h、7 天基线为空，只有这条绝对阈值能触发。→ 见 §2 的 <b>L11 修告警</b>。</p>
+</div>
+
+<!-- ============ 2. 逐条对照 ============ -->
+<h2><span class="n">2</span>逐条对照：多号池站经验 × 我们的现状</h2>
+<p class="lead">左为 minijiu 站（1000+ 人、<b>多账号池</b>）的做法；中为我们（<b>单账号</b>）现状，用日志/回测核对；右为差距与行动。<span class="tag have">已有</span> = 我们已经算法化。</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>#</th><th>对照站经验（多号池）</th><th>我们现状（单号，已核对）</th><th>差距 / 行动</th><th class="c">优先级</th></tr></thead>
+<tbody>
+<tr>
+  <td class="num">L1</td>
+  <td>并发 <b>4</b>（4/4），队列 8；「不排 5 分钟就行」</td>
+  <td>并发 <b>1</b> + 15s 间隔；每小时上限 ~150–160。排队 wait p99=38s</td>
+  <td>他们并发 4 是 <b>4 个号各 1</b>。我们单号，并发&gt;1 会和号主抢、易触发 429。<b>不盲目提并发</b>；接多号池后并发=可用号数</td>
+  <td class="c"><span class="tag p2">P2</span></td>
+</tr>
+<tr>
+  <td class="num">L2</td>
+  <td>人均日限随人数降（100→70→60→40），「号少上限多就 PVP」</td>
+  <td>动态额度电池（保底 100 + 空闲借用；V5 每人 ~18，AIMD 调每小时上限）</td>
+  <td>我们已算法化，比他们手动调强。<b>保持</b>；Medium 模式可提有效额度（§3）</td>
+  <td class="c"><span class="tag have">已有</span></td>
+</tr>
+<tr>
+  <td class="num">L3</td>
+  <td><b>自助「提交账号」</b>：成员上传赞助 Key 入池，只跑 V4.5，可开关、承诺不扣点</td>
+  <td>单号，无捐号通道</td>
+  <td><b>最大结构杠杆</b>：接捐号→多号池→容量×N，直接解「单号 Anlas 天花板」。做：提交账号（入池+开关+V4.5-only+Opus 不扣点保证+透明公示）</td>
+  <td class="c"><span class="tag p1">P1</span><br><span class="tag freeze">申诉后</span></td>
+</tr>
+<tr>
+  <td class="num">L4</td>
+  <td>V5 full 需官方大幅提 V5 额度；捐号者自用 V5、捐 V4.5</td>
+  <td>同样受官方 V5 周额度限制</td>
+  <td>一致，无可做。多号池后 V5 总量随号数线性增长</td>
+  <td class="c">—</td>
+</tr>
+<tr>
+  <td class="num">L5</td>
+  <td><b>CF CDN ~100s 无响应即中断</b>；必须 100s 内返回；不能发心跳（破生图插件）；因此队列不能太大、不能长重试</td>
+  <td>我们也经 CF（Caddy 前）；流式失败即「上游流式生成失败」</td>
+  <td><b>关键硬约束</b>。确认我们的 100s 边界；队列上限应按 <code>100s ÷ 中位耗时</code> 反推；Medium 减步数=降超时概率</td>
+  <td class="c"><span class="tag p1">P1</span></td>
+</tr>
+<tr>
+  <td class="num">L6</td>
+  <td>上游空闲时生图<b>不扣日额度</b>；优先日额度→空闲额度；空闲也<b>计次限刷</b></td>
+  <td>已有空闲借用（<code>guard.site_idle</code>）：保底外只在全站空闲放行</td>
+  <td>思路一致。核对：空闲放行是否也有<b>次数上限防刷</b>；没有就补</td>
+  <td class="c"><span class="tag have">已有</span>→补</td>
+</tr>
+<tr>
+  <td class="num">L7</td>
+  <td>重置点 00:00 是高峰；考虑挪到凌晨 4 点；社区投票倾向延后</td>
+  <td>固定 0 点；autopilot 已<b>建议</b>最闲整点（≈12:00），但未执行迁移</td>
+  <td>审核后把每日重置迁到 autopilot 建议的最闲点（改日期边界要单独迁移，避免影响当天计数）</td>
+  <td class="c"><span class="tag p2">P2</span></td>
+</tr>
+<tr>
+  <td class="num">L8</td>
+  <td>每 key <b>单请求在飞</b>（single-flight），其余直接报错</td>
+  <td><code>admit_image</code>：同 Key ≥1 在飞即拒绝（<code>app/guard.py</code>）</td>
+  <td>已有，一致</td>
+  <td class="c"><span class="tag have">已有</span></td>
+</tr>
+<tr>
+  <td class="num">L9</td>
+  <td>后台<b>按小时 24h 请求曲线</b>（蓝=请求 / 黄=成功 / 差值=失败）</td>
+  <td>我们：按天 7 日柱状 +「请求」切换；perf 表有按模型成功率。<b>缺按小时 24h 视图</b></td>
+  <td>加 24h 小时级 请求/成功/失败 曲线（<code>perf._hourly</code> 已算好 24 桶，差前端一张图）。对「几点人多」「空闲调参」「选重置点」都有用</td>
+  <td class="c"><span class="tag p2">P2</span></td>
+</tr>
+<tr>
+  <td class="num">L10</td>
+  <td>V4.5 变慢/失败，疑「号主自用→NAI 排队」，用 12 次出 1 次</td>
+  <td><b>取证</b>：我们 V4.5 98.8%，失败全上游短暂 burst；无号主抢占的<b>持续</b>证据</td>
+  <td>单号先天有此风险。做：<b>监控「号主抢占」信号</b>（上游 429/排队突增且非本站触发）；Medium 降步数降排队</td>
+  <td class="c"><span class="tag p1">P1</span><br>监控</td>
+</tr>
+<tr>
+  <td class="num">L11</td>
+  <td>（我们自己的问题）奶妹误报「V4.5 成功率不高」</td>
+  <td>指标干净（排除 rejected），但 <code>FAIL_FLOOR_1H</code> 小样本 + 上游 burst 误报</td>
+  <td><b>修 perf 告警</b>：① 提高 1h 告警最小样本；② 要求<b>连续 2 个窗口</b>才报（滤单次 burst）；③ 告警区分<b>上游 vs 网关</b>；④ 把<b>排队 wait_ms</b> 单列告警（匹配成员体感、指向正确杠杆）</td>
+  <td class="c"><span class="tag p1">P1</span></td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============ 3. Medium ============ -->
+<h2><span class="n">3</span>Medium / 节约模式 <span class="tag have" style="font-size:12px;vertical-align:middle">已上线 v2.11.0</span></h2>
+<div class="callout ok"><h3>已交付（默认关，不改现状）</h3><p>全站免费档可一键钳制到 <b>14 步 + Euler-a</b>（保留负面词），Anlas 约省 40%、出图更快。<b>总览页「节约模式」按钮</b>站长手动开关；<b>autopilot 规则</b>（默认 observe）在排队拥挤时可自动开、空闲时关。<b>无论算法还是手动切换，都会在公告频道通知成员</b>（带 1 小时防抖）。默认关闭、autopilot_economy 默认 observe，所以上线不改任何成员可见行为。</p></div>
+<p class="lead">原理：NovelAI 的「节约模式」没有独立 API 字段——就是 <b>14 步 + Euler Ancestral + 关 SMEA</b>，省的 ~42% 全来自步数。我们 <code>policy.py</code> 的计价常量与官方一致，所以<b>钳到 14 步就已按便宜 ~42% 扣费</b>，V5 周额度按 <code>(A+B·14)/(A+B·23)</code> 自动少扣，不需要改上游。</p>
+
+<div class="card">
+  <h3>要做的适配</h3>
+  <ul>
+    <li><b>前端档位开关</b>：免费档一键「节约 / 高质」；节约档锁 <code>steps=14</code>、<code>sampler=k_euler_ancestral</code>、关 <code>sm/sm_dyn</code>、不收自定义 UC。</li>
+    <li><b>后端钳制</b>：在 <code>policy.clamp_image_params</code> 加一条节约预设（已有 steps 钳制逻辑，扩展即可）。</li>
+    <li><b>计费</b>：无需改——现有公式按步数线性，V5 电池按 <code>(A+B·14)/(A+B·23)</code> 自动少扣。</li>
+    <li><b>算法择机（autopilot 新规则，先 observe）</b>：全站拥挤 / V5 池吃紧 / 排队 wait 偏高时，建议或默认把<b>免费档</b>切 Medium；空闲时放开 High。与现有「拥挤→调小份额」同源。</li>
+  </ul>
+</div>
+<div class="callout info"><p><b>收益</b>：同 Anlas 出图量 ×1.7，等价把人均额度提近一倍、或名额放宽更从容——是解「单号 Anlas 天花板」最便宜的杠杆，且与 L3 多号池叠加。</p></div>
+
+<!-- ============ 4. 路线图 ============ -->
+<h2><span class="n">4</span>优先级路线图（含冻结纪律）</h2>
+<div class="card">
+  <p><span class="tag p1">P1 · 申诉期可做（纯观测/告警，不改成员可见行为）</span></p>
+  <ul>
+    <li><b>L11 修 perf 告警</b>（提高小样本门槛 + 连续 2 窗 + 区分上游/网关 + wait_ms 单列）——直接止住奶妹误报。</li>
+    <li><b>L10 号主抢占监控</b>（上游排队/429 突增且非本站触发时告警）。</li>
+    <li><b>L5 确认 CF 100s 约束</b>并据此校准队列上限公式（文档/观测，先不改线上值）。</li>
+  </ul>
+  <p style="margin-top:14px"><span class="tag p2">P2 · 小改动，可排期</span></p>
+  <ul>
+    <li><b>L9 后台 24h 小时级曲线</b>（前端加图，数据已有）。</li>
+    <li><b>L7 重置点迁到最闲整点</b>（审核 autopilot 建议后单独迁移）。</li>
+    <li><b>L6 空闲放行计次防刷</b>核对/补齐。</li>
+    <li><b>N1 请求体积上限</b>（入口拒超大请求，防上游 400 噪音 + CF 1015 连坐）。</li>
+    <li><b>N2 WebP 输出格式</b>（默认 WebP 省流量/加速，可「尊重请求」回退）。</li>
+    <li><b>N3 报错文案更清晰</b>（含「最接近合法值」提示 + 公开错误码对照）。</li>
+    <li><s>Medium 适配</s> <span class="tag have">已上线 v2.11.0</span></li>
+  </ul>
+  <p style="margin-top:14px"><span class="tag freeze">申诉通过后再评估</span></p>
+  <ul>
+    <li><b>L3 自助「提交账号」多号池</b>——最大杠杆，但涉及接收他人账号/Key，且与 Discord 合规、隐私、不扣点保证强相关，务必申诉通过、风控清零后再做。</li>
+    <li><b>L1 并发</b>：仅在进入多号池后，按可用号数提并发。</li>
+  </ul>
+</div>
+
+<div class="callout warn"><p><b>冻结纪律</b>：申诉期间不改成员可见行为、不碰任何群发/自动互动。P1 都是观测/告警层；P2 的 Medium/24h 图可做但默认 observe、上线前本地验证 + 全量测试。</p></div>
+
+<!-- ============ 5. 本轮新增经验 ============ -->
+<h2><span class="n">5</span>本轮新增经验（penguinsama / minijiu / NAI 风控）</h2>
+
+<div class="callout bad">
+  <h3>N5 · NAI 正在大力封号（最重要的背景）</h3>
+  <p>社区情报：东亚/东南亚区转美元 + 信用卡购买被无条件拒绝；美国本土卡的账号也在 3 天内被无理由封禁清点；NAI 频繁扫用户 IP 属地，<b>梯子换几个节点就封号</b>；独享/共享号「绝迹」。minijiu 站出了 29 万图后<b>「没号了」被迫暂停</b>。</p>
+  <p><b>对我们的意义</b>：我们这<b>一个共享账号是极其珍贵且脆弱</b>的资产。① 继续压低检测信号（间隔抖动、好公民限速、不群发）；② Discord 申诉务必推进；③ <b>L3 多号池要重新评估</b>——捐来的号本身也会被 NAI 封，多号池不等于安全，且接收他人账号在当前风控下风险更高。宁可慢、稳、少踩信号。</p>
+</div>
+
+<div class="callout ok">
+  <h3>N1 · 「一个坏请求封掉账号」——我们已经安全</h3>
+  <p>minijiu 踩过：有人发 2.5MB 超大请求 → NAI 返回 400 → 他们「按错误码自动处理」<b>误把 3 个上游账号自动禁用了</b>。我们核查过代码：<b>只有 401 会自动停用账号</b>；402/403 只提醒站长、明确不停用（注释写着「只有一把 Token 时自动停用会导致全站不可用」）；<b>400 只透传、不停用</b>。我们没有这个雷。<br><b>仍可补</b>：入口加<b>请求体积上限</b>（N1，P2），把 2.5MB 这种超大请求在到上游/CF 之前就挡掉，避免 400 噪音和 CF 1015 连坐封站。</p>
+</div>
+
+<div class="card">
+  <h3>其余可借鉴（penguinsama 智绘姬站）</h3>
+  <ul>
+    <li><b>N2 图片输出格式可选（默认 WebP）</b>：WebP 体积小、加载快，省用户和服务器流量；不兼容的客户端可在领 Key 页改「尊重请求」回退 PNG。我们也存图 + 返图，值得做（P2）。</li>
+    <li><b>N3 报错文案更清晰</b>：他们的错误表很用户友好，例如「width 786 不是 64 的整数倍，最接近的合法值是 768」。我们已有不错的拒绝文案，可再补「最接近合法值」提示 + 一张公开的 HTTP 错误码对照表（P2）。</li>
+    <li><b>N4 「无限额度 + 全站排队」模型</b>：penguinsama 不设每日次数、纯靠排队限流。是另一种取舍（体验上「不卡额度但要排队」）。我们单号 + 动态电池更适合保护稀缺算力，记为备选思路，不改。</li>
+    <li><b>N6 CF CDN 100s 硬约束再确认</b>：必须 100s 内返回、不能发心跳（否则生图插件不兼容）。→ <b>节约模式（14 步）直接降低超时概率</b>，和这条正相关。</li>
+  </ul>
+</div>
+
+<div class="foot">
+  数据来源：线上 <code>data/nai_gate.db</code>（usage_log ~17h）、<code>app/perf.py</code>、<code>app/guard.py</code>、<code>app/shadow.py</code>、<code>app/policy.py</code>、<code>app/nai.py</code>。对照：minijiu 多号池站、penguinsama / 智绘姬站公开 Discord 运营记录与错误码文档，及 NAI 风控社区情报。本文件为内部运营计划，随算法进展更新。更新：2026-10-10 · 节约模式已上线 v2.11.0。
+</div>
+
+</div>
+</body>
+</html>

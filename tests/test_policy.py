@@ -5,7 +5,6 @@ import pytest
 from app.policy import (
     clamp_image_params,
     clamp_text_params,
-    estimate_image_anlas,
     estimate_image_cost,
     estimate_tokens,
     fit_size,
@@ -160,9 +159,9 @@ def test_image_model_tier_is_an_explicit_allowlist():
 
 def test_img2img_free_and_paid_step_boundary():
     payload = img_payload(image="AAAA", strength=0.7)
-    assert estimate_image_anlas(payload) == 0
+    assert estimate_image_cost(payload)["anlas"] == 0
     payload["parameters"]["steps"] = 29
-    assert estimate_image_anlas(payload) == 14
+    assert estimate_image_cost(payload)["anlas"] == 14
 
 
 @pytest.mark.parametrize("model,settings,anlas,v5", [
@@ -302,3 +301,27 @@ def test_text_host_routing():
     assert "text.novelai" in text_model_host("llama-3-erato-v1", "https://text.novelai.net", "x")
     assert "api.novelai" in text_model_host("clio-v1", "https://text.novelai.net",
                                             "https://api.novelai.net")
+
+
+def test_medium_is_v5_tier():
+    from app.policy import image_model_tier, is_v5_medium
+    assert image_model_tier("nai-diffusion-5-full-medium") == "v5" and is_v5_medium("nai-diffusion-5-full-medium")
+    assert not is_v5_medium("nai-diffusion-5-full")
+
+
+def test_fill_v4_prompt_builds_official_structure_only_when_missing():
+    # 10/10：只发 input + negative_prompt 的客户端，V4.5 上游回 500；补上结构后 200（测试 Key 复现）
+    from app.policy import fill_v4_prompt
+    body = {"model": "nai-diffusion-4-5-full", "input": "1girl", "parameters": {
+        "negative_prompt": "lowres", "characterPrompts": [{"prompt": "a", "uc": "b", "center": {"x": 0.3, "y": 0.5}}]}}
+    out, notes = fill_v4_prompt(body)
+    p = out["parameters"]
+    assert p["v4_prompt"]["caption"]["base_caption"] == "1girl" and p["v4_negative_prompt"]["caption"]["base_caption"] == "lowres"
+    assert p["v4_prompt"]["caption"]["char_captions"] == [{"char_caption": "a", "centers": [{"x": 0.3, "y": 0.5}]}]
+    assert "v4_prompt" not in body["parameters"] and len(notes) == 2
+    kept = {"caption": {"base_caption": "x", "char_captions": []}, "use_coords": True, "use_order": True}
+    out2, n2 = fill_v4_prompt({"model": "nai-diffusion-4-5-full", "input": "y", "parameters": {"v4_prompt": kept, "v4_negative_prompt": {"caption": {}}}})
+    assert out2["parameters"]["v4_prompt"] is kept and n2 == []
+    for model in ("nai-diffusion-5-full", "nai-diffusion-3"):
+        same, n = fill_v4_prompt({"model": model, "input": "z", "parameters": {}})
+        assert "v4_prompt" not in same["parameters"] and n == []

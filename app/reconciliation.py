@@ -83,12 +83,13 @@ class ManualReconciliation:
         return {token.token_id: token for token in self.nai.pool}
 
     async def query(self, token):
+        from .nai import default_browser_headers  # 和生图同一套浏览器请求头
         response = None
         try:
             async with asyncio.timeout(8):
                 request = self.nai._client.build_request(
                     "GET", self.nai.image_host + "/user/subscription",
-                    headers={"Authorization": "Bearer " + token.token, "Accept": "application/json"},
+                    headers=default_browser_headers(token.token, profile=getattr(token, "browser_profile", None)),
                     timeout=8)
                 response = await self.nai._client.send(request, stream=True, follow_redirects=False)
                 if response.status_code == 429:

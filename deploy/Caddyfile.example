@@ -1,0 +1,26 @@
+# Caddy 自动申请并续期 HTTPS 证书。把域名换成你自己的，并让它的 A 记录指向本机公网 IP。
+# 用法（Caddy 以 host 网络运行，才能访问只绑定在 127.0.0.1 的网关）：
+#   docker run -d --name caddy --restart unless-stopped --network host \
+#     -v $PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro -v caddy_data:/data -v caddy_config:/config caddy:2
+gate.example.com {
+	# 机器人与网关之间的桥接接口只在容器内网使用，不对公网开放。
+	# 用通配：以后新增的桥接路由默认也不会暴露（旧的 OAuth 领取回调已删除，不再需要放行）。
+	@bridge {
+		path /self-register /self-register/*
+	}
+	respond @bridge 404
+	respond /openapi.json 404
+	# 只压缩网页、后台和公开 JSON；出图接口（含流式）不压缩，避免缓冲
+	@compress path / /admin /admin/* /status /status.json /public/* /static/*
+	encode @compress zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+	# 部署重启时网关短暂连不上：挂住请求、每 0.5 秒重连，最多 45 秒，不直接回 502（只重试连不上的情况，不会重复发送）
+	reverse_proxy 127.0.0.1:3003 {
+		lb_try_duration 45s
+		lb_try_interval 500ms
+	}
+}

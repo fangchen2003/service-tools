@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from . import site_flags
+
 import time
 
 
@@ -24,8 +26,7 @@ async def subscription_payload(state, key, *, now: float | None = None) -> dict:
             limits.append(daily_limit)
             remaining.append(max(0, daily_limit - int(counter["v5"])))
         if not key.get("exclude_global_v5"):
-            global_limit = int(float(await state.db.get_setting(
-                "global_daily_v5", state.settings.global_daily_v5) or 0))
+            global_limit = await site_flags.get(state.db, site_flags.GLOBAL_DAILY_V5, state.settings)
             if global_limit > 0:
                 limits.append(global_limit)
                 remaining.append(max(0, global_limit - int(await state.db.day_v5_total(day))))

@@ -52,6 +52,12 @@ class Settings:
     text_host_legacy: str = os.environ.get(
         "NAI_TEXT_HOST_LEGACY", "https://api.novelai.net"
     )  # 老模型(Sigurd/Clio等)走这里
+    upstream_proxy: str = os.environ.get("UPSTREAM_PROXY", "").strip()
+    upstream_user_agent: str = os.environ.get("UPSTREAM_USER_AGENT", "").strip()
+    upstream_http2: bool = field(default_factory=lambda: _bool("UPSTREAM_HTTP2", True))
+    post_request_jitter_min: float = field(default_factory=lambda: _float("POST_REQUEST_JITTER_MIN", 1.0))
+    post_request_jitter_max: float = field(default_factory=lambda: _float("POST_REQUEST_JITTER_MAX", 3.0))
+    single_image_slot_enforced: bool = field(default_factory=lambda: _bool("SINGLE_IMAGE_SLOT_ENFORCED", False))
 
     # ---- 并发 / 限流 ----
     global_concurrency: int = _int("GLOBAL_CONCURRENCY", 1)  # 文本等非图片请求的全站并发
@@ -60,9 +66,28 @@ class Settings:
     key_image_min_interval: float = _float("KEY_IMAGE_MIN_INTERVAL", 15)
     image_min_interval: float = _float("IMAGE_MIN_INTERVAL", 15)  # 每把上游 Token 的图片请求间隔
     image_429_cooldown_seconds: float = _float("IMAGE_429_COOLDOWN_SECONDS", 60)
+    admin_allowed_origins: tuple = tuple(o.strip() for o in os.getenv("ADMIN_ALLOWED_ORIGINS", "").split(",") if o.strip())
+    auth_fail_max: int = _int("AUTH_FAIL_MAX", 20)          # 单个 IP 在窗口内允许的无效 Key 次数
+    auth_fail_window: int = _int("AUTH_FAIL_WINDOW", 600)
+    auth_block_seconds: int = _int("AUTH_BLOCK_SECONDS", 900)
     login_max_attempts: int = _int("LOGIN_MAX_ATTEMPTS", 5)
     login_window_seconds: int = _int("LOGIN_WINDOW_SECONDS", 300)
     key_inactivity_delete_days: int = _int("KEY_INACTIVITY_DELETE_DAYS", 3)
+
+    # ---- 告警 / 生成记录 ----
+    discord_bot_token: str = os.getenv("DISCORD_BOT_TOKEN", "")
+    site_url: str = os.getenv("SITE_URL", "")
+    # 同一 Key 24 小时内出现的来源网段数达到此值时私信提醒站长（0 = 只统计不提醒）
+    key_share_alert_nets: int = _int("KEY_SHARE_ALERT_NETS", 3)
+    alert_user_id: str = os.getenv("ALERT_USER_ID", "")        # 告警私信给此 Discord 用户（用机器人发）
+    alert_channel_id: str = os.getenv("ALERT_CHANNEL_ID", "")  # 或发到某频道
+    alert_webhook_url: str = os.getenv("ALERT_WEBHOOK_URL", "")  # 或使用 Webhook
+    announce_channel_id: str = os.getenv("ANNOUNCE_CHANNEL_ID", "")  # 给成员的公告频道
+    discord_invite_url: str = os.getenv("DISCORD_INVITE_URL", "")    # 首页展示的 Discord 邀请链接（可选）
+    audit_prompts: bool = _bool("AUDIT_PROMPTS", False)        # 记录图片请求的提示词
+    audit_thumbs: bool = _bool("AUDIT_THUMBS", False)          # 记录成功结果的小缩略图
+    audit_retention_days: int = _int("AUDIT_RETENTION_DAYS", 7)
+    usage_log_retention_days: int = _int("USAGE_LOG_RETENTION_DAYS", 0)    # 明细日志保留天数；0 = 长期保留（成员已知情，用于回测和优化算法）
 
     # ---- 图片安全钳制（默认强制贴合 Opus 免费档）----
     safe_clamp: bool = _bool("SAFE_CLAMP", True)
@@ -75,6 +100,8 @@ class Settings:
     global_monthly_anlas: float = _float("GLOBAL_MONTHLY_ANLAS", 10000)
     # 全站每日 V5 张数（镜像 NovelAI 服务端 V5 周额度 ~190 张/天的恢复速率）
     global_daily_v5: int = _int("GLOBAL_DAILY_V5", 150)
+    # 全站每日 Anlas 额度（Vibe PVP 抢额度；0 = 不限）
+    global_daily_anlas: int = _int("GLOBAL_DAILY_ANLAS", 200)
 
     # ---- 新 key 的默认配额（管理员可在后台逐 key 修改）----
     default_daily_images: int = _int("DEFAULT_DAILY_IMAGES", 100)  # 每 Key 免费旧模型日限；0=不限

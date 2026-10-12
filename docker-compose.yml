@@ -3,11 +3,86 @@ services:
     build: .
     container_name: nai-gate
     restart: unless-stopped
+    # 部署 / 重启时给正在生成的图留足时间收尾并记账（默认只有 10 秒，生成中的请求会被硬杀、不进日志）
+    stop_grace_period: 120s
     ports:
-      - "8000:8000"
+      - "127.0.0.1:3003:8000"
     env_file: .env
     environment:
       - DATA_DIR=/app/data
       - TZ=Asia/Shanghai
+      # 仅信任本机和 Docker 网桥反向代理的 X-Forwarded-For，防止外部任意伪造 IP 击穿防爆破与风控
+      - FORWARDED_ALLOW_IPS=127.0.0.1,172.30.0.1
     volumes:
       - ./data:/app/data
+      - ./app/static/landing.html:/app/app/static/landing.html
+      - ./app/static/index.html:/app/app/static/index.html
+      - ./app/status_page.py:/app/app/status_page.py
+    # Caddy 直连这个固定 IP（不经 127.0.0.1:3003 的 docker-proxy）：旧容器收尾 / 新容器未起时连接直接被拒，
+    # Caddy 才会把请求挂住重试；走 docker-proxy 时连接先被「接受」再断开，POST 出图会直接 502（2026-10-10 部署实测）。
+    # 127.0.0.1:3003 保留给本机健康检查和监控脚本。
+    networks:
+      default:
+      edge:
+        ipv4_address: 172.30.0.10
+
+  # 实验室（回测 / 蒙特卡洛 / 日报）：不常驻，只读挂载 data/，结果写 data/lab/。
+  #   docker compose --profile lab build lab
+  #   docker compose --profile lab run --rm -v /tmp/nai-lab.db:/snapshot/gate.db:ro lab
+  # 每日任务见 deploy/ops/lab-daily.sh（先 .backup 出副本，再跑 lab，再 dry-run 发帖）。
+  lab:
+    profiles: ["lab"]
+    build:
+      context: .
+      dockerfile: lab/Dockerfile
+    container_name: nai-gate-lab
+    restart: "no"
+    network_mode: none          # 不需要网络：只读数据库副本、写本地文件
+    cpus: 1.0                   # 2 核服务器：最多占一个核，网关不受影响（进程内还会 os.nice）
+    mem_limit: 1g
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/app/data:ro
+      - ./data/lab:/app/data/lab
+
+  # 可选：Discord /register 机器人。配置好 .env 里的 DISCORD_* 后用
+  #   docker compose --profile discord up -d --build
+  # 只给它需要的三个变量，不带上游 Token。
+  discord-bot:
+    profiles: ["discord"]
+    build: ./integration
+    container_name: nai-gate-discord
+    restart: unless-stopped
+    depends_on:
+      - nai-gate
+    environment:
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
+      - REGISTRATION_BRIDGE_SECRET=${REGISTRATION_BRIDGE_SECRET}
+      - REGISTRATION_BACKEND_URL=http://nai-gate:8000
+      - SITE_URL=${SITE_URL}
+      - PRAISE_API_KEY=${PRAISE_API_KEY:-}
+      - PRAISE_BASE_URL=${PRAISE_BASE_URL:-https://api.longcat.chat/anthropic}
+      - PRAISE_MODEL=${PRAISE_MODEL:-LongCat-2.5-Preview}
+      - GALLERY_AI_DAILY=${GALLERY_AI_DAILY:-30}
+      - AUDIT_PROMPTS=${AUDIT_PROMPTS:-0}
+      - AUDIT_THUMBS=${AUDIT_THUMBS:-0}
+      - AUDIT_RETENTION_DAYS=${AUDIT_RETENTION_DAYS:-7}
+
+  # 燕双鹰（执法 bot）：零 Intent、不接命令、不发私信，只在线；公告由运维脚本经 REST 发
+  warden:
+    profiles: ["discord"]
+    build: ./integration
+    container_name: nai-gate-warden
+    restart: unless-stopped
+    command: ["python", "warden_bot.py"]
+    environment:
+      - WARDEN_BOT_TOKEN=${WARDEN_BOT_TOKEN}
+    mem_limit: 128m
+
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

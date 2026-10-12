@@ -180,7 +180,9 @@ async def test_csrf_rejects_missing_forged_and_other_session_values_before_query
     # A separately signed valid session must not be able to reuse this token.
     cookie = client.cookies.get(COOKIE)
     expiry = str(int(cookie.split(".")[0]) + 1)
-    other_cookie = expiry + "." + _sign(env.st.settings.secret_key, expiry)
+    import hashlib
+    session_key = env.st.settings.secret_key + ":" + hashlib.sha256(env.st.settings.admin_password.encode()).hexdigest()
+    other_cookie = expiry + "." + _sign(session_key, expiry)
     for origin in ("http://admin.fixture", "http://admin.fixture:9000", "https://evil.invalid", "null"):
         for value in ("", "0" * 64):
             response = await client.post("/admin/api/reconciliation", json={}, headers={

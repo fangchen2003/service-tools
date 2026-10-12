@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import copy
 import base64
 import binascii
 import math
@@ -150,14 +149,21 @@ def validate_image_references(payload: dict) -> Optional[str]:
             return "Vibe 须为有效 base64；V3 必须传原图而不是 V4 编码"
     for item in cached_vibes + precise:
         is_precise = any(item is entry for entry in precise)
+        cache_key = item.get("cache_secret_key") if isinstance(item, dict) else None
+        # BaiBai uses UUIDv4 for Vibe cache identifiers. Gate does not look up
+        # these keys locally; complete reference data is still required below.
+        valid_key = isinstance(cache_key, str) and (
+            re.fullmatch(r"[0-9a-f]{64}", cache_key)
+            or (not is_precise and re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", cache_key))
+        )
         if (not isinstance(item, dict)
-                or not isinstance(item.get("cache_secret_key"), str)
-                or not re.fullmatch(r"[0-9a-f]{64}", item["cache_secret_key"])
+                or not valid_key
                 or not _base64_data(item.get("data"), png=is_precise,
                                     source_image=not is_precise and model in VIBE_RAW_MODELS)
                 or (not is_precise and model in VIBE_ENCODED_MODELS
                     and _base64_data(item.get("data"), source_image=True))):
-            return "缓存参考必须包含 64 位小写十六进制 cache_secret_key 和完整 base64 data；精确参考须为 PNG"
+            return "缓存参考必须包含 64 位小写十六进制 cache_secret_key（Vibe 也支持小写 UUIDv4）和完整 base64 data；精确参考须为 PNG"
     return None
 
 
@@ -179,8 +185,245 @@ def estimate_tokens(text: str) -> int:
     return max(1, math.ceil(len(text) / 3.5))
 
 
+INTEGER_IMAGE_PARAMS = ("width", "height", "steps", "n_samples")
+
+
+def normalize_image_request(body: dict) -> None:
+    """路由入口统一规范化：模型名小写去空格并回写；尺寸/步数/张数必须是整数。
+
+    计价按 int() 截断而上游原样接收：放过 28.99 步或 1.99 张会让“免费”估价与实际扣费不一致。
+    """
+    model = body.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError("缺少 model")
+    body["model"] = model.strip().lower()
+    p = body.get("parameters")
+    if not isinstance(p, dict):
+        return
+    for name in INTEGER_IMAGE_PARAMS:
+        value = p.get(name)
+        if value is None:
+            continue
+        if isinstance(value, float) and value.is_integer():
+            value = p[name] = int(value)
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 65536:
+            raise ValueError(f"{name} 必须是非负整数")
+
+    # seed 规范化：客户端经常传 -1 表示随机种子；上游只接受 0..4294967295 的 uint32
+    if "seed" in p:
+        seed = p.get("seed")
+        if isinstance(seed, float) and seed.is_integer():
+            seed = p["seed"] = int(seed)
+        if isinstance(seed, int):
+            if seed < 0 or seed > 4294967295:
+                import random
+                p["seed"] = random.randint(0, 4294967295)
+        elif seed is not None:
+            import random
+            p["seed"] = random.randint(0, 4294967295)
+
+    # scale 校验
+    scale = p.get("scale")
+    if scale is not None:
+        if isinstance(scale, bool) or not isinstance(scale, (int, float)) or not math.isfinite(scale) or scale < 0 or scale > 50:
+            raise ValueError("scale 必须是 0 到 50 之间的有效数值")
+
+
+# 以下上游限制来自实测（参考 Steven52065/novelai_proxy 2026-09 的记录，均为上游原始报错）：
+# - 提示词上限 51200，上游按 UTF-8 字节计（中文约 1.7 万字）；
+# - 文生图宽高必须是 64 的整数倍（如 786x786 会被拒）；
+# - V4/V4.5/V5 用下列采样器上游直接 500。只拦这几个已证实的，不做白名单，避免误伤以后新增的采样器。
+MAX_PROMPT_BYTES = 51200
+DIMENSION_STEP = 64
+V4_V5_REJECTED_SAMPLERS = frozenset({
+    "plms", "ddim", "ddim_v3", "k_dpm_adaptive", "k_dpm_fast", "k_dpmpp_3m_sde", "nai_smea", "nai_smea_dyn",
+})
+
+
+def _prompt_texts(body: dict):
+    yield "input", body.get("input")
+    p = body.get("parameters")
+    if not isinstance(p, dict):
+        return
+    for key in ("prompt", "negative_prompt"):
+        yield f"parameters.{key}", p.get(key)
+    chars_raw = p.get("characterPrompts")
+    if isinstance(chars_raw, list):
+        for i, item in enumerate(chars_raw):
+            if isinstance(item, dict):
+                yield f"parameters.characterPrompts[{i}].prompt", item.get("prompt")
+                yield f"parameters.characterPrompts[{i}].uc", item.get("uc")
+    for key in ("v4_prompt", "v4_negative_prompt"):
+        caption = (p.get(key) or {}).get("caption") if isinstance(p.get(key), dict) else None
+        if not isinstance(caption, dict):
+            continue
+        yield f"{key}.base_caption", caption.get("base_caption")
+        chars = caption.get("char_captions")
+        if isinstance(chars, list):
+            for i, item in enumerate(chars):
+                if isinstance(item, dict):
+                    yield f"{key}.char_captions[{i}]", item.get("char_caption")
+
+
+_NAME_DIGITS_WEIGHT = re.compile(r"(?<=[A-Za-z_])(\d+(?:\.\d+)?)::")
+
+
+def fix_name_digit_weights(body: dict) -> int:
+    """名字结尾的数字紧挨着 ::（如画师 bm94199::）时，在 :: 前补一个空格，原地改写，返回改了几处。
+
+    本意是用 :: 结束一段加权，但上游会把 94199 当成权重，结果 NaN（10/11 线上 10 次失败全是这一种）。
+    只改「数字前面紧挨着字母或下划线」的情况，独立的 1.2:: / -3:: 这类正常权重不动。
+    10/11 有成员连续 9 次被预检拒绝、客户端看不到提示，所以改成自动纠正，不再拒绝。"""
+    n = 0
+
+    def fix(text):
+        nonlocal n
+        if not isinstance(text, str) or "::" not in text:
+            return text
+        new, k = _NAME_DIGITS_WEIGHT.subn(r"\1 ::", text)
+        n += k
+        return new
+
+    if isinstance(body.get("input"), str):
+        body["input"] = fix(body["input"])
+    p = body.get("parameters")
+    if not isinstance(p, dict):
+        return n
+    for key in ("prompt", "negative_prompt"):
+        if isinstance(p.get(key), str):
+            p[key] = fix(p[key])
+    if isinstance(p.get("characterPrompts"), list):
+        for item in p["characterPrompts"]:
+            if isinstance(item, dict):
+                for key in ("prompt", "uc"):
+                    if isinstance(item.get(key), str):
+                        item[key] = fix(item[key])
+    for key in ("v4_prompt", "v4_negative_prompt"):
+        caption = (p.get(key) or {}).get("caption") if isinstance(p.get(key), dict) else None
+        if not isinstance(caption, dict):
+            continue
+        if isinstance(caption.get("base_caption"), str):
+            caption["base_caption"] = fix(caption["base_caption"])
+        if isinstance(caption.get("char_captions"), list):
+            for item in caption["char_captions"]:
+                if isinstance(item, dict) and isinstance(item.get("char_caption"), str):
+                    item["char_caption"] = fix(item["char_caption"])
+    return n
+
+
+_WEBUI_WEIGHT_RE = re.compile(r"\(([^:\(\)]+):(\d+(?:\.\d+)?)\)")
+_ISOLATED_COLONS_RE = re.compile(r"(?:^|(?<=,))\s*::\s*(?:$|(?=,))")
+_CONSECUTIVE_COMMAS_RE = re.compile(r",\s*,+")
+
+
+def clean_prompt_syntax(text: str) -> str:
+    """清理单条提示词文本：
+    1. 将 WebUI 权重语法 (tag:1.2) 转译为 NAI 原生 1.2::tag::
+    2. 清理因客户端切词手抖留下的孤立破损 ::
+    3. 合并多余连续逗号与修剪首尾
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    new_text = _WEBUI_WEIGHT_RE.sub(r"\2::\1::", text)
+    new_text = _ISOLATED_COLONS_RE.sub("", new_text)
+    new_text = _CONSECUTIVE_COMMAS_RE.sub(",", new_text)
+    new_text = re.sub(r"\s*,\s*", ", ", new_text)
+    return new_text.strip(" ,")
+
+
+def sanitize_and_translate_prompts(body: dict) -> int:
+    """扫描请求中所有的提示词字段，执行语法自愈与转译，返回修改字段数。"""
+    n = 0
+
+    def apply(text):
+        nonlocal n
+        if not isinstance(text, str) or not text:
+            return text
+        cleaned = clean_prompt_syntax(text)
+        if cleaned != text:
+            n += 1
+        return cleaned
+
+    if isinstance(body.get("input"), str):
+        body["input"] = apply(body["input"])
+    p = body.get("parameters")
+    if not isinstance(p, dict):
+        return n
+    for key in ("prompt", "negative_prompt"):
+        if isinstance(p.get(key), str):
+            p[key] = apply(p[key])
+    if isinstance(p.get("characterPrompts"), list):
+        for item in p["characterPrompts"]:
+            if isinstance(item, dict):
+                for key in ("prompt", "uc"):
+                    if isinstance(item.get(key), str):
+                        item[key] = apply(item[key])
+    for key in ("v4_prompt", "v4_negative_prompt"):
+        caption = (p.get(key) or {}).get("caption") if isinstance(p.get(key), dict) else None
+        if not isinstance(caption, dict):
+            continue
+        if isinstance(caption.get("base_caption"), str):
+            caption["base_caption"] = apply(caption["base_caption"])
+        if isinstance(caption.get("char_captions"), list):
+            for item in caption["char_captions"]:
+                if isinstance(item, dict) and isinstance(item.get("char_caption"), str):
+                    item["char_caption"] = apply(item["char_caption"])
+    return n
+
+
+MAX_CHARACTERS = 6        # NovelAI V4 / V4.5 角色提示词上限
+
+
+
+def upstream_parameter_problem(body: dict) -> Optional[str]:
+    """在排队之前拦下上游一定会拒绝的请求，避免白占全站唯一的出图队列。"""
+    for path, text in _prompt_texts(body):
+        if isinstance(text, str):
+            size = len(text.encode("utf-8"))
+            if size >= MAX_PROMPT_BYTES:
+                return f"提示词过长：{path} 有 {size} 字节（中文每字 3 字节），上游上限 {MAX_PROMPT_BYTES} 字节"
+            # 不按括号层数拦截：NAI 花括号每层只 ×1.05（8 层≈1.48 倍），圆括号不是权重语法，不会溢出；
+            # 10/11 这条规则误拦了一位成员的 V5 请求，已移除。NaN 的真实原因是下面的超大数值权重。
+            # 异常数值权重（如画师名带数字紧挨着 :: 导致超大权重与 NaN 计算溢出）
+            for m in re.finditer(r"(?<![\d.])([-+]?\d+(?:\.\d+)?)::", text):   # 回看断言：长串数字不再 O(n²)（10/11 审查 P0：5 万位数字卡 23 秒）
+                try:
+                    val = float(m.group(1))
+                except ValueError:
+                    continue
+                if abs(val) > 100:
+                    return f"检测到异常权重 {m.group(1)}::（可能是画师名里的数字紧挨着 ::），请在 :: 前加逗号或空格"
+    p = body.get("parameters") if isinstance(body.get("parameters"), dict) else {}
+    if body.get("action", "generate") == "generate":
+        for key in ("width", "height"):
+            value = p.get(key)
+            if isinstance(value, int) and value > 0 and value % DIMENSION_STEP:
+                lower = max(DIMENSION_STEP, value // DIMENSION_STEP * DIMENSION_STEP)
+                return f"{key}={value} 不是 64 的倍数，上游会拒绝；可改为 {lower} 或 {lower + DIMENSION_STEP}"
+    model = str(body.get("model", ""))
+    if model.startswith("nai-diffusion-4"):
+        # V4 / V4.5 最多 6 个角色；超了上游不报清楚原因，直接回 500（2026-10-10 随风飞扬 7 个角色连续 500）
+        counts = [len(p.get("characterPrompts")) if isinstance(p.get("characterPrompts"), list) else 0]
+        for key in ("v4_prompt", "v4_negative_prompt"):
+            caption = (p.get(key) or {}).get("caption") if isinstance(p.get(key), dict) else None
+            if isinstance(caption, dict) and isinstance(caption.get("char_captions"), list):
+                counts.append(len(caption["char_captions"]))
+        if max(counts) > MAX_CHARACTERS:
+            return f"角色太多：这次有 {max(counts)} 个角色，V4/V4.5 最多 {MAX_CHARACTERS} 个，请删掉几个角色再生成"
+    sampler = p.get("sampler")
+    if sampler is not None:
+        if not isinstance(sampler, str) or not sampler.isascii() or len(sampler) > 64 or not sampler.replace("_", "").isalnum():
+            return "采样器名称无效，请选择官方支持的标准采样器"
+        if (sampler in V4_V5_REJECTED_SAMPLERS
+                and (is_v5_model(model) or model.startswith("nai-diffusion-4"))):
+            return f"采样器 {sampler} 不支持 V4/V4.5/V5 模型，请换用 k_euler_ancestral、k_dpmpp_2m 等"
+    schedule = p.get("noise_schedule")
+    if schedule is not None and (not isinstance(schedule, str) or not schedule.isascii() or len(schedule) > 32):
+        return "noise_schedule 参数无效"
+    return None
+
+
 def is_v5_model(model: str) -> bool:
-    m = (model or "").lower()
+    m = (model or "").strip().lower()
     return m in ("nai-diffusion-5", "nai-v5") or m.startswith(
         ("nai-diffusion-5-", "nai-v5-")
     )
@@ -291,11 +534,17 @@ def estimate_image_cost(params: dict, is_opus: bool = True, *,
         strength = inpaint.get("strength", 1.0)
         if not _unit_value(strength):
             raise ValueError("img2img.strength 必须是 0 到 1 的有限数值")
+        outer = p.get("strength", 0.0)
+        if not _unit_value(outer):
+            raise ValueError("strength 必须是 0 到 1 的有限数值")
+        strength = max(strength, outer)   # 上游可能按任一字段计价，取较大者
         # V4 按强度折算；2026-09-24 实测 V5 Full 重绘使用完整基础价。
         if str(params.get("model", "")).lower().startswith("nai-diffusion-4"):
             per *= strength
     elif p.get("image"):
-        strength = float(p.get("strength", 1.0))
+        strength = p.get("strength", 1.0)
+        if not _unit_value(strength):
+            raise ValueError("strength 必须是 0 到 1 的有限数值")
         per *= strength
     per = max(2, math.ceil(per))
 
@@ -316,11 +565,6 @@ def estimate_image_cost(params: dict, is_opus: bool = True, *,
     # 官方余额实测：符合条件的多图首张参考费减免，单张照收。
     reference_cost = reference_surcharge(params) * max(1, paid_outputs)
     return {"anlas": per * paid_outputs + reference_cost, "v5": 0}
-
-
-def estimate_image_anlas(params: dict, is_opus: bool = True) -> int:
-    """兼容旧接口：只返回 Anlas 部分。"""
-    return estimate_image_cost(params, is_opus)["anlas"]
 
 
 # ------------------------------------------------------------ 图片钳制 ----
@@ -351,16 +595,15 @@ def clamp_image_params(payload: dict, *, max_pixels: int, max_steps: int,
     对 V5：钳制后可走周额度（不烧 Anlas）；对老模型：钳制后直接免费。
     """
     notes: list[str] = []
-    out = copy.deepcopy(payload)
-    p = out.get("parameters")
-    if not isinstance(p, dict):
-        p = {}
-        out["parameters"] = p
+    # 只改写 parameters 的顶层字段：浅拷贝即可，避免对大请求体做 deepcopy（内存/CPU 放大数倍）。
+    out = dict(payload)
+    p = dict(out["parameters"]) if isinstance(out.get("parameters"), dict) else {}
+    out["parameters"] = p
 
     # img2img / inpaint 审查
     is_img2img = bool(p.get("image") or p.get("mask"))
     if is_img2img and not allow_img2img:
-        return out, notes, "本站未开放 img2img / 局部重绘"
+        return out, notes, "本站不支持图生图（img2img）/ 局部重绘（会消耗 Anlas）。请在客户端里移除参考图（原图）后再生成"
 
     if max_pixels < 64 * 64:
         return out, notes, "MAX_PIXELS 不能小于 4096（最小尺寸 64x64）"
@@ -406,16 +649,96 @@ def clamp_image_params(payload: dict, *, max_pixels: int, max_steps: int,
     return out, notes, None
 
 
+# ------------------------------------------------------------ V4 结构化提示词 ----
+def fill_v4_prompt(payload: dict) -> Tuple[dict, list[str]]:
+    """V4 / V4.5 必须带 v4_prompt / v4_negative_prompt 结构，缺了上游直接回 500、不说原因
+    （2026-10-10 成员「心事全在脸上」的 OpenAI 兼容类客户端只发 input + negative_prompt，连续 11 次 500；
+    同参数补上结构后 200，已用测试 Key 复现）。官方网页端用 input / negative_prompt / characterPrompts 拼出这两个结构，这里照做。"""
+    model = str(payload.get("model", ""))
+    p = payload.get("parameters")
+    if not model.startswith("nai-diffusion-4") or not isinstance(p, dict):
+        return payload, []
+    notes: list[str] = []
+    out = dict(payload)
+    p = dict(p)
+    out["parameters"] = p
+    chars = [c for c in (p.get("characterPrompts") or []) if isinstance(c, dict)] if isinstance(p.get("characterPrompts"), list) else []
+    def centers(c):
+        cen = c.get("center") if isinstance(c.get("center"), dict) else {"x": 0.5, "y": 0.5}
+        return [{"x": cen.get("x", 0.5), "y": cen.get("y", 0.5)}]
+    if not isinstance(p.get("v4_prompt"), dict):
+        p["v4_prompt"] = {"caption": {"base_caption": str(out.get("input", "") or ""),
+                                      "char_captions": [{"char_caption": str(c.get("prompt") or ""), "centers": centers(c)} for c in chars]},
+                          "use_coords": bool(p.get("use_coords", False)), "use_order": True}
+        notes.append("已按官方格式补上 v4_prompt")
+    if not isinstance(p.get("v4_negative_prompt"), dict):
+        p["v4_negative_prompt"] = {"caption": {"base_caption": str(p.get("negative_prompt", "") or ""),
+                                               "char_captions": [{"char_caption": str(c.get("uc") or ""), "centers": centers(c)} for c in chars]},
+                                   "legacy_uc": False}
+        notes.append("已按官方格式补上 v4_negative_prompt")
+    return out, notes
+
+
+# ------------------------------------------------------------ V5 Medium ----
+# 官方 2026-10-08 给 V5 Full 加了 Medium 档（蒸馏模型，锁 14 步 / Euler-a / Heavy 负面预设，不支持自定义负面词和
+# rescale；官方公告：比 23 步 High 省约 42%，盲测画质大致相当）。模型名与固定设置取自官方前端代码（2026-10-10 核对）。
+V5_MEDIUM_OF = {"nai-diffusion-5-full": "nai-diffusion-5-full-medium",
+                "nai-diffusion-5-full-inpainting": "nai-diffusion-5-full-medium-inpainting"}
+V5_MEDIUM_STEPS = 14
+V5_MEDIUM_SAMPLER = "k_euler_ancestral"
+V5_MEDIUM_UC_PRESET = 0                 # V5 的预设列表里 heavy 排第 0
+V5_MEDIUM_UC = ("lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, "
+                "very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, "
+                "too many watermarks, negative space, blank page")
+# Medium 和 High 一样每张记 1 张 V5（10/10 站长：不再打折——折算会让 V5 用量 / 恢复速度的统计口径失真）。
+
+
+def is_v5_medium(model: str) -> bool:
+    return (model or "").strip().lower() in V5_MEDIUM_OF.values()
+
+
+def medium_normalize(payload: dict) -> Tuple[dict, list[str]]:
+    """按官方前端对 Medium 的做法整理参数：步数 / 采样器 / 负面预设固定，自定义负面词清空，rescale 归零。
+    不整理的话，客户端照 High 的习惯带自定义负面词或 rescale，上游可能拒绝。"""
+    out = dict(payload)
+    p = dict(out["parameters"]) if isinstance(out.get("parameters"), dict) else {}
+    out["parameters"] = p
+    notes: list[str] = []
+    if p.get("steps") != V5_MEDIUM_STEPS:
+        p["steps"] = V5_MEDIUM_STEPS
+    if p.get("sampler") != V5_MEDIUM_SAMPLER:
+        p["sampler"] = V5_MEDIUM_SAMPLER
+    if (p.get("cfg_rescale") or 0) != 0:
+        p["cfg_rescale"] = 0
+        notes.append("Medium 不支持 rescale，已设为 0")
+    user_uc = str(p.get("negative_prompt") or "").strip()
+    if user_uc and user_uc != V5_MEDIUM_UC:
+        notes.append("Medium 不支持自定义负面词，已换成官方 Heavy 预设（可在正面提示词里用 -2::xx:: 排除）")
+    p["negative_prompt"] = V5_MEDIUM_UC
+    p["ucPreset"] = V5_MEDIUM_UC_PRESET
+    neg = p.get("v4_negative_prompt")
+    if isinstance(neg, dict):
+        neg = dict(neg)
+        cap = dict(neg["caption"]) if isinstance(neg.get("caption"), dict) else {}
+        cap["base_caption"] = V5_MEDIUM_UC
+        if isinstance(cap.get("char_captions"), list):
+            cap["char_captions"] = [{**c, "char_caption": ""} if isinstance(c, dict) else c
+                                    for c in cap["char_captions"]]
+        neg["caption"] = cap
+        p["v4_negative_prompt"] = neg
+    if isinstance(p.get("characterPrompts"), list):
+        p["characterPrompts"] = [{**c, "uc": ""} if isinstance(c, dict) else c for c in p["characterPrompts"]]
+    return out, notes
+
+
 # ------------------------------------------------------------ 文本钳制 ----
 
 def clamp_text_params(payload: dict, *, max_output_tokens: int,
                       max_input_chars: int) -> Tuple[dict, list[str], Optional[str]]:
     notes: list[str] = []
-    out = copy.deepcopy(payload)
-    p = out.get("parameters")
-    if not isinstance(p, dict):
-        p = {}
-        out["parameters"] = p
+    out = dict(payload)
+    p = dict(out["parameters"]) if isinstance(out.get("parameters"), dict) else {}
+    out["parameters"] = p
 
     input_text = str(out.get("input", "") or "")
     if len(input_text) > max_input_chars:

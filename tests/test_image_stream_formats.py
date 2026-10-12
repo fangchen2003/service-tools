@@ -66,6 +66,7 @@ async def test_error_event_never_leaks_and_keeps_completed_prefix(state, mode, c
         events = [json.loads(line[6:]) for line in response.content.splitlines() if line.startswith(b"data: ")]
     assert [item["event_type"] for item in events] == ["final", "error"]
     assert events[-1]["status_code"] == 502
+    assert "fixture-private-upstream" in [kw.get("detail", "") for _, kw in state.db.logs if _[4] == "error"][0]   # 只进日志
 
 
 @pytest.mark.parametrize("wire", [struct.pack(">I", 0), struct.pack(">I", MAX_EVENT_BYTES + 1),
@@ -107,3 +108,11 @@ async def test_nai_client_requests_selected_binary_format():
         async with nai.image_stream("https://fixture.invalid/ai/generate-image-stream",
                                     image_body(stream="msgpack")):
             pass
+
+
+def test_upstream_error_event_message_is_kept_for_the_log():
+    # 线上 15:20 jhx666「上游流式生成失败」：原来 error 事件的原话被丢掉，无从排查
+    from app.image_events import ImageEventTracker
+    t = ImageEventTracker(1)
+    list(t.frames(b'event: error\ndata: {"event_type":"error","message":"Error generating image:\\n  bad\\tsampler"}\n\n'))
+    assert t.failed and t.error_detail == "Error generating image: bad sampler"

@@ -22,7 +22,10 @@ PNG = base64.b64encode(PNG_BYTES).decode()
 
 def image_body(*, precise=0, **parameters):
     params = dict(width=1024, height=1024, steps=28, n_samples=1,
-                  sm=False, sm_dyn=False)
+                  sm=False, sm_dyn=False,
+                  # 真实 V4 / V4.5 客户端都带结构化提示词；缺了网关会照官方格式补上（fill_v4_prompt）
+                  v4_prompt={"caption": {"base_caption": "fixture", "char_captions": []}, "use_coords": False, "use_order": True},
+                  v4_negative_prompt={"caption": {"base_caption": "", "char_captions": []}, "legacy_uc": False})
     if precise:
         params.update(
             director_reference_images_cached=[{"cache_secret_key": "a" * 64, "data": PNG}] * precise,
@@ -64,8 +67,13 @@ class FakeDB:
         return {name: sum(row.get(name, 0) for row in values)
                 for name in ("anlas", "v5", "images", "legacy_free_images")}
 
-    async def get_setting(self, _name, default):
-        return default
+    async def get_setting(self, name, default):
+        return getattr(self, "kv", {}).get(name, default)
+
+    async def set_setting(self, name, value):
+        if not hasattr(self, "kv"):
+            self.kv = {}
+        self.kv[name] = value
 
     async def month_anlas(self, key_id, *_):
         return sum(row["anlas"] for owner, row in self.charges if owner == key_id)
@@ -75,6 +83,9 @@ class FakeDB:
 
     async def day_v5_total(self, *_):
         return sum(row["v5"] for _, row in self.charges)
+
+    async def day_anlas_total(self, *_):
+        return sum(row.get("anlas", 0) for _, row in self.charges)
 
     async def add_log(self, *args, **kwargs):
         self.logs.append((args, kwargs))
@@ -140,6 +151,8 @@ class FakeState:
         self._tag_next_at = {}
         self._tag_condition = asyncio.Condition()
         self._tag_waiting = 0
+        self._tag_waiting_by_key = {}
+        self._tag_latest = {}
 
     def key_sem(self, key_id, capacity):
         return self.semaphores.setdefault(key_id, asyncio.Semaphore(capacity))
@@ -189,6 +202,37 @@ async def post(path, body, token="fixture-1"):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("count,anlas", [(1, 0), (5, 2)])
+async def test_baibai_vibe_uuid_is_forwarded_with_data_and_billed(state, count, anlas):
+    cached = [{"cache_secret_key": "1e6714a5-571c-4ec2-b34a-27f263bef0e2",
+               "data": base64.b64encode(b"mock-vibe-vector").decode()} for _ in range(count)]
+    body = image_body(reference_image_multiple_cached=cached, reference_strength_multiple=[0.6] * count)
+    response = await post("/ai/generate-image", body)
+    assert response.status_code == 200
+    assert len(state.nai.calls) == 1
+    sent = state.nai.calls[0][2]["parameters"]
+    assert sent["reference_image_multiple_cached"] == cached
+    assert "reference_information_extracted_multiple" not in sent
+    assert state.db.charges[-1][1]["anlas"] == anlas
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["missing_data", "empty_strength", "empty_extraction"])
+async def test_invalid_baibai_vibe_is_rejected_before_dispatch(state, invalid):
+    cached = [{"cache_secret_key": "1e6714a5-571c-4ec2-b34a-27f263bef0e2",
+               "data": base64.b64encode(b"mock-vibe-vector").decode()}]
+    body = image_body(reference_image_multiple_cached=cached, reference_strength_multiple=[0.6])
+    if invalid == "missing_data":
+        del cached[0]["data"]
+    elif invalid == "empty_strength":
+        body["parameters"]["reference_strength_multiple"] = []
+    else:
+        body["parameters"]["reference_information_extracted_multiple"] = []
+    assert (await post("/ai/generate-image", body)).status_code == 400
+    assert not state.nai.calls and not state.db.charges
+
+
+@pytest.mark.asyncio
 async def test_free_legacy_daily_quota_is_per_key_and_counts_success_only(state):
     key = state.db.keys["fixture-1"]
     key["daily_images"] = 1
@@ -196,7 +240,7 @@ async def test_free_legacy_daily_quota_is_per_key_and_counts_success_only(state)
     assert first.status_code == 200
     assert state.db.charges[-1][1]["legacy_free_images"] == 1
     rejected = await post("/ai/generate-image", image_body())
-    assert rejected.status_code == 429
+    assert rejected.status_code == 402
     assert "免费图额度" in rejected.json()["error"]["message"]
     assert len(state.nai.calls) == 1
     other = await post("/ai/generate-image", image_body(), token="fixture-2")
@@ -254,7 +298,7 @@ async def test_img2img_batch_counts_only_one_free_image_against_daily_limit(stat
     assert (await post('/ai/generate-image', batch)).status_code == 200
     charge, = state.db.charges
     assert (charge[1]['anlas'], charge[1]['images'], charge[1]['legacy_free_images']) == (8, 3, 1)
-    assert (await post('/ai/generate-image', batch)).status_code == 429
+    assert (await post('/ai/generate-image', batch)).status_code == 402
     assert len(state.nai.calls) == 1
 
 
@@ -355,7 +399,7 @@ async def test_invalid_free_clamp_parameters_rejected_before_dispatch(state, str
     state.db.keys["fixture-1"]["allow_anlas"] = False
     response = await post("/ai/generate-image" + ("-stream" if streaming else ""), image_body(**{field: value}))
     assert response.status_code == 400
-    assert response.json()["error"]["message"] == "图片参数无效"
+    assert response.json()["error"]["message"].removeprefix("猫头鹰公益站提醒：").startswith("图片参数无效")
     assert not state.nai.calls and not state.db.charges
     assert state.global_active == 0 and not state.image_budget_lock.locked()
 
@@ -588,3 +632,66 @@ async def test_cancelled_semaphore_wait_restores_key_slot_and_queue_counts(state
         await task
     assert state.global_waiting == 0 and state.global_active == 0
     assert state.semaphores[1]._value == state.settings.key_concurrency
+
+
+@pytest.mark.asyncio
+async def test_status_code_distribution_counts_member_api(state):
+    # 后台「状态码分布」：成员接口每个响应按状态码计数（Key 错误 401、成功 200），后台路径不算
+    from app import status_stats
+    status_stats._PENDING.clear()
+    assert (await post("/ai/generate-image", image_body(), token="nai-wrong")).status_code == 401
+    assert (await post("/ai/generate-image", image_body())).status_code == 200
+    codes = {c for (_h, c) in status_stats._PENDING}
+    assert {200, 401} <= codes
+    assert status_stats.MEANING[401].startswith("Key")
+
+
+@pytest.mark.asyncio
+async def test_v5_borrow_lets_capped_member_continue_only_when_open(state):
+    # 公益版空闲借用：顶到个人 V5 上限后，只有借用开放（账号快满）时才能多用
+    from app import quota_algo
+    key = dict(state.db.keys["fixture-1"], daily_v5=1, exclude_global_v5=True, is_admin=False)
+    state.db.charges = [(key["id"], {"v5": 1})]
+    quota_algo.BORROW.clear(); quota_algo.BORROW.update({"open": False})
+    with pytest.raises(Exception) as caught:
+        await main.quota_image_check(key, {"v5": 1, "anlas": 0})
+    assert "V5" in str(getattr(caught.value, "detail", caught.value))
+    quota_algo.BORROW.update({"open": True, "bonus": 1, "heavy_bonus": 1, "heavy": []})
+    try:
+        await main.quota_image_check(key, {"v5": 1, "anlas": 0})
+    finally:
+        quota_algo.BORROW.clear(); quota_algo.BORROW.update({"open": False})
+
+
+@pytest.mark.asyncio
+async def test_extreme_bracket_and_weight_preflight_blocks_without_dispatch(state):
+    # Abnormal numeric weight is blocked before dispatch on both standard and streaming routes
+    for path in ("/ai/generate-image", "/ai/generate-image-stream"):
+        body = image_body()
+        body["input"] = "1girl, 94199::artist::, best quality"          # 独立的超大权重：拦
+        resp = await post(path, body)
+        assert resp.status_code == 400
+        assert "检测到异常权重 94199::" in resp.text
+        assert not state.nai.calls and not state.db.charges
+
+    # 画师名结尾的数字紧挨 ::：自动补空格后正常出图，不再拒绝
+    body = image_body()
+    body["input"] = "1girl, artist:bm94199::, best quality"
+    resp = await post("/ai/generate-image", body)
+    assert resp.status_code == 200
+
+    # Legitimate artist downweighting with 8 square brackets passes preflight and generates
+    body = image_body()
+    body["input"] = "1girl, [[[[[[[[artist:xxx]]]]]]]], best quality"
+    resp = await post("/ai/generate-image", body)
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_touch_key_failure_does_not_fail_request(state, monkeypatch):
+    import sqlite3
+    async def boom(key_id):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(state.db, "touch_key", boom, raising=False)
+    resp = await post("/ai/generate-image", image_body())
+    assert resp.status_code == 200
