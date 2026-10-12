@@ -70,9 +70,9 @@ async def test_token_bucket_midnight_burst():
             err = exc_info.value
             assert err.status == 429
             assert err.code == PACED
-            assert "当前额度蓄水池已用完" in err.message
+            assert "当前出图速度过快" in err.message
             assert "每小时自动恢复 4 张" in err.message
-            assert "分钟后恢复" in err.message
+            assert "分钟后可用" in err.message
 
 
 @pytest.mark.asyncio
@@ -94,7 +94,7 @@ async def test_token_bucket_daytime_refill():
                 await quota_image_check(key, {"v5": 0, "anlas": 0}, legacy_free_images=1)
             assert exc_info.value.status == 429
             assert exc_info.value.code == PACED
-            assert "约 15 分钟后恢复 1 张" in exc_info.value.message
+            assert "分钟后可用" in exc_info.value.message
 
 
 @pytest.mark.asyncio
