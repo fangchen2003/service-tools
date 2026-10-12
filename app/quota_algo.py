@@ -401,16 +401,6 @@ async def run(state, now: Optional[float] = None) -> dict[str, Any]:
             new, why = quota_policies.simple({"a": a}, usage=usage, budget=budget, cfg=cfg)     # 线上 = 影子里的 LIVE
             n = new["a"]
             reasons = [f"{why}（可分 = 账号日上限 {cap} − 全站 V5 {v5_global}）"]
-            # 影子模式：历代算法 × 1/2/3 个账号各算一份，只记录不生效（以后加号池时对比 / 回测用）
-            try:
-                shadow_state = json.loads(await db.get_setting(SHADOW_STATE_KEY, "{}") or "{}")
-                shadow = quota_policies.run_all(shadow_state, day=yday, usage=usage, stats=stats,
-                                                cap_per_account=cap // accounts, v5_global=v5_global, cfg=cfg)
-                shadow_hist = json.loads(await db.get_setting(SHADOW_HISTORY_KEY, "[]") or "[]")[-29:] + [shadow]
-                await db.set_settings_bulk({SHADOW_STATE_KEY: json.dumps(shadow["results"], ensure_ascii=False),
-                                            SHADOW_HISTORY_KEY: json.dumps(shadow_hist, ensure_ascii=False)})
-            except Exception as exc:          # 影子模式出错绝不能影响线上分配
-                print(f"[warn] quota shadow failed: {type(exc).__name__}: {exc}", flush=True)
         a2 = b2 = n
         stats["coverage_hours"] = round(covered, 1)
         review = {"day": yday, **stats, "cap": cap, "from": [a, b], "to": [a2, b2], "reasons": reasons}
@@ -447,11 +437,20 @@ async def run(state, now: Optional[float] = None) -> dict[str, Any]:
     if quiet is not None:
         rate_info["quiet"] = quiet
     stored = json.loads(await db.get_setting(V5_DAY_KEY, "{}") or "{}")
-    fresh = v5_plan(pct, rate, await _active_v5(db, 3, now), lo=cfg["quota_v5_min"], hi=cfg["quota_v5_max"])
+    v5_min = cfg["quota_v5_min"]
+    if pct is not None and pct >= P("allocation.v5_flood_pct", 85):
+        v5_min = max(v5_min, P("allocation.v5_flood_min_each", 10))
+    fresh = v5_plan(pct, rate, await _active_v5(db, 3, now), lo=v5_min, hi=cfg["quota_v5_max"])
+    if pct is not None and pct >= P("allocation.v5_flood_pct", 85):
+        fresh["global"] = max(fresh["global"], P("allocation.v5_flood_global", 260))
+        fresh["each"] = max(fresh["each"], v5_min)
     fresh["rate_info"] = rate_info
     if stored.get("day") == today and stored.get("plan"):
         v5 = stored["plan"]
-        if pct is not None and pct < P("allocation.v5_tighten_below", 40) and fresh["each"] < v5["each"]:
+        if fresh["each"] > v5["each"]:
+            v5 = fresh
+            await db.set_setting(V5_DAY_KEY, json.dumps({"day": today, "plan": v5}, ensure_ascii=False))
+        elif pct is not None and pct < P("allocation.v5_tighten_below", 40) and fresh["each"] < v5["each"]:
             v5 = fresh
             await db.set_setting(V5_DAY_KEY, json.dumps({"day": today, "plan": v5}, ensure_ascii=False))
     else:
@@ -496,7 +495,8 @@ async def run(state, now: Optional[float] = None) -> dict[str, Any]:
         await guard.save({"base_daily_images": b})
     await db.set_settings_bulk(settings)
     # 首页提醒（站长要求：算法调整只在网站首页提示，不发 Discord）
-    note = f"今日额度：V4.5 每人 {a} 张 · V5 每人 {v5['each']} 张"
+    v5_status = f" · V5 每人 {v5['each']} 张" + (f"（当前电池充沛 {pct:.0f}%，额度放宽）" if pct and pct >= 85 and v5['each'] >= 10 else "")
+    note = f"今日额度：V4.5 免费图蓄水池 {a} 张（每小时自动恢复 4 张，全天上限 96 张）{v5_status}"
     if review and review["from"] != review["to"]:
         note = f"{today[5:].replace('-', '月')}日 算法调整：" + "；".join(review["reasons"]) + "。" + note
     await db.set_setting(NOTICE_KEY, note)

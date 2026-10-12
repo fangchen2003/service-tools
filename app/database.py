@@ -14,6 +14,17 @@ import aiosqlite
 
 INVITE_TAG = "邀请"     # 站长手动发的邀请 Key：只由站长手动删除，闲置回收跳过（10-11 站长）
 
+ROLE_ADMIN = "admin"
+ROLE_TEST = "test"
+ROLE_INVITE = "invite"
+ROLE_REGULAR = "regular"
+ROLE_LABELS = {
+    ROLE_ADMIN: "站长",
+    ROLE_TEST: "测试",
+    ROLE_INVITE: "邀请",
+    ROLE_REGULAR: "普通",
+}
+
 from .reasons import reason_label
 
 SCHEMA = """
@@ -55,7 +66,12 @@ CREATE TABLE IF NOT EXISTS discord_registrations (
 );
 CREATE TABLE IF NOT EXISTS discord_bans (
     discord_id TEXT PRIMARY KEY,
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    username TEXT NOT NULL DEFAULT '',
+    display_name TEXT NOT NULL DEFAULT '',
+    avatar TEXT NOT NULL DEFAULT '',
+    banned_by TEXT NOT NULL DEFAULT '系统'
 );
 CREATE TABLE IF NOT EXISTS pending_role_removals (
     discord_id TEXT PRIMARY KEY,
@@ -89,6 +105,7 @@ CREATE TABLE IF NOT EXISTS generation_audit (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON generation_audit(ts);
 CREATE INDEX IF NOT EXISTS idx_audit_key ON generation_audit(key_id, ts);
+CREATE INDEX IF NOT EXISTS idx_audit_key_id ON generation_audit(key_id, id DESC);
 CREATE TABLE IF NOT EXISTS usage_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts REAL NOT NULL,
@@ -159,6 +176,7 @@ CREATE TABLE IF NOT EXISTS feedback (      -- 成员用 /反馈 提交的问卷�
     answers TEXT NOT NULL                  -- JSON：{问题 id: 回答}
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_ts ON feedback (ts);
+CREATE INDEX IF NOT EXISTS idx_feedback_discord_id_ts ON feedback (discord_id, ts DESC);
 CREATE TABLE IF NOT EXISTS coupons (       -- 成员的券（现在只有「重置券」：在首页自己点一下，重置当天的 V5 / Anlas 额度）
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     key_id INTEGER NOT NULL,
@@ -204,6 +222,7 @@ CREATE TABLE IF NOT EXISTS error_events (
     last_path TEXT NOT NULL DEFAULT '',
     resolved_at REAL               -- 站长标记已处理；之后再出现视为「复发」
 );
+CREATE INDEX IF NOT EXISTS idx_error_events_resolved_last_seen ON error_events (resolved_at, last_seen DESC);
 CREATE TABLE IF NOT EXISTS waitlist (
     discord_id TEXT PRIMARY KEY,
     name TEXT NOT NULL DEFAULT '',
@@ -225,6 +244,7 @@ CREATE TABLE IF NOT EXISTS admin_actions (
     ok INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_admin_actions_ts ON admin_actions (ts DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_actions_action ON admin_actions (action);
 CREATE TABLE IF NOT EXISTS key_sources (
     key_id INTEGER NOT NULL,
     net_hash TEXT NOT NULL,       -- 加盐哈希后的来源网段（IPv4 /24、IPv6 /48），不存完整 IP
@@ -385,6 +405,11 @@ class Database:
             "ALTER TABLE upstream_token_counters ADD COLUMN units REAL",
             # 非防分享的暂停（如自动驾驶限流）的原因：存库，重启后成员仍看到正确的原因；空 = 防分享暂停
             "ALTER TABLE share_state ADD COLUMN pause_reason TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE discord_bans ADD COLUMN reason TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE discord_bans ADD COLUMN username TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE discord_bans ADD COLUMN display_name TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE discord_bans ADD COLUMN avatar TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE discord_bans ADD COLUMN banned_by TEXT NOT NULL DEFAULT '系统'",
         ):
             try:
                 await self._db.execute(ddl)
@@ -443,6 +468,20 @@ class Database:
                     (images, key_id, day),
                 )
             await self._db.commit()
+        for idx_sql in (
+            "CREATE INDEX IF NOT EXISTS idx_log_ts_upstatus ON usage_log (ts, up_status)",
+            "CREATE INDEX IF NOT EXISTS idx_log_key_id ON usage_log (key_id, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_log_rid ON usage_log (rid)",
+            "CREATE INDEX IF NOT EXISTS idx_audit_key_id ON generation_audit (key_id, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_admin_actions_action ON admin_actions (action)",
+            "CREATE INDEX IF NOT EXISTS idx_error_events_resolved_last_seen ON error_events (resolved_at, last_seen DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_feedback_discord_id_ts ON feedback (discord_id, ts DESC)",
+        ):
+            try:
+                await self._db.execute(idx_sql)
+                await self._db.commit()
+            except Exception:
+                pass
 
     async def close(self) -> None:
         if self._db:
@@ -656,6 +695,7 @@ class Database:
         await self._db.execute("DELETE FROM key_sources WHERE key_id=?", (key_id,))
         await self._db.execute("DELETE FROM key_idle_reminders WHERE key_id=?", (key_id,))
         await self._db.execute("DELETE FROM key_tags WHERE key_id=?", (key_id,))
+        await self._db.execute("DELETE FROM discord_registrations WHERE key_id=?", (key_id,))
         await self._db.execute("DELETE FROM api_keys WHERE id=?", (key_id,))
         await self._db.commit()
 
@@ -897,6 +937,85 @@ class Database:
         await self._db.execute("DELETE FROM discord_registrations WHERE key_id=?", (key_id,))
         await self._db.commit()
         return [str(r[0]) for r in rows]
+
+    async def get_key_role(self, key: Any, tags: Optional[list[str]] = None) -> str:
+        """根据 key 字段与标签判断当前身份组（regular / invite / test / admin）。"""
+        keys = key.keys() if hasattr(key, "keys") else ()
+        if "is_admin" in keys and bool(key["is_admin"]):
+            return ROLE_ADMIN
+        if "is_test" in keys and bool(key["is_test"]):
+            return ROLE_TEST
+        if tags is not None:
+            if INVITE_TAG in tags:
+                return ROLE_INVITE
+        else:
+            rows = await self._db.execute_fetchall(
+                "SELECT 1 FROM key_tags WHERE key_id=? AND tag=?", (key["id"], INVITE_TAG))
+            if rows:
+                return ROLE_INVITE
+        return ROLE_REGULAR
+
+    async def set_key_role(self, key_id: int, role: str) -> None:
+        """原子切换账号身份组：regular / invite / test / admin。"""
+        if role not in (ROLE_ADMIN, ROLE_TEST, ROLE_INVITE, ROLE_REGULAR):
+            raise ValueError(f"未知身份组: {role}")
+        if role == ROLE_ADMIN:
+            await self._db.execute("UPDATE api_keys SET is_admin=1, is_test=0 WHERE id=?", (key_id,))
+            await self._db.execute("DELETE FROM key_tags WHERE key_id=? AND tag=?", (key_id, INVITE_TAG))
+        elif role == ROLE_TEST:
+            await self._db.execute("UPDATE api_keys SET is_admin=0, is_test=1 WHERE id=?", (key_id,))
+            await self._db.execute("DELETE FROM key_tags WHERE key_id=? AND tag=?", (key_id, INVITE_TAG))
+        elif role == ROLE_INVITE:
+            await self._db.execute("UPDATE api_keys SET is_admin=0, is_test=0 WHERE id=?", (key_id,))
+            await self._db.execute(
+                "INSERT INTO key_tags(key_id, tag, note, by, ts) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(key_id, tag) DO UPDATE SET note=excluded.note, by=excluded.by, ts=excluded.ts",
+                (key_id, INVITE_TAG, "站长手动设为邀请账号，豁免闲置回收", "站长", time.time()))
+        elif role == ROLE_REGULAR:
+            await self._db.execute("UPDATE api_keys SET is_admin=0, is_test=0 WHERE id=?", (key_id,))
+            await self._db.execute("DELETE FROM key_tags WHERE key_id=? AND tag=?", (key_id, INVITE_TAG))
+        await self._db.commit()
+
+    async def ban_discord(self, discord_id: str, *, reason: str = "", username: str = "",
+                          display_name: str = "", avatar: str = "", banned_by: str = "系统") -> None:
+        """拉入黑名单：记录封禁理由、操作者及 Discord 用户资料。"""
+        now = time.time()
+        await self._db.execute(
+            """INSERT INTO discord_bans(discord_id, created_at, reason, username, display_name, avatar, banned_by)
+               VALUES (?,?,?,?,?,?,?)
+               ON CONFLICT(discord_id) DO UPDATE SET
+                   created_at=excluded.created_at,
+                   reason=excluded.reason,
+                   username=COALESCE(NULLIF(excluded.username, ''), discord_bans.username),
+                   display_name=COALESCE(NULLIF(excluded.display_name, ''), discord_bans.display_name),
+                   avatar=COALESCE(NULLIF(excluded.avatar, ''), discord_bans.avatar),
+                   banned_by=excluded.banned_by""",
+            (str(discord_id), now, reason, username, display_name, avatar, banned_by))
+        await self._db.commit()
+
+    async def unban_discord(self, discord_id: str) -> bool:
+        """移出黑名单。"""
+        cur = await self._db.execute("DELETE FROM discord_bans WHERE discord_id=?", (str(discord_id),))
+        await self._db.commit()
+        return cur.rowcount > 0
+
+    async def list_bans(self, q: str = "") -> list[dict]:
+        """查询黑名单列表，支持按 discord_id, username, display_name, reason 模糊匹配。"""
+        q = (q or "").strip()
+        if q:
+            pat = f"%{q}%"
+            cur = await self._db.execute(
+                """SELECT discord_id, created_at, reason, username, display_name, avatar, banned_by
+                   FROM discord_bans
+                   WHERE discord_id LIKE ? OR username LIKE ? OR display_name LIKE ? OR reason LIKE ?
+                   ORDER BY created_at DESC""",
+                (pat, pat, pat, pat))
+        else:
+            cur = await self._db.execute(
+                """SELECT discord_id, created_at, reason, username, display_name, avatar, banned_by
+                   FROM discord_bans
+                   ORDER BY created_at DESC""")
+        return [dict(r) for r in await cur.fetchall()]
 
     async def execute_fetchall_compat(self, sql: str, args: tuple = ()) -> list:
         return list(await (await self._db.execute(sql, args)).fetchall())
@@ -1354,6 +1473,14 @@ class Database:
             "SELECT COUNT(*) FROM api_keys WHERE enabled=1 AND (expires_at IS NULL OR expires_at>?)",
             (time.time(),),
         )
+        active_members = await one(
+            """SELECT COUNT(DISTINCT c.key_id)
+               FROM counters AS c
+               JOIN api_keys AS k ON k.id = c.key_id
+               WHERE c.day=? AND k.is_admin=0 AND k.is_test=0 AND c.requests>0""",
+            (today,),
+        )
+        members_total = await one("SELECT COUNT(*) FROM api_keys WHERE is_admin=0 AND is_test=0")
         # 日志按时间戳保存；统计边界必须与配额使用同一时区。
         day_start = datetime.fromisoformat(today).replace(tzinfo=ZoneInfo(self.tz))
         anomaly = {}
@@ -1364,13 +1491,17 @@ class Database:
                 (start.timestamp(), (day_start + timedelta(days=1)).timestamp()),
             )).fetchone()
             anomaly[period] = {"unconfirmed_requests": int(row[0]),
-                               "unconfirmed_anlas": round(float(row[1]), 2)}
+                                "unconfirmed_anlas": round(float(row[1]), 2)}
         ph = ",".join("?" * len(week_days))
         cur = await self._db.execute(
-            f"""SELECT day,
-                       SUM(images) AS images, SUM(anlas) AS anlas,
-                       SUM(text_tokens) AS text_tokens, SUM(requests) AS requests, SUM(v5) AS v5
-                FROM counters WHERE day IN ({ph}) GROUP BY day""",
+            f"""SELECT c.day,
+                       SUM(c.images) AS images, SUM(c.anlas) AS anlas,
+                       SUM(c.text_tokens) AS text_tokens, SUM(c.requests) AS requests,
+                       SUM(CASE WHEN COALESCE(k.exclude_global_v5, d.exclude_global_v5, 1)=0 THEN c.v5 ELSE 0 END) AS v5
+                FROM counters AS c
+                LEFT JOIN api_keys AS k ON k.id = c.key_id
+                LEFT JOIN deleted_key_usage_flags AS d ON d.key_id = c.key_id
+                WHERE c.day IN ({ph}) GROUP BY c.day""",
             tuple(week_days),
         )
         by_day = {r["day"]: dict(r) for r in await cur.fetchall()}
@@ -1398,10 +1529,50 @@ class Database:
                 "v5": int(today_v5),
                 **anomaly["today"],
             },
+            "active_members": int(active_members),
+            "members_total": int(members_total),
             "keys_total": int(keys_total),
             "keys_active": int(keys_active),
             "week": week,
             "month": {"anlas": round(float(await one(
                 "SELECT COALESCE(SUM(anlas),0) FROM counters WHERE substr(day,1,7)=?",
                 (today[:7],))), 2), **anomaly["month"]},
+        }
+
+    async def user_image_timing(self, key_id: int) -> dict[str, Any]:
+        """返回指定 Key 的平均出图耗时（秒）及全站近 24 小时参考耗时。"""
+        now = time.time()
+        day_ago = now - 86400
+        cur = await self._db.execute(
+            """SELECT COUNT(*), AVG(dur_ms), AVG(wait_ms)
+               FROM usage_log
+               WHERE key_id=? AND kind IN ('image', 'image_stream') AND status='ok' AND dur_ms>0 AND ts>=?""",
+            (key_id, day_ago),
+        )
+        row = await cur.fetchone()
+        cnt, avg_dur, avg_wait = (row[0] or 0), row[1], row[2]
+        if cnt < 3:
+            cur_all = await self._db.execute(
+                """SELECT COUNT(*), AVG(dur_ms), AVG(wait_ms)
+                   FROM usage_log
+                   WHERE key_id=? AND kind IN ('image', 'image_stream') AND status='ok' AND dur_ms>0""",
+                (key_id,),
+            )
+            row_all = await cur_all.fetchone()
+            if row_all and row_all[0] > 0:
+                cnt, avg_dur, avg_wait = row_all[0], row_all[1], row_all[2]
+
+        cur_site = await self._db.execute(
+            """SELECT AVG(dur_ms) FROM usage_log
+               WHERE kind IN ('image', 'image_stream') AND status='ok' AND dur_ms>0 AND ts>=?""",
+            (day_ago,),
+        )
+        row_site = await cur_site.fetchone()
+        site_avg = row_site[0] if (row_site and row_site[0]) else 9000.0
+
+        return {
+            "count": int(cnt or 0),
+            "avg_dur_s": round(avg_dur / 1000.0, 1) if avg_dur else None,
+            "avg_wait_s": round(avg_wait / 1000.0, 1) if avg_wait else None,
+            "site_avg_dur_s": round(site_avg / 1000.0, 1),
         }

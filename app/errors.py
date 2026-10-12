@@ -117,19 +117,34 @@ class Tracker:
 
     async def list(self, include_resolved: bool = False, limit: int = 100) -> list[dict]:
         where = "" if include_resolved else " WHERE resolved_at IS NULL"
+        order = "ORDER BY (resolved_at IS NOT NULL), last_seen DESC" if include_resolved else "ORDER BY last_seen DESC"
         rows = await (await self.db._db.execute(
             f"""SELECT sig, source, level, title, detail, count, first_seen, last_seen, last_rid, last_key,
-                       last_path, resolved_at FROM error_events{where} ORDER BY last_seen DESC LIMIT ?""",
+                       last_path, resolved_at FROM error_events{where} {order} LIMIT ?""",
             (max(1, min(int(limit), 500)),))).fetchall()
         keys = ("sig", "source", "level", "title", "detail", "count", "first_seen", "last_seen", "last_rid",
                 "last_key", "last_path", "resolved_at")
         return [dict(zip(keys, r)) for r in rows]
 
+    async def open_count(self) -> int:
+        row = await (await self.db._db.execute("SELECT COUNT(*) FROM error_events WHERE resolved_at IS NULL")).fetchone()
+        return int(row[0]) if row else 0
+
     async def resolve(self, sig: str) -> bool:
+        row = await (await self.db._db.execute("SELECT resolved_at FROM error_events WHERE sig=?", (sig,))).fetchone()
+        if row is None:
+            return False
+        if row[0] is None:
+            await self.db._db.execute(
+                "UPDATE error_events SET resolved_at=? WHERE sig=?", (time.time(), sig))
+            await self.db._db.commit()
+        return True
+
+    async def resolve_all(self) -> int:
         cur = await self.db._db.execute(
-            "UPDATE error_events SET resolved_at=? WHERE sig=? AND resolved_at IS NULL", (time.time(), sig))
+            "UPDATE error_events SET resolved_at=? WHERE resolved_at IS NULL", (time.time(),))
         await self.db._db.commit()
-        return cur.rowcount > 0
+        return cur.rowcount
 
     async def purge(self, before: float) -> None:
         """已处理且很久没再出现的记录清掉。"""

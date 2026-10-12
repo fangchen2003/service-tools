@@ -113,15 +113,24 @@ svg.ic{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-wid
 .topbar{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:saturate(1.4) blur(10px);
   -webkit-backdrop-filter:saturate(1.4) blur(10px);border-bottom:1px solid var(--border)}
 .topbar-in{max-width:960px;margin:0 auto;padding:8px 16px;display:flex;align-items:center;gap:12px;min-height:56px}
-.brand{display:flex;align-items:center;gap:12px;font-weight:700;font-size:16px;letter-spacing:.2px;flex:1}
-.brand-link{display:inline-flex;align-items:center;gap:12px;color:inherit;text-decoration:none;border-radius:var(--radius-sm)}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px;letter-spacing:.2px;flex:1;min-width:0}
+.brand-link{display:inline-flex;align-items:center;gap:10px;color:inherit;text-decoration:none;border-radius:var(--radius-sm);white-space:nowrap;flex-shrink:0}
 .brand-link:hover .brand-mark{filter:brightness(1.08)}
 .brand-link:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-.brand-mark{width:32px;height:32px;border-radius:var(--radius-sm);font-size:20px;line-height:1;font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif;background:var(--accent);color:var(--on-accent);display:grid;place-items:center}
-.top-link{color:var(--text-2);text-decoration:none;font-size:13.5px;padding:6px 8px;border-radius:6px;display:none;transition:color .15s,background .15s}
+.brand-mark{width:32px;height:32px;border-radius:var(--radius-sm);font-size:20px;line-height:1;font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;flex-shrink:0}
+.top-link{color:var(--text-2);text-decoration:none;font-size:13.5px;padding:6px 8px;border-radius:6px;display:none;white-space:nowrap;flex-shrink:0;transition:color .15s,background .15s}
 .top-link:hover{color:var(--text);background:var(--surface-3)}
 .top-link:focus-visible{outline-offset:0}
-@media (max-width:639px){#navStatus{display:inline-block}}
+@media (max-width:639px){
+  .topbar-in{gap:8px;padding:6px 12px;min-height:50px}
+  .brand-link{font-size:14.5px;gap:8px}
+  .brand-mark{width:28px;height:28px;font-size:18px}
+  #navStatus{display:inline-block;font-size:12.5px;padding:4px 6px}
+}
+@media (max-width:390px){
+  .brand-link{font-size:13.5px;gap:6px}
+  #navStatus{display:none}
+}
 
 main{max-width:960px;margin:0 auto;padding:0 16px 24px}
 section{margin-top:40px}
@@ -263,19 +272,22 @@ footer{max-width:960px;margin:0 auto;padding:24px 16px 40px;text-align:center;co
 .me .tag.ok{font-size:11.5px;padding:2px 8px;border-radius:999px;background:var(--ok-soft);color:var(--ok)}
 .me .link{background:none;border:0;color:var(--text-2);cursor:pointer;font-size:13px;margin-left:auto;text-decoration:underline;text-underline-offset:2px;transition:color .15s}
 .me .link:hover{color:var(--text)}
-.me-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.me-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
 .me-grid:last-child{margin-bottom:0}
 .me-grid>div{background:var(--surface);border-radius:var(--radius-sm);padding:8px 10px}
 .me-grid span{display:block;font-size:11.5px;color:var(--text-2)}
 .me-grid b{font-size:17px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.me-grid b small{font-size:11px;font-weight:400;color:var(--text-2);margin-left:3px;vertical-align:baseline}
 .lh-left{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-width:0}
 .head-key{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}
 .head-key code{font-family:var(--mono);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 9px;font-size:13px;white-space:nowrap}
-.invite-bind{margin-top:12px;padding:10px 12px;border:1px solid var(--accent);border-radius:10px;display:flex;gap:8px;align-items:flex-start;font-size:13.5px}
-.share-check{margin-top:12px;padding:12px;border:1px solid var(--warn);border-radius:10px;display:grid;gap:6px}
+.share-check{margin-top:12px;padding:14px;border:1px solid var(--warn);border-radius:10px;display:grid;gap:8px}
 .share-check b{display:flex;align-items:center;gap:6px;font-size:14px}
-.share-check-btns{display:grid;gap:6px}
-.share-check-btns .btn{justify-content:flex-start;text-align:left;white-space:normal;height:auto;padding:8px 10px}
+.sc-opts{display:grid;gap:8px;margin:4px 0}
+.sc-opt{display:flex;align-items:flex-start;gap:9px;cursor:pointer;font-size:13.5px;line-height:1.45;padding:8px 10px;border-radius:var(--radius-sm);background:color-mix(in srgb,var(--surface) 60%,transparent);border:1px solid var(--border);transition:background .15s,border-color .15s}
+.sc-opt:hover{background:var(--surface);border-color:var(--border-strong)}
+.sc-opt input[type=checkbox]{margin-top:3px;cursor:pointer;accent-color:var(--accent)}
+.sc-act{display:flex;justify-content:flex-end;margin-top:4px}
 .me-export{margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}
 .me-export p{margin-top:4px}
 .me-empty{font-size:14px;color:var(--text-2);margin:4px 0}
@@ -286,17 +298,19 @@ footer{max-width:960px;margin:0 auto;padding:24px 16px 40px;text-align:center;co
 .me-export-btns .btn small{display:block;font-weight:400;font-size:12px;color:var(--text-2)}
 .me-export-btns .btn[aria-disabled=true]{opacity:.55;pointer-events:none}
 @media(max-width:560px){.me-export-btns{grid-template-columns:1fr}}
-@media(max-width:719px){.me-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:860px){.me-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:560px){.me-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .guest-only{}
 body.authed .guest-only{display:none!important}
 body.haskey #algoNote{display:none!important}
 body.authed #board{margin-top:22px}
-.userchip{position:relative}
-.chip-btn{display:inline-flex;align-items:center;gap:8px;background:var(--surface-2);border:1px solid var(--border);border-radius:999px;padding:4px 10px 4px 4px;min-height:40px;cursor:pointer;color:var(--text);font-size:13.5px;transition:background .15s,border-color .15s}
+.userchip{position:relative;flex-shrink:0}
+.chip-btn{display:inline-flex;align-items:center;gap:8px;background:var(--surface-2);border:1px solid var(--border);border-radius:999px;padding:4px 10px 4px 4px;min-height:40px;cursor:pointer;color:var(--text);font-size:13.5px;transition:background .15s,border-color .15s;flex-shrink:0}
 .chip-btn:hover{background:var(--surface-3)}
-.chip-btn .av{width:26px;height:26px;border-radius:50%;background:var(--accent);color:var(--on-accent,#fff);display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;background-size:cover;background-position:center}
+.chip-btn .av{width:26px;height:26px;border-radius:50%;background:var(--accent);color:var(--on-accent,#fff);display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;background-size:cover;background-position:center;flex-shrink:0}
 .chip-btn .chip-name{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (max-width:480px){.chip-btn .chip-name{max-width:72px}}
+@media (max-width:390px){.chip-btn .chip-name{max-width:54px}}
 .chip-btn .caret{width:6px;height:6px;border-right:1.5px solid var(--text-2);border-bottom:1.5px solid var(--text-2);transform:rotate(45deg);margin:-3px 3px 0 1px;flex:none}
 .chip-menu{position:absolute;right:0;top:calc(100% + 6px);min-width:180px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow);transform-origin:top right;padding:6px;z-index:50}
 .chip-menu button{display:flex;width:100%;align-items:center;gap:8px;background:none;border:0;color:var(--text);text-align:left;padding:8px 10px;border-radius:7px;cursor:pointer;font-size:13.5px}
@@ -403,15 +417,14 @@ body.authed #board{margin-top:22px}
   </section>
 
   <section id="rules" class="guest-only">
-    <div class="sec-head"><h2>使用须知</h2><p>按下面几条使用，基本不会被拒绝或报错。</p></div>
+    <div class="sec-head"><h2>使用须知</h2><p>请仔细阅读以下规范，合理使用公益资源，避免被限流或封禁。</p></div>
     <ul class="rules card">
-      <li><span class="ri" data-ic="code"></span><span><b>客户端怎么填</b>：生图客户端（柏宝绘 / 智绘姬 / SillyTavern 等）的 NovelAI 接口地址填 <code id="siteTxt3">—</code>（不加 /v1），API Key 填你的 Key。</span></li>
-      <li><span class="ri" data-ic="image"></span><span><b>只能免费出图</b>：尺寸 V4.5 最大 1024×1024，V5 用预设尺寸（如 832×1216）；步数 ≤ 28、每次 1 张。超出会被自动调低。图生图、Vibe 等会扣 Anlas 的功能请在客户端关掉。</span></li>
-      <li><span class="ri" data-ic="clock"></span><span><b>一次一张，别狂重试</b>：每把 Key 同时只画 1 张，上一张没出完别重发。被拒后让客户端停下来——1 小时内被拒 60 次会自动暂停 1 小时，到点自动恢复。</span></li>
-      <li><span class="ri" data-ic="info"></span><span><b>查额度、重置 Key</b>：在 Discord 输入 <code>/quota</code> 看今日额度；Key 泄露用 <code>/resetkey</code> 重置。</span></li>
-      <li><span class="ri" data-ic="key"></span><span><b>一人一把</b>：请勿分享；退出 Discord 服务器后 Key 会被回收<span id="ruleIdle" hidden>；连续 <b id="idleDays"></b> 天不用也会被回收</span>。</span></li>
-      <li><span class="ri" data-ic="ban"></span><span><b>禁止违禁内容</b>：违规的 Key 会被停用。</span></li>
-      <li id="audit" hidden><span class="ri" data-ic="info"></span><span><b>数据记录</b>：<span id="auditTxt"></span></span></li>
+      <li><span class="ri" data-ic="code"></span><span><b>客户端怎么填</b>：生图客户端（Aaalice 启动器 / 酒馆 SillyTavern / DSH 插件 / 柏宝绘 / 智绘姬 等）接口地址填 <code id="siteTxt3">—</code>（末尾不要加 <code>/v1</code>），API Key 填你领到的专属 Key。</span></li>
+      <li><span class="ri" data-ic="image"></span><span><b>出图模型规格</b>：推荐 <code>V4.5 Full</code> 与极速 <code>V5 Full</code>（V5 仅需 4~5 秒完成出图，适合找灵感与快速 Roll 图）。免费尺寸上限 1024×1024 或等总像素（如 832×1216），步数建议 ≤ 28。图生图等付费功能未开通前请在客户端关闭。</span></li>
+      <li><span class="ri" data-ic="clock"></span><span><b>一次一张，别狂重试</b>：单并发控制，每把 Key 同时只排队或生成 1 张，出完再发下一张。如遇排队请耐心等待——1 小时内连续被拒 60 次会自动触发 1 小时安全冷却，到点自动恢复。</span></li>
+      <li><span class="ri" data-ic="info"></span><span><b>查额度、自助换 Key</b>：在 Discord 输入 <code>/quota</code> 随时查看今日剩余免费额度与状态；若怀疑 Key 泄露或遇到配置异常，在 Discord 输入 <code>/resetkey</code> 可一键自助更换新 Key。</span></li>
+      <li><span class="ri" data-ic="key"></span><span><b>一人一把，严禁转售与共用</b>：公益资源有限，Key 仅限本人使用（挂梯子换节点、手机电脑多设备正常使用完全不受影响；但多人同时共用或转售会被系统拦截并回收）。退出 Discord 服务器或长期闲置后 Key 会被自动回收<span id="ruleIdle" hidden>（连续 <b id="idleDays"></b> 天不用）</span>。</span></li>
+      <li><span class="ri" data-ic="ban"></span><span><b>合规安全，禁止违禁</b>：严禁生成违反法律法规或极端有害的内容，违规账号将被永久封禁并不再恢复。</span></li>
     </ul>
   </section>
 
@@ -534,8 +547,11 @@ function renderStatus(d){
   renderAnnouncement(!!d.has_announcement);
   var al = (d.algo_notice || '').trim();
   $('algoNote').hidden = !al; $('algoNote').textContent = al;
-  var an = (d.audit_notice || '').trim();
-  $('audit').hidden = !an; $('auditTxt').textContent = an;
+  if($('audit')){
+    var an = (d.audit_notice || '').trim();
+    $('audit').hidden = !an;
+    if($('auditTxt')) $('auditTxt').textContent = an;
+  }
   var paused = d.web_login !== true;          // 只有服务端明确说开放才显示登录按钮
   if($('loginBtn')) $('loginBtn').hidden = paused;
   try{ document.dispatchEvent(new CustomEvent('owl-status', {detail: d})); }catch(_){}
@@ -616,8 +632,14 @@ function renderMe(d){
           + '<div class="me-export-btns"><a class="btn exp" href="/public/my-export?format=epub">' + icon('book') + '<span>EPUB 画册<small>一图一页，附提示词和参数，手机、电脑的图书 App 都能打开</small></span></a>'
           + '<a class="btn exp" href="/public/my-export?format=zip">' + icon('image') + '<span>原图 ZIP<small>PNG 原图 + prompts.txt，适合存档或二次编辑</small></span></a></div>'
         : '<p class="muted sm">最近 ' + retDays + ' 天还没有可备份的原图。出图后会出现在这里。</p>');
+    var tm = d.timing || {};
+    var durText = (tm.avg_dur_s != null) ? (tm.avg_dur_s + ' 秒') : '暂无';
+    var durTip = (tm.avg_wait_s != null ? '我的平均排队：' + tm.avg_wait_s + ' 秒\n' : '') + '全站近24小时出图均耗：' + (tm.site_avg_dur_s != null ? tm.site_avg_dur_s + ' 秒' : '约 9 秒');
+    var durSite = tm.site_avg_dur_s != null ? ('<small title="全站近24h均耗">(' + tm.site_avg_dur_s + 's)</small>') : '';
+
     me.innerHTML = '<div class="me-grid"><div><span>今日 V4.5（张）</span><b>' + v45 + ' / ' + lim45 + '</b></div>'
       + '<div><span>今日 V5（张）</span><b' + (lim5 === '不限' ? ' title="个人不限额度，仍受全站日上限约束"' : '') + '>' + (t.v5 || 0) + ' / ' + lim5 + '</b></div>'
+      + '<div><span>生图均耗</span><b title="' + esc(durTip) + '">' + durText + durSite + '</b></div>'
       + '<div><span>出图状态</span><b>' + pos + '</b></div>'
       + '<div><span>有效期</span><b>' + (d.expires_at ? '至 ' + fmtDate(d.expires_at) : '长期') + '</b></div></div>'
       + (d.invite_unbound ? '<div class="invite-bind">' + icon('info') + '<span>这是邀请 Key，还没绑定 Discord 账号。请在 Discord 的 <code>🔑｜领取key</code> 输入 <code>/register</code>，把这把 Key 粘贴到 <code>key</code> 一栏完成绑定。</span></div>' : '')
@@ -642,26 +664,46 @@ function renderMe(d){
   }
   hydrate(me);
 }
-/* 重置券：站长 / 奶妹发的，7 天内自己点一下就能重置今天的 V5 额度（先在页面里确认一次，不弹窗） */
+/* 重置券：站长 / 奶妹发的，7 天内自己点一下就能重置今天的 V5 与 Anlas 额度（先在页面里确认一次，不弹窗） */
 /* 网络确认：被检测标记过的成员才会看到；只记录回答，不改额度、不处罚 */
 function shareCheckHtml(sc){
   if(!sc || !sc.options) return '';
-  var btns = Object.keys(sc.options).map(function(k){
-    return '<button class="btn mini sc-ans" type="button" data-ans="' + esc(k) + '">' + esc(sc.options[k]) + '</button>';
+  var opts = Object.keys(sc.options).map(function(k){
+    return '<label class="sc-opt"><input type="checkbox" class="sc-cb" value="' + esc(k) + '"><span>' + esc(sc.options[k]) + '</span></label>';
   }).join('');
   return '<div class="share-check"><b>' + icon('info') + '确认一下你的网络情况</b>'
-    + '<p class="muted sm">系统看到你的 Key 最近在几个不同的网络之间切换（常见原因是开了 VPN / 代理，节点自动切换）。请选一个最符合的，只用来核对检测有没有误判，不会因此扣额度或封号。</p>'
-    + '<div class="share-check-btns">' + btns + '</div></div>';
+    + '<p class="muted sm">系统看到你的 Key 最近在几个不同的网络之间切换（常见原因是开了 VPN / 代理，节点自动切换）。请勾选符合的情况（支持多选），只用来核对检测有没有误判，不会因此扣额度或封号。</p>'
+    + '<div class="sc-opts">' + opts + '</div>'
+    + '<div class="sc-act"><button class="btn primary sm sc-submit" type="button" disabled>提交确认</button></div></div>';
 }
 function bindShareCheck(root){
-  Array.prototype.forEach.call(root.querySelectorAll('.sc-ans'), function(b){
-    b.onclick = function(){
-      Array.prototype.forEach.call(root.querySelectorAll('.sc-ans'), function(x){ x.disabled = true; });
-      fetch('/public/me/share-confirm', {method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body:JSON.stringify({answer:b.dataset.ans})})
-        .then(function(r){ if(!r.ok) throw 0; toast('收到，谢谢！'); var box = root.querySelector('.share-check'); if(box) box.remove(); })
-        .catch(function(){ toast('没提交成功，请稍后再试'); Array.prototype.forEach.call(root.querySelectorAll('.sc-ans'), function(x){ x.disabled = false; }); });
-    };
+  var box = root.querySelector('.share-check'); if(!box) return;
+  var cbs = box.querySelectorAll('.sc-cb'), btn = box.querySelector('.sc-submit');
+  function updateState(changed){
+    if(changed && changed.checked){
+      if(changed.value === 'others'){
+        Array.prototype.forEach.call(cbs, function(x){ if(x.value !== 'others') x.checked = false; });
+      } else {
+        Array.prototype.forEach.call(cbs, function(x){ if(x.value === 'others') x.checked = false; });
+      }
+    }
+    var any = Array.prototype.some.call(cbs, function(x){ return x.checked; });
+    if(btn) btn.disabled = !any;
+  }
+  Array.prototype.forEach.call(cbs, function(cb){
+    cb.onchange = function(){ updateState(cb); };
   });
+  if(btn){
+    btn.onclick = function(){
+      var chosen = [];
+      Array.prototype.forEach.call(cbs, function(x){ if(x.checked) chosen.push(x.value); x.disabled = true; });
+      if(!chosen.length) return;
+      btn.disabled = true; btn.textContent = '提交中…';
+      fetch('/public/me/share-confirm', {method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body:JSON.stringify({answer:chosen})})
+        .then(function(r){ if(!r.ok) throw 0; toast('收到，谢谢！'); box.remove(); })
+        .catch(function(){ toast('没提交成功，请稍后再试'); Array.prototype.forEach.call(cbs, function(x){ x.disabled = false; }); btn.disabled = false; btn.textContent = '提交确认'; });
+    };
+  }
 }
 function couponsHtml(list){
   if(!list.length) return '';
@@ -669,7 +711,7 @@ function couponsHtml(list){
     var left = Math.max(0, c.expires_at - Date.now()/1000), days = Math.floor(left / 86400), hrs = Math.ceil((left % 86400) / 3600);
     var exp = days >= 1 ? days + ' 天' + (hrs ? ' ' + hrs + ' 小时' : '') : hrs + ' 小时';
     return '<div class="coupon" data-cid="' + Number(c.id) + '"><div class="cp-l"><span class="cp-ic" aria-hidden="true">🎟️</span><div><b>重置券</b>'
-      + '<span class="cp-d">重置今天的 V5 额度，一张用一次 · 还有 ' + exp + '过期</span>'
+      + '<span class="cp-d">重置今天的 V5 与 Anlas 额度，一张用一次 · 还有 ' + exp + '过期</span>'
       + (c.note ? '<span class="cp-note">「' + esc(c.note) + '」</span>' : '') + '</div></div>'
       + '<div class="cp-a"><button class="btn primary sm cp-use" type="button">使用</button></div></div>';
   }).join('') + '</div>';
@@ -679,13 +721,13 @@ function bindCoupons(root){
     var act = box.querySelector('.cp-a'), cid = box.getAttribute('data-cid');
     function idle(){ act.innerHTML = '<button class="btn primary sm cp-use" type="button">使用</button>'; act.querySelector('.cp-use').onclick = ask; }
     function ask(){
-      act.innerHTML = '<span class="cp-q">现在重置今天的 V5 额度？</span><button class="btn primary sm" type="button" data-y>确定</button><button class="btn ghost sm" type="button" data-n>取消</button>';
+      act.innerHTML = '<span class="cp-q">现在重置今天的 V5 与 Anlas 额度？</span><button class="btn primary sm" type="button" data-y>确定</button><button class="btn ghost sm" type="button" data-n>取消</button>';
       act.querySelector('[data-n]').onclick = idle;
       act.querySelector('[data-y]').onclick = function(){
         act.innerHTML = '<span class="cp-q">正在重置…</span>';
         fetch('/public/me/coupons/' + encodeURIComponent(cid) + '/use', {method:'POST', credentials:'include', cache:'no-store'})
           .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(b){ if(!r.ok) throw new Error((b.error && b.error.message) || b.detail || '没有成功，请稍后再试'); }); })
-          .then(function(){ toast('已重置，今天的 V5 额度满血回来了 🎉'); loadMe(); }, function(e){ toast(e.message || '没有成功'); idle(); });
+          .then(function(){ toast('已重置，今天的 V5 与 Anlas 额度满血回来了 🎉'); loadMe(); }, function(e){ toast(e.message || '没有成功'); idle(); });
       };
     }
     idle();
@@ -746,10 +788,34 @@ function fmtDate(sec){
   function $id(id){ return document.getElementById(id); }
   var steps = root.querySelectorAll('[data-step]'), failed = 0, failSince = 0, reported = false;
   function pct(a, b){ return b > 0 ? Math.min(100, Math.round(a / b * 100)) : 0; }
-  function setBar(id, a, b){ var e = $id(id), p = pct(a, b); e.style.width = p + '%'; if(e.parentNode) e.parentNode.setAttribute('aria-valuenow', String(p)); }
+  function setBar(id, a, b){ var e = $id(id), p = pct(a, b); if(e){ e.style.width = p + '%'; if(e.parentNode) e.parentNode.setAttribute('aria-valuenow', String(p)); } }
   function mark(k){ Array.prototype.forEach.call(steps, function(s){ var on = s.dataset.step === k; s.classList.toggle('on', on); if(on) s.setAttribute('aria-current', 'step'); else s.removeAttribute('aria-current'); }); }
-  var BLOCK_TITLE = {paced: '暂停出图 · 按时段放行', daily_cap: '今日出图已满', breaker: '暂停出图 · 上游出错',
+  var BLOCK_TITLE = {paced: '暂停出图 · 全天配额匀速补给中', daily_cap: '今日出图已满', breaker: '暂停出图 · 上游出错',
     hourly_cap: '本小时出图已满', quiet_cap: '安静时段 · 出图已满', cap_3h: '近 3 小时出图已满'};
+  var lastQueueCount = -1, lastQueueSec = 0, queueSeenAt = 0;
+  function getEstimatedSec(count, iv){
+    if(count <= 0) return 0;
+    var now = Date.now();
+    if(count !== lastQueueCount){
+      lastQueueCount = count;
+      lastQueueSec = Math.round(count * iv);
+      queueSeenAt = now;
+      return lastQueueSec;
+    }
+    var passed = Math.floor((now - queueSeenAt) / 1000);
+    return Math.max(2, lastQueueSec - passed);
+  }
+  setInterval(function(){
+    if(lastQueueCount > 0){
+      var passed = Math.floor((Date.now() - queueSeenAt) / 1000);
+      var curSec = Math.max(2, lastQueueSec - passed);
+      var el = $id('dMeV'), tile = $id('dMe');
+      if(el && tile && tile.dataset.tone === 'busy' && !tile.classList.contains('mine')){
+        el.textContent = '约 ' + curSec + ' 秒后开始';
+      }
+    }
+  }, 1000);
+
   function render(d, me){
     var q = d.quota || {}, g = d.guard || {}, r = d.rules || {};
     var qu = me || d.queue || {}, w = qu.waiting || 0, run = qu.running || 0;   /* 有 Key 时用不带缓存的数字，和「排第几」一致 */
@@ -763,8 +829,16 @@ function fmtDate(sec){
     else if(bk){ tone = bk.code === 'breaker' ? 'bad' : 'warn'; txt = BLOCK_TITLE[bk.code] || '暂时不能出图';
       val = bk.code === 'daily_cap' ? '明天 0 点恢复' : bw ? '约 ' + bw[1] + ' 分钟后' : '稍后再试'; sub = bk.text; }
     else if(qcap && w >= qcap){ tone = 'warn'; txt = '排队已满'; val = '稍后再发'; sub = '队伍最多 ' + qcap + ' 张，新请求会被拒绝'; }
-    else if(w + run > 0){ tone = 'busy'; txt = '运行正常'; val = '约 ' + Math.round((w + run) * iv) + ' 秒后开始'; sub = '前面有 ' + (w + run) + ' 张，每张约 ' + iv + ' 秒'; }
-    else { tone = 'ok'; txt = '运行正常'; val = '马上开始'; }
+    else if(w + run > 0){ 
+      tone = 'busy'; txt = '运行正常'; 
+      var estSec = getEstimatedSec(w + run, iv);
+      val = '约 ' + estSec + ' 秒后开始'; 
+      sub = '前面有 ' + (w + run) + ' 张，每张约 ' + iv + ' 秒'; 
+    }
+    else { 
+      lastQueueCount = 0;
+      tone = 'ok'; txt = '运行正常'; val = '马上开始'; 
+    }
     if(!g.cooldown && !bk && hcap && hour >= hcap * 0.95){ tone = 'warn'; txt = '本小时出图快满了'; }
     var tile = $id('dMe');
     tile.dataset.tone = tone; $id('vText').textContent = txt;
@@ -785,13 +859,24 @@ function fmtDate(sec){
     $id('dPs').textContent = '/ ' + (g.hour_cap || 0) + ' 张';
     setBar('dPbar', g.hour || 0, g.hour_cap || 0);
     var nx = Number(g.next_in) || 0;
-    $id('dPn').textContent = g.hour_cap && (g.hour || 0) >= g.hour_cap ? '近 60 分钟已满，最早那张满 60 分钟后就有空位' : (nx > 0 ? '下一张约 ' + Math.ceil(nx) + ' 秒后可以发' : '');
+    var noteP = '';
+    if(g.hour_cap && (g.hour || 0) >= g.hour_cap){
+      noteP = '近 60 分钟已满，最早那张满 60 分钟后就有空位';
+    } else if(bk && bk.code === 'paced'){
+      noteP = '近 60 分钟未满，全天配额匀速补充中（约 ' + (bw ? bw[1] + ' 分钟' : '稍后') + '）';
+    } else if(nx > 0){
+      noteP = '下一张约 ' + Math.ceil(nx) + ' 秒后可以发';
+    }
+    $id('dPn').textContent = noteP;
     /* 额度 */
-    // 每日上限按张数计（10-11 起不再折算半张）
-    const used45 = q.units_today ?? q.images_today ?? 0;
-    $id('d45').textContent = Math.round(used45); $id('d45').title = `今天全站出图 ${q.images_today || 0} 张`;
-    $id('d45c').textContent = q.images_cap || 0; setBar('d45bar', used45, q.images_cap || 0);
-    $id('d5').textContent = q.v5_today || 0; $id('d5c').textContent = q.v5_cap || 0; setBar('d5bar', q.v5_today || 0, q.v5_cap || 0);
+    var used45 = (q.units_today !== undefined && q.units_today !== null) ? q.units_today : (q.images_today || 0);
+    $id('d45').textContent = Math.round(used45);
+    $id('d45').title = '今天全站出图 ' + (q.images_today || 0) + ' 张';
+    $id('d45c').textContent = q.images_cap || 0;
+    setBar('d45bar', used45, q.images_cap || 0);
+    $id('d5').textContent = q.v5_today || 0;
+    $id('d5c').textContent = q.v5_cap || 0;
+    setBar('d5bar', q.v5_today || 0, q.v5_cap || 0);
   }
   /* 只用查询成功过的 Key，避免输错的 Key 每秒请求一次触发防暴力破解 */
   function poll(){

@@ -21,6 +21,7 @@ ADMIN_ACTIONS = {
     ("POST", "/keys/{key_id}/regenerate"): "重新生成 Key",
     ("PATCH", "/keys/{key_id}"): "修改 Key",
     ("POST", "/keys/{key_id}/reset-daily-image-quota"): "重置今日额度",
+    ("POST", "/keys/{key_id}/bind-discord"): "手动绑定 Discord",
     ("DELETE", "/keys/{key_id}"): "删除 Key",
     ("PUT", "/keys/{key_id}/tags"): "成员标签",
     ("POST", "/keys/{key_id}/coupons"): "发重置券",
@@ -41,11 +42,15 @@ ADMIN_ACTIONS = {
     ("PUT", "/guard"): "修改账号保护与排队设置",
     ("PUT", "/anlas-pool"): "修改 Anlas 自动分配",
     ("POST", "/errors/{sig}/resolve"): "标记 Bug 已处理",
+    ("POST", "/errors/resolve-all"): "全部标记 Bug 已处理",
     ("PUT", "/quota-algo"): "修改动态额度参数",
     ("PUT", "/discord-bot"): "修改 Discord 机器人设置",
     ("POST", "/keys/{key_id}/share-clear"): "防分享清零（误判）",
     ("PUT", "/share-guard"): "修改防分享模式",
     ("PUT", "/modules/{name}"): "启用 / 关闭模块",
+    ("POST", "/modules/run"): "手动执行模块校验",
+    ("POST", "/audit/purge-images"): "清空原图",
+    ("POST", "/ops/reset-all-keys"): "全站杀头重置",
 }
 
 

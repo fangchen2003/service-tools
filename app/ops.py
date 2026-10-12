@@ -100,6 +100,11 @@ async def set_registration(db, body: dict, state=None, service=None) -> None:
             if v and not (v.isdecimal() and 15 <= len(v) <= 21):
                 raise ValueError(f"{name} 需要是 Discord 的数字 ID")
             values["register_" + name] = v
+    if "role_guild" in body or "role_id" in body:
+        g = str(body["role_guild"] or "").strip() if "role_guild" in body else str(await db.get_setting("register_role_guild", "") or "").strip()
+        r = str(body["role_id"] or "").strip() if "role_id" in body else str(await db.get_setting("register_role_id", "") or "").strip()
+        if bool(g) != bool(r):
+            raise ValueError("限定身份组的服务器 ID 与身份组 ID 必须同时填写，或全部留空")
     if "role_note" in body:
         values["register_role_note"] = str(body["role_note"] or "").strip()[:60]
     if "features" in body:

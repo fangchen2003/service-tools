@@ -47,7 +47,7 @@ BACKFILL = (
 
 LABELS = {
     KEY_PAUSED: "Key 被暂停", QUEUE_FULL: "排队满", KEY_BUSY: "上一张没出完就重发", HOURLY_CAP: "本小时全站上限",
-    QUIET_CAP: "安静时段上限", CAP_3H: "3 小时全站上限", DAILY_CAP: "全站每日上限", PACED: "按时段放行", OVER_BASE: "超出保底暂缓", BREAKER: "全站熔断",
+    QUIET_CAP: "安静时段上限", CAP_3H: "3 小时全站上限", DAILY_CAP: "全站每日上限", PACED: "全天平滑放行", OVER_BASE: "超出保底暂缓", BREAKER: "全站熔断",
     COOLDOWN: "上游限流暂停", V5_EXHAUSTED: "全站 V5 用完",
 }
 

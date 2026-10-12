@@ -96,6 +96,22 @@ def decayed(score: float, since: float, now: float) -> float:
     return score * math.pow(0.5, max(0.0, now - since) / P("share.half_life", HALF_LIFE))
 
 
+def is_internal_origin(label: Optional[str], ua: str = "") -> bool:
+    """内部工作台 / 容器内网 / 本机来源豁免（不参与防分享与跨网信号判断）。"""
+    if not label:
+        return True
+    lb = (label or "").strip()
+    if lb.startswith(("127.", "10.", "192.168.")):
+        return True
+    if lb.startswith("172."):
+        parts = lb.split(".")
+        if len(parts) >= 2 and parts[1].isdigit():
+            b = int(parts[1])
+            if 16 <= b <= 31:
+                return True
+    return False
+
+
 # ---------- 出图习惯指纹（只在内存里保留哈希，不存提示词原文）----------
 HABIT_WINDOW = 2 * 3600
 _WEIGHT = re.compile(r"^-?\d+(\.\d+)?::|::$|[{}\[\]()]")
@@ -200,6 +216,8 @@ class ShareGuard:
     # ---------- 信号 ----------
     def signals(self, key_id: int, label: str, family: int, ua: str, now: float, busy: bool = False) -> list[tuple[str, str]]:
         """busy：这把 Key 此刻还有图在生成或排队。"""
+        if is_internal_origin(label, ua):
+            return []
         osf, fp = os_family(ua), (ua or "").strip()[:80]
         trail = self._trail.setdefault(key_id, deque(maxlen=300))
         prev = trail[-1] if trail else None
@@ -271,7 +289,7 @@ class ShareGuard:
                       reset: Optional[Callable[[int], Awaitable[Optional[str]]]] = None,
                       ban: Optional[Callable[[int], Awaitable[None]]] = None) -> Optional[str]:
         """记录一次请求；返回执行的处罚（warn / pause / reset / ban）或 None。"""
-        if _flag(key, "is_admin") or _flag(key, "is_test") or not ip_label:
+        if _flag(key, "is_admin") or _flag(key, "is_test") or not ip_label or is_internal_origin(ip_label, user_agent):
             return None
         mode = await self.mode()
         if mode == "off":
@@ -412,7 +430,7 @@ class ShareGuard:
     async def observe_habit(self, key, body: dict, label: Optional[str], user_agent: str, *,
                             now: Optional[float] = None, **callbacks) -> Optional[str]:
         """出图请求的习惯指纹；有差异的交替算强证据，走和 observe 一样的计分与处罚。"""
-        if _flag(key, "is_admin") or _flag(key, "is_test"):
+        if _flag(key, "is_admin") or _flag(key, "is_test") or is_internal_origin(label, user_agent):
             return None
         now = time.time() if now is None else now
         kid = int(key["id"])

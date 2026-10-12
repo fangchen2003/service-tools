@@ -65,3 +65,11 @@ async def test_announcement_is_sandboxed_and_404_when_empty(env):
     await env.db.set_settings_bulk({"audit_prompts": "1", "audit_thumbs": "1", "audit_retention_days": 7})
     main._PUBLIC_STATUS_CACHE["body"] = None
     assert "7 天" in (await env.client.get("/public/status")).json()["audit_notice"]
+
+
+@pytest.mark.asyncio
+async def test_post_root_routes_to_generate_image(env):
+    # POST / routes to generate_image, requiring auth rather than returning 405 Method Not Allowed
+    response = await env.client.post("/")
+    assert response.status_code == 401
+

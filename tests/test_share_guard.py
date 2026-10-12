@@ -274,3 +274,21 @@ async def test_mode_defaults_to_observe_when_unset():
         assert await g.mode() == "observe"
     finally:
         await db.close(); tmp.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_internal_origin_and_workbench_are_bypassed(guard):
+    """内网工作台与白名单来源：不触发 overlap、不记录跨网信号。"""
+    c, t = Calls(), 8_000_000.0
+    # 模拟真实场景：先是公网 Windows 出图，紧接着在工作台出图
+    await guard.observe(KEY, "47.88.*.*", 4, WIN, now=t, busy=False, **c.kw())
+    # 工作台出图（busy=True 且网络标签不同），本应触发 overlap，但因内网白名单豁免被完全忽略
+    res = await guard.observe(KEY, "172.30.*.*", 4, "NAI-Workbench/0.1", now=t + 10, busy=True, **c.kw())
+    assert res is None
+    assert not c.member and not c.admin
+    # 再次由公网出图，也不应与工作台形成 overlap 或 alternate
+    await guard.observe(KEY, "47.88.*.*", 4, WIN, now=t + 20, busy=True, **c.kw())
+    assert not c.member and not c.admin
+    ev = await guard.evidence(KEY["id"])
+    assert not any(e["kind"] in ("overlap", "concurrent", "alternate") for e in ev)
+

@@ -235,14 +235,27 @@ class RegistrationService:
         rows = await self.db._db.execute_fetchall("SELECT 1 FROM discord_bans WHERE discord_id=?", (discord_id,))
         return bool(rows)
 
-    async def ban(self, discord_id: str) -> None:
+    async def ban(self, discord_id: str, *, reason: str = "", banned_by: str = "站长") -> None:
         """永久禁止该 Discord 账号领取：写入封禁表，并撤销其现有 Key 与身份组。
 
         与 issue_direct 共用 self.lock：否则在发 Key 进行中（身份组核验等网络等待）封禁，仍会发出有效 Key。
         """
+        discord_id = str(discord_id)
+        # 记录用户的 Discord 资料，供后台黑名单展示
+        reg_rows = await self.db._db.execute_fetchall(
+            "SELECT username, display_name, avatar FROM discord_registrations WHERE discord_id=?", (discord_id,))
+        u = reg_rows[0][0] if reg_rows else ""
+        disp = reg_rows[0][1] if reg_rows else ""
+        av = reg_rows[0][2] if reg_rows else ""
         async with self.lock:
-            await self.db._db.execute("INSERT OR IGNORE INTO discord_bans(discord_id, created_at) VALUES (?,?)",
-                                      (discord_id, time.time()))
+            await self.db.ban_discord(
+                discord_id,
+                reason=reason or "站长手动封禁",
+                username=u or "",
+                display_name=disp or "",
+                avatar=av or "",
+                banned_by=banned_by or "站长",
+            )
             await self.db._db.execute("DELETE FROM waitlist WHERE discord_id=?", (discord_id,))
             await self.db._db.commit()
             had_key = await self.revoke(discord_id, remove_role=False)
@@ -250,9 +263,7 @@ class RegistrationService:
             await self.release_role(discord_id)
 
     async def unban(self, discord_id: str) -> bool:
-        cur = await self.db._db.execute("DELETE FROM discord_bans WHERE discord_id=?", (discord_id,))
-        await self.db._db.commit()
-        return cur.rowcount == 1
+        return await self.db.unban_discord(discord_id)
 
     async def _release_if_expired(self, discord_id: str, *, defer_role: bool = False) -> None:
         """成员的 Key 已过期：自动清掉旧 Key 和记录，让他可以在有名额时重新领取（每个周期自然轮换）。

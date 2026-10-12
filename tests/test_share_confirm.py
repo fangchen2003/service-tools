@@ -37,5 +37,15 @@ async def test_ask_once_then_again_after_new_evidence(tmp_path):
                                  (f"h{i}", "", now - 100, now - 100))
         await db._db.commit()
         assert await share_confirm.pending(db, 2, now)
+
+        # 多选支持：vpn + devices
+        await share_confirm.record(db, 2, "vpn,devices", "双重符合", now)
+        ans2 = (await share_confirm.answers(db))[2]
+        assert ans2["answer"] == "vpn,devices"
+        assert "VPN" in ans2["label"] and "设备" in ans2["label"]
+
+        # 排他冲突校验：others 不能与 vpn 混选
+        with pytest.raises(ValueError):
+            await share_confirm.record(db, 2, "vpn,others", "", now)
     finally:
         await db.close()

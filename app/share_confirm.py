@@ -60,19 +60,44 @@ async def pending(db, key_id: int, now: Optional[float] = None) -> bool:
     return not row or flagged > float(row[0][0]) + REASK_AFTER
 
 
+def label_for(answer: str) -> str:
+    """给后台和日志看的易读标签，支持单选与多选（逗号拼接）。"""
+    parts = [p.strip() for p in (answer or "").split(",") if p.strip()]
+    labels = [ANSWERS[p] for p in parts if p in ANSWERS]
+    return " + ".join(labels) if labels else answer
+
+
+def is_valid_answer(answer: str) -> bool:
+    parts = [p.strip() for p in (answer or "").split(",") if p.strip()]
+    if not parts:
+        return False
+    if any(p not in ANSWERS for p in parts):
+        return False
+    if "others" in parts and len(parts) > 1:
+        return False
+    return True
+
+
+def canonical_answer(answer: str) -> str:
+    parts = [p.strip() for p in (answer or "").split(",") if p.strip()]
+    ordered = [k for k in ("vpn", "devices", "others") if k in parts]
+    return ",".join(ordered) if ordered else answer
+
+
 async def record(db, key_id: int, answer: str, note: str = "", now: Optional[float] = None) -> bool:
     """记下回答；和上次一样则不重写，返回是否有变化（调用方据此决定要不要写操作日志）。"""
-    if answer not in ANSWERS:
+    if not is_valid_answer(answer):
         raise ValueError("answer")
+    canon = canonical_answer(answer)
     now = time.time() if now is None else now
     await ensure(db)
     prev = await db._db.execute_fetchall("SELECT answer, note FROM share_confirm WHERE key_id=?", (key_id,))
-    if prev and prev[0][0] == answer and prev[0][1] == note.strip()[:200]:
+    if prev and prev[0][0] == canon and prev[0][1] == note.strip()[:200]:
         return False
     flagged = await _flagged_at(db, key_id, now)
     await db._db.execute(
         "INSERT OR REPLACE INTO share_confirm(key_id, answer, note, answered_at, flagged_at) VALUES (?,?,?,?,?)",
-        (key_id, answer, note.strip()[:200], now, flagged))
+        (key_id, canon, note.strip()[:200], now, flagged))
     await db._db.commit()
     return True
 
@@ -81,7 +106,7 @@ async def answers(db) -> dict[int, dict[str, Any]]:
     """后台用：每把 Key 的回答。"""
     await ensure(db)
     rows = await db._db.execute_fetchall("SELECT key_id, answer, note, answered_at, flagged_at FROM share_confirm")
-    return {int(r[0]): {"answer": r[1], "label": ANSWERS.get(r[1], r[1]), "note": r[2],
+    return {int(r[0]): {"answer": r[1], "label": label_for(r[1]), "note": r[2],
                         "answered_at": r[3], "flagged_at": r[4]} for r in rows}
 
 

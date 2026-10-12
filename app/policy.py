@@ -311,7 +311,68 @@ def fix_name_digit_weights(body: dict) -> int:
     return n
 
 
+_WEBUI_WEIGHT_RE = re.compile(r"\(([^:\(\)]+):(\d+(?:\.\d+)?)\)")
+_ISOLATED_COLONS_RE = re.compile(r"(?:^|(?<=,))\s*::\s*(?:$|(?=,))")
+_CONSECUTIVE_COMMAS_RE = re.compile(r",\s*,+")
+
+
+def clean_prompt_syntax(text: str) -> str:
+    """清理单条提示词文本：
+    1. 将 WebUI 权重语法 (tag:1.2) 转译为 NAI 原生 1.2::tag::
+    2. 清理因客户端切词手抖留下的孤立破损 ::
+    3. 合并多余连续逗号与修剪首尾
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    new_text = _WEBUI_WEIGHT_RE.sub(r"\2::\1::", text)
+    new_text = _ISOLATED_COLONS_RE.sub("", new_text)
+    new_text = _CONSECUTIVE_COMMAS_RE.sub(",", new_text)
+    new_text = re.sub(r"\s*,\s*", ", ", new_text)
+    return new_text.strip(" ,")
+
+
+def sanitize_and_translate_prompts(body: dict) -> int:
+    """扫描请求中所有的提示词字段，执行语法自愈与转译，返回修改字段数。"""
+    n = 0
+
+    def apply(text):
+        nonlocal n
+        if not isinstance(text, str) or not text:
+            return text
+        cleaned = clean_prompt_syntax(text)
+        if cleaned != text:
+            n += 1
+        return cleaned
+
+    if isinstance(body.get("input"), str):
+        body["input"] = apply(body["input"])
+    p = body.get("parameters")
+    if not isinstance(p, dict):
+        return n
+    for key in ("prompt", "negative_prompt"):
+        if isinstance(p.get(key), str):
+            p[key] = apply(p[key])
+    if isinstance(p.get("characterPrompts"), list):
+        for item in p["characterPrompts"]:
+            if isinstance(item, dict):
+                for key in ("prompt", "uc"):
+                    if isinstance(item.get(key), str):
+                        item[key] = apply(item[key])
+    for key in ("v4_prompt", "v4_negative_prompt"):
+        caption = (p.get(key) or {}).get("caption") if isinstance(p.get(key), dict) else None
+        if not isinstance(caption, dict):
+            continue
+        if isinstance(caption.get("base_caption"), str):
+            caption["base_caption"] = apply(caption["base_caption"])
+        if isinstance(caption.get("char_captions"), list):
+            for item in caption["char_captions"]:
+                if isinstance(item, dict) and isinstance(item.get("char_caption"), str):
+                    item["char_caption"] = apply(item["char_caption"])
+    return n
+
+
 MAX_CHARACTERS = 6        # NovelAI V4 / V4.5 角色提示词上限
+
 
 
 def upstream_parameter_problem(body: dict) -> Optional[str]:

@@ -46,9 +46,12 @@ async def flush(db) -> None:
         raise
 
 
-async def distribution(db, hours: int, now: Optional[float] = None) -> dict[str, Any]:
+async def distribution(db, hours: int, now: Optional[float] = None, since: Optional[float] = None) -> dict[str, Any]:
     now = time.time() if now is None else now
-    since = int((now - hours * 3600) // 3600) * 3600          # 按整点统计：会多算开头那个小时的一部分
+    if since is None:
+        since = int((now - hours * 3600) // 3600) * 3600          # 按整点统计：会多算开头那个小时的一部分
+    else:
+        since = int(since)
     total: Counter = Counter()
     for code, n in await db._db.execute_fetchall(
             "SELECT code, SUM(n) FROM status_hourly WHERE hour>=? GROUP BY code", (since,)):

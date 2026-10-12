@@ -102,6 +102,15 @@ class SourceTracker:
         """记录一次成功鉴权的来源网段。管理员 Key 不记录。"""
         if key["is_admin"]:
             return
+        # 内部来源 / 官方工作台豁免：不记录私网地址，不污染成员网段
+        try:
+            addr = ipaddress.ip_address((ip or "").strip())
+            if addr.is_private or addr.is_loopback:
+                return
+        except ValueError:
+            pass
+        if "workbench" in (client or "").lower():
+            return
         now = time.time() if now is None else now
         found = network_of(ip)
         if not _is_test(key):
