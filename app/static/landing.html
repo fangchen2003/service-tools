@@ -118,8 +118,8 @@ svg.ic{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-wid
 .brand-link:hover .brand-mark{filter:brightness(1.08)}
 .brand-link:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .brand-mark{width:32px;height:32px;border-radius:var(--radius-sm);font-size:20px;line-height:1;font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;flex-shrink:0}
-.top-link{color:var(--text-2);text-decoration:none;font-size:13.5px;padding:6px 10px;border-radius:6px;display:none;align-items:center;gap:6px;white-space:nowrap;flex-shrink:0;transition:color .15s,background .15s}
-.top-link svg.ic{width:16px;height:16px;flex-shrink:0;margin-top:-1px}
+.top-link{color:var(--text-2);text-decoration:none;font-size:13.5px;padding:6px 10px;border-radius:6px;display:none;align-items:center;gap:6px;white-space:nowrap;flex-shrink:0;transition:color .15s,background .15s;line-height:1}
+.top-link svg.ic, .top-link [data-ic]{width:16px;height:16px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle}
 .top-link:hover{color:var(--text);background:var(--surface-3)}
 .top-link:focus-visible{outline-offset:0}
 @media (max-width:639px){
@@ -215,7 +215,7 @@ code{font-family:var(--mono);font-size:12.5px;background:var(--surface-3);border
 .copyline{display:flex;align-items:center;gap:8px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px 4px 4px 12px;margin-top:4px;transition:border-color .15s,background .15s}
 .step .copyline{margin-top:0}
 .copyline:hover{border-color:var(--border-strong);background:var(--surface-3)}
-.copyline .mono{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;user-select:all}
+.copyline .mono{flex:1;min-width:0;white-space:nowrap;overflow-wrap:normal;word-break:keep-all;overflow:hidden;text-overflow:ellipsis;font-size:12.5px;user-select:all}
 .guide{display:grid;gap:16px;margin-top:16px;grid-template-columns:1fr}
 .guide h3{font-size:15px;margin-bottom:8px;display:flex;gap:8px;align-items:center}
 .guide ol{counter-reset:s;display:flex;flex-direction:column;gap:8px;color:var(--text-2);font-size:14px}
@@ -426,7 +426,7 @@ body.authed #board{margin-top:22px}
     <ol class="steps">
       <li class="card step"><h3><span class="n">1</span>加入 Discord</h3>
         <div class="step-act" id="discordSlot"></div></li>
-      <li class="card step"><h3><span class="n">2</span>领取你的 Key</h3><p>在任意频道输入 <code>/register</code></p></li>
+      <li class="card step"><h3><span class="n">2</span>领取你的 Key</h3><p>输入 <code>/register</code> 领取</p></li>
       <li class="card step"><h3><span class="n">3</span>填入客户端</h3>
         <div class="copyline"><span class="mono" id="siteTxt1">—</span><button class="btn mini icon" type="button" data-copy="site" aria-label="复制" title="复制"><span data-ic="copy"></span></button></div>
       </li>
@@ -651,7 +651,7 @@ function renderMe(d){
   lr.hidden = true; me.hidden = false;
   var dc = d.discord || {}, nm = esc(dc.display_name || dc.username || '成员');
   if(!d.has_key){
-    var tip = '在 Discord 任意频道输入 <code>/register</code> 即可领取。';
+    var tip = '在 Discord 输入 <code>/register</code> 即可领取。';
     me.innerHTML = '<p class="me-empty">你好，' + nm + '！你还没有 Key。' + tip + '</p>';
   }else{
     var t = d.today || {}, q = d.queue || [];
@@ -692,7 +692,7 @@ function renderMe(d){
       + '<button type="button" class="btn-text" id="copyKeyInline">复制Key</button>'
       + '</div>'
       + busyHtml
-      + (d.invite_unbound ? '<div class="invite-bind">' + icon('info') + '<span>这是邀请 Key，还没绑定 Discord 账号。请在 Discord 任意频道输入 <code>/register</code>，把这把 Key 粘贴到 <code>key</code> 一栏完成绑定。</span></div>' : '')
+      + (d.invite_unbound ? '<div class="invite-bind">' + icon('info') + '<span>这是邀请 Key，还没绑定 Discord 账号。请在 Discord 输入 <code>/register</code>，把这把 Key 粘贴到 <code>key</code> 一栏完成绑定。</span></div>' : '')
       + shareCheckHtml(d.share_check)
       + couponsHtml(d.coupons || [])
       + expBlock;
@@ -832,7 +832,7 @@ function fmtDate(sec){
 
 /* ---------- 实时运行看板：每秒拉取 /public/live；登录成员的 d.me 带「我的排队」 ---------- */
 (function(){
-  var root = document.getElementById('dash');
+  var root = document.getElementById('board');
   if(!root) return;
   function $id(id){ return document.getElementById(id); }
   var steps = root.querySelectorAll('[data-step]'), failed = 0, failSince = 0, reported = false;
