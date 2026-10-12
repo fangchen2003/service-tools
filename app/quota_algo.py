@@ -401,16 +401,6 @@ async def run(state, now: Optional[float] = None) -> dict[str, Any]:
             new, why = quota_policies.simple({"a": a}, usage=usage, budget=budget, cfg=cfg)     # 线上 = 影子里的 LIVE
             n = new["a"]
             reasons = [f"{why}（可分 = 账号日上限 {cap} − 全站 V5 {v5_global}）"]
-            # 影子模式：历代算法 × 1/2/3 个账号各算一份，只记录不生效（以后加号池时对比 / 回测用）
-            try:
-                shadow_state = json.loads(await db.get_setting(SHADOW_STATE_KEY, "{}") or "{}")
-                shadow = quota_policies.run_all(shadow_state, day=yday, usage=usage, stats=stats,
-                                                cap_per_account=cap // accounts, v5_global=v5_global, cfg=cfg)
-                shadow_hist = json.loads(await db.get_setting(SHADOW_HISTORY_KEY, "[]") or "[]")[-29:] + [shadow]
-                await db.set_settings_bulk({SHADOW_STATE_KEY: json.dumps(shadow["results"], ensure_ascii=False),
-                                            SHADOW_HISTORY_KEY: json.dumps(shadow_hist, ensure_ascii=False)})
-            except Exception as exc:          # 影子模式出错绝不能影响线上分配
-                print(f"[warn] quota shadow failed: {type(exc).__name__}: {exc}", flush=True)
         a2 = b2 = n
         stats["coverage_hours"] = round(covered, 1)
         review = {"day": yday, **stats, "cap": cap, "from": [a, b], "to": [a2, b2], "reasons": reasons}
@@ -496,7 +486,7 @@ async def run(state, now: Optional[float] = None) -> dict[str, Any]:
         await guard.save({"base_daily_images": b})
     await db.set_settings_bulk(settings)
     # 首页提醒（站长要求：算法调整只在网站首页提示，不发 Discord）
-    note = f"今日额度：V4.5 每人 {a} 张 · V5 每人 {v5['each']} 张"
+    note = f"今日额度：V4.5 免费图蓄水池 {a} 张（每小时自动恢复 4 张，全天上限 96 张）· V5 每人 {v5['each']} 张"
     if review and review["from"] != review["to"]:
         note = f"{today[5:].replace('-', '月')}日 算法调整：" + "；".join(review["reasons"]) + "。" + note
     await db.set_setting(NOTICE_KEY, note)

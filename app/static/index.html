@@ -965,13 +965,9 @@ td.note{min-width:220px}
         </section>
         <section id="tab-limits" hidden>
           <div class="card panel" id="quotaAlgo">
-            <div class="panel-head"><h2>动态额度</h2><div class="desc">所有成员同一个数，每天 0 点按前一天的用量重算</div></div>
+            <div class="panel-head"><h2>动态额度</h2><div class="desc">平滑注水令牌桶机制：每小时恢复 4 张，全天上限 96 张</div></div>
             <div id="qaBody"><div class="skel" style="height:80px"></div></div>
           </div>
-          <details class="card panel fold" id="quotaShadow">
-            <summary class="panel-head"><h2>额度影子模式</h2><span class="desc">历代算法每天 0 点按同一份数据各算一次，只记录不生效；对比 1 / 2 / 3 个账号时会怎么分</span></summary>
-            <div id="qsBody" class="table-wrap"><div class="muted sm">正在读取…</div></div>
-          </details>
           <div class="card panel" id="autopilot">
             <div class="panel-head"><h2>自动驾驶</h2><div class="desc">「观察」只记录会怎么做，不执行</div></div>
             <div id="apBody"><div class="skel" style="height:80px"></div></div>
@@ -1482,7 +1478,7 @@ function tab(name){
   if(name==='logs'){ fillLogFilter(); syncLogFilters(); loadLogs(); }
   if(name==='actions') loadActions();
   if(name==='set' || name==='limits') loadSettings();
-  if(name==='limits'){ loadQuotaAlgo(); loadAutopilot(); loadQuotaShadow(); }
+  if(name==='limits'){ loadQuotaAlgo(); loadAutopilot(); }
   if(name==='up'){ loadOverview(); loadReconciliation(); loadPerf(); loadShadow(); }
   if(name==='bugs') loadBugs();
   if(name==='feedback') loadFeedback();
@@ -2559,18 +2555,7 @@ async function purgeImages(){
     opsData = await api('/admin/api/ops'); renderAuditSettings();
   }catch(e){ toastErr(e); }
 }
-async function loadQuotaShadow(){
-  try{
-    const d = await api('/admin/api/quota-shadow'), last = d.history[d.history.length - 1];
-    if(!last){ $('#qsBody').innerHTML = '<div class="muted sm">还没有记录：每天 0 点的复盘后才会出现第一条。</div>'; return; }
-    const head = `<tr><th>算法</th>${d.accounts.map(n => `<th class="num">${n} 个账号</th>`).join('')}</tr>`;
-    const rows = Object.entries(d.policies).map(([k, label]) => `<tr><td>${esc(label)}${k === d.live ? ' <span class="tag on">线上</span>' : ''}</td>${
-      d.accounts.map(n => { const r = (last.results[k] || {})[String(n)] || {};
-        return `<td class="num" title="${esc(r.why || '')}">${r.a === r.b ? `每人 ${esc(r.a)}` : `上限 ${esc(r.a)} · 保底 ${esc(r.b)}`}<div class="muted sm">可分 ${esc(r.budget)}</div></td>`; }).join('')}</tr>`).join('');
-    $('#qsBody').innerHTML = `<div class="hint" style="margin-bottom:8px">${esc(last.day)} 的数据（共 ${d.history.length} 天记录）。多账号的结果按现在被限制后的用量算，会低估需求，回测请用 lab 回放。悬停看理由。</div>
-      <table class="rt"><thead>${head}</thead><tbody>${rows}</tbody></table>`;
-  }catch(e){ $('#qsBody').innerHTML = '<div class="muted sm">读取失败</div>'; }
-}
+
 async function saveAudit(){
   const days = Number($('#aud_days').value), cap = Number($('#aud_img_cap').value);
   if(!Number.isInteger(days) || days<0 || days>3650){ toast('提示词保留天数须为 0～3650 的整数（0 = 长期保留）', 'err'); return; }
@@ -3310,7 +3295,7 @@ const AUTO_REFRESH = {
   ov: () => loadOverview(), up: () => { loadOverview(); loadPerf(); loadShadow(); },
   logs: () => loadLogs(),
   actions: () => loadActions(), bugs: () => loadBugs(), feedback: () => loadFeedback(),
-  limits: () => { loadQuotaAlgo(); loadAutopilot(); loadQuotaShadow(); }, modules: () => loadModules(),
+  limits: () => { loadQuotaAlgo(); loadAutopilot(); }, modules: () => loadModules(),
 };
 function currentTab(){ return TABS.find(t => !$('#tab-' + t).hidden); }
 function userBusy(){

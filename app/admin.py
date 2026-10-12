@@ -1096,13 +1096,9 @@ async def anlas_pool_put(request: Request):
 
 @router.get("/quota-shadow")
 async def quota_shadow(request: Request):
-    """影子模式：历代额度算法 × 1/2/3 个账号，每天 0 点各算一份（只记录不生效），最近 30 天。"""
+    """影子模式已退役：旧多算法旁路对比已清理，线上统一采用平滑注水令牌桶机制。"""
     require_admin(request)
-    from . import quota_algo, quota_policies
-    db = request.app.state.gate.db
-    hist = json.loads(await db.get_setting(quota_algo.SHADOW_HISTORY_KEY, "[]") or "[]")
-    return {"live": quota_policies.LIVE, "accounts": list(quota_policies.ACCOUNTS),
-            "policies": {k: v[0] for k, v in quota_policies.POLICIES.items()}, "history": hist}
+    return {"live": "token_bucket", "accounts": [1], "policies": {}, "history": [], "retired": True}
 
 
 @router.get("/shadow")

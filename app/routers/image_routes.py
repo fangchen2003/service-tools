@@ -195,6 +195,30 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
         used_legacy = c["legacy_free_images"] + sum(r.legacy for r in own_day)
         if used_legacy + legacy_free_images > key["daily_images"]:
             raise main.err(402, f"今日 V4.5 及以下免费图额度已用完（{key['daily_images']} 张/天），明日恢复")
+        # 平滑注水令牌桶机制：底仓 30 张，每小时自动注水恢复 4 张，全天恢复上限为 key['daily_images']。
+        # 手动 Key（_manual(key) 为 True）不走注水限制，直接使用静态额度。
+        if not _manual(key):
+            try:
+                now_ts = time.time()
+                day_str = state.day() if callable(getattr(state, "day", None)) else getattr(state, "day", None)
+                if not day_str:
+                    day_str = time.strftime("%Y-%m-%d")
+                midnight_ts = time.mktime(time.strptime(str(day_str), "%Y-%m-%d"))
+                hours_today = max(0.0, (now_ts - midnight_ts) / 3600.0)
+            except Exception:
+                hours_today = 24.0
+            burst_base = min(30.0, float(key["daily_images"]))
+            refill_rate = 4.0  # 张/小时
+            refilled_today = min(float(key["daily_images"]), burst_base + hours_today * refill_rate)
+            if used_legacy + legacy_free_images > refilled_today:
+                needed = (used_legacy + legacy_free_images) - burst_base
+                needed_hours = needed / refill_rate
+                wait_minutes = max(1, int(round((needed_hours - hours_today) * 60)))
+                raise main.err(429, reasons.Reason(
+                    f"当前额度蓄水池已用完（今日已用 {used_legacy} / 每日上限 {key['daily_images']} 张）。"
+                    f"额度每小时自动恢复 4 张，约 {wait_minutes} 分钟后恢复 1 张，请稍后再试",
+                    reasons.PACED
+                ))
         # 保底与借用：超过每日保底后，只在全站空闲（没人排队、本小时用量不高）时放行，直到 Key 的每日上限。
         guard = getattr(state, "guard", None)
         base = guard.values["base_daily_images"] if guard is not None else 0
