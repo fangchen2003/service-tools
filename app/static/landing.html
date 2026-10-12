@@ -419,11 +419,11 @@ body.authed #board{margin-top:22px}
   <section id="rules" class="guest-only">
     <div class="sec-head"><h2>使用须知</h2><p>请仔细阅读以下规范，合理使用公益资源，避免被限流或封禁。</p></div>
     <ul class="rules card">
-      <li><span class="ri" data-ic="code"></span><span><b>客户端怎么填</b>：生图客户端（Aaalice 启动器 / 酒馆 SillyTavern / 柏宝绘 / 智绘姬 等）接口地址填 <code id="siteTxt3">—</code>（末尾不要加 <code>/v1</code>），API Key 填你领到的专属 Key。</span></li>
-      <li><span class="ri" data-ic="image"></span><span><b>免费出图规格</b>：推荐模型 <code>V4.5 Full</code>；尺寸上限 1024×1024 或等总像素（如 832×1216），V5 请用官方预设尺寸。建议采样步数 ≤ 28、单次 1 张。图生图、Vibe 等功能未开通前请在客户端关闭。</span></li>
-      <li><span class="ri" data-ic="clock"></span><span><b>一次一张，别狂重试</b>：单并发控制，每把 Key 同时只排队或生成 1 张，出完再发下一张。如遇排队请耐心等待——1 小时内被拒 60 次会自动限流 1 小时，到点自动恢复。</span></li>
+      <li><span class="ri" data-ic="code"></span><span><b>客户端怎么填</b>：生图客户端（Aaalice 启动器 / 酒馆 SillyTavern / DSH 插件 / 柏宝绘 / 智绘姬 等）接口地址填 <code id="siteTxt3">—</code>（末尾不要加 <code>/v1</code>），API Key 填你领到的专属 Key。</span></li>
+      <li><span class="ri" data-ic="image"></span><span><b>出图模型规格</b>：推荐 <code>V4.5 Full</code> 与极速 <code>V5 Full</code>（V5 仅需 4~5 秒完成出图，适合找灵感与快速 Roll 图）。免费尺寸上限 1024×1024 或等总像素（如 832×1216），步数建议 ≤ 28。图生图等付费功能未开通前请在客户端关闭。</span></li>
+      <li><span class="ri" data-ic="clock"></span><span><b>一次一张，别狂重试</b>：单并发控制，每把 Key 同时只排队或生成 1 张，出完再发下一张。如遇排队请耐心等待——1 小时内连续被拒 60 次会自动触发 1 小时安全冷却，到点自动恢复。</span></li>
       <li><span class="ri" data-ic="info"></span><span><b>查额度、自助换 Key</b>：在 Discord 输入 <code>/quota</code> 随时查看今日剩余免费额度与状态；若怀疑 Key 泄露或遇到配置异常，在 Discord 输入 <code>/resetkey</code> 可一键自助更换新 Key。</span></li>
-      <li><span class="ri" data-ic="key"></span><span><b>一人一把，严禁分享</b>：公益资源有限，Key 仅限本人使用。多设备同时跨网穿梭会被风控自动暂停；退出 Discord 服务器或长期闲置后 Key 会被自动回收<span id="ruleIdle" hidden>（连续 <b id="idleDays"></b> 天不用）</span>。</span></li>
+      <li><span class="ri" data-ic="key"></span><span><b>一人一把，严禁转售与共用</b>：公益资源有限，Key 仅限本人使用（挂梯子换节点、手机电脑多设备正常使用完全不受影响；但多人同时共用或转售会被系统拦截并回收）。退出 Discord 服务器或长期闲置后 Key 会被自动回收<span id="ruleIdle" hidden>（连续 <b id="idleDays"></b> 天不用）</span>。</span></li>
       <li><span class="ri" data-ic="ban"></span><span><b>合规安全，禁止违禁</b>：严禁生成违反法律法规或极端有害的内容，违规账号将被永久封禁并不再恢复。</span></li>
     </ul>
   </section>
