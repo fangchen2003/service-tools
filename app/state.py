@@ -375,17 +375,39 @@ class GateState:
         return sent
 
     async def delete_inactive_keys(self) -> int:
-        """永久回收长期未使用的虚拟 Key；0 天表示关闭。"""
+        """永久回收长期未使用的普通 Key，并拉入黑名单（由站长在后台管理与解封）。0 天表示关闭。"""
         days = max(0, self.settings.key_inactivity_delete_days)
         if not days:
             return 0
-        key_ids = await self.db.inactive_key_ids(time.time() - days * 86400)
+        cutoff = time.time() - days * 86400
+        key_ids = await self.db.inactive_key_ids(cutoff)
+        registrar = getattr(self, "registrar", None)
         for key_id in key_ids:
             key = await self.db.get_key(key_id)
+            key_name = key["name"] if key else f"Key #{key_id}"
+            reg_rows = await self.db._db.execute_fetchall(
+                "SELECT discord_id, username, display_name, avatar FROM discord_registrations WHERE key_id=?",
+                (key_id,),
+            )
             await self.db.delete_key(key_id)
-            await log_action(self.db, "系统", "闲置回收 Key", f"Key #{key_id} {key['name'] if key else ''}",
-                             f"连续 {days} 天没有任何请求")
-            # 释放对应的 Discord 领取记录，否则用户永远无法重新领取。
+            await log_action(self.db, "系统", "闲置回收 Key", f"Key #{key_id} {key_name}",
+                             f"连续 {days} 天未活动自动回收并拉黑")
+            for discord_id, username, display_name, avatar in reg_rows:
+                discord_id = str(discord_id)
+                await self.db.ban_discord(
+                    discord_id,
+                    reason=f"连续 {days} 天未活动自动回收",
+                    username=username or "",
+                    display_name=display_name or "",
+                    avatar=avatar or "",
+                    banned_by="系统",
+                )
+                if registrar is not None:
+                    try:
+                        await registrar.release_role(discord_id)
+                    except Exception:
+                        pass
+            # 释放领取记录
             for discord_id in await self.db.forget_registration_for_key(key_id):
                 release = getattr(self, "on_registration_released", None)
                 if release is not None:

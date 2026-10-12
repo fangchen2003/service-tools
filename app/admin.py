@@ -33,6 +33,7 @@ from .policy import gen_key
 from .body import read_json_body
 from .allowance import SETTING, read_alert_threshold
 from .reconciliation import ReconciliationError
+from .database import INVITE_TAG, ROLE_ADMIN, ROLE_TEST, ROLE_INVITE, ROLE_REGULAR, ROLE_LABELS
 from .state import RUNTIME_LIMIT_BOUNDS
 
 PREFIX = "/admin/api"
@@ -357,6 +358,17 @@ def _key_json(row, counter, generated_images_total: int = 0) -> dict[str, Any]:
         "is_admin": bool(row["is_admin"]),
         "is_test": bool(row["is_test"]) if "is_test" in row.keys() else False,
         "quota_auto": row["quota_auto"] == 1 if "quota_auto" in row.keys() else False,
+        "role": (
+            row["role"] if ("role" in row.keys() and row["role"])
+            else (ROLE_ADMIN if ("is_admin" in row.keys() and row["is_admin"])
+                  else (ROLE_TEST if ("is_test" in row.keys() and row["is_test"]) else ROLE_REGULAR))
+        ),
+        "role_label": ROLE_LABELS.get(
+            row["role"] if ("role" in row.keys() and row["role"])
+            else (ROLE_ADMIN if ("is_admin" in row.keys() and row["is_admin"])
+                  else (ROLE_TEST if ("is_test" in row.keys() and row["is_test"]) else ROLE_REGULAR)),
+            ROLE_LABELS[ROLE_REGULAR],
+        ),
         "features": feature_defs.key_features(row),
         "expires_at": row["expires_at"],
         "created_at": row["created_at"],
@@ -381,11 +393,23 @@ async def list_keys(request: Request):
     today = st.day()
     totals = await st.db.generated_image_totals()
     sources = await st.db.key_source_summary(time.time() - 24 * 3600)
+    tag_rows = await st.db._db.execute_fetchall("SELECT key_id FROM key_tags WHERE tag=?", (INVITE_TAG,))
+    invite_kids = {int(r[0]) for r in tag_rows}
     out = []
     for r in rows:
         c = await st.db.get_counter(r["id"], today)
         item = _key_json(r, c, totals.get(r["id"], 0))
         item["sources_24h"] = sources.get(r["id"], [])
+        if r["is_admin"]:
+            role = ROLE_ADMIN
+        elif r["is_test"]:
+            role = ROLE_TEST
+        elif r["id"] in invite_kids:
+            role = ROLE_INVITE
+        else:
+            role = ROLE_REGULAR
+        item["role"] = role
+        item["role_label"] = ROLE_LABELS[role]
         out.append(item)
     return {"keys": out, "share_alert_nets": st.settings.key_share_alert_nets}
 
@@ -506,6 +530,10 @@ async def create_key(request: Request):
     # 连 V4.5-only 也会被开成 V5）；Anlas 同理。要交给算法，可在成员页切回「自动」。
     await st.db._db.execute("UPDATE api_keys SET quota_auto=-1, anlas_auto=-1 WHERE id=?", (row["id"],))
     await st.db._db.commit()
+    if "role" in body:
+        role = str(body["role"] or "").strip().lower()
+        if role in (ROLE_ADMIN, ROLE_TEST, ROLE_INVITE, ROLE_REGULAR):
+            await st.db.set_key_role(row["id"], role)
     row = await st.db.get_key(row["id"])
     c = await st.db.get_counter(row["id"], st.day())
     return {"key": _key_json(row, c, 0)}
@@ -616,6 +644,16 @@ async def patch_key(request: Request, key_id: int):
         fields["exclude_global_v5"] = bool(body["exclude_global_v5"])
     if "is_test" in body:
         fields["is_test"] = bool(body["is_test"])
+    if "is_admin" in body:
+        fields["is_admin"] = bool(body["is_admin"])
+    if "role" in body:
+        role = str(body["role"] or "").strip().lower()
+        if role not in (ROLE_ADMIN, ROLE_TEST, ROLE_INVITE, ROLE_REGULAR):
+            raise HTTPException(422, "身份组必须是 regular / invite / test / admin")
+        await st.db.set_key_role(key_id, role)
+        # set_key_role 已处理 is_admin, is_test 和 key_tags，从 fields 中去掉避免覆写
+        fields.pop("is_admin", None)
+        fields.pop("is_test", None)
     if "image_model_scope" in body:
         fields["image_model_scope"] = "all" if body["image_model_scope"] == "all" else "legacy"
     if "features" in body:
@@ -693,6 +731,26 @@ async def patch_key(request: Request, key_id: int):
     c = await st.db.get_counter(key_id, st.day())
     totals = await st.db.generated_image_totals(key_id)
     return {"key": _key_json(row, c, totals.get(key_id, 0))}
+
+
+@router.post("/keys/{key_id}/role")
+async def switch_key_role(request: Request, key_id: int):
+    """手动切换账号身份组（站长/测试、邀请、普通）。"""
+    require_admin(request)
+    st = request.app.state.gate
+    key = await st.db.get_key(key_id)
+    if not key:
+        raise HTTPException(404, "key 不存在")
+    body = await read_json_body(request)
+    role = str(body.get("role") or "").strip().lower()
+    if role not in (ROLE_ADMIN, ROLE_TEST, ROLE_INVITE, ROLE_REGULAR):
+        raise HTTPException(422, "身份组必须是 regular / invite / test / admin")
+    await st.db.set_key_role(key_id, role)
+    label = ROLE_LABELS[role]
+    exemption = "（纳入 3 天闲置回收）" if role == ROLE_REGULAR else "（豁免 3 天闲置回收）"
+    await log_action(st.db, "站长", "修改账号身份组", f"Key #{key_id} {key['name']}",
+                     f"切换为「{label}」{exemption}")
+    return {"ok": True, "key_id": key_id, "role": role, "role_label": label}
 
 
 @router.post("/keys/{key_id}/reset-daily-image-quota")
@@ -889,10 +947,55 @@ async def delete_key(request: Request, key_id: int, ban: bool = False):
         if request.query_params.get("notify", "1") != "0":
             await _notify_member(request, key_id, "你的 Key 已被站长" + (
                 "删除，并且这个 Discord 账号不能再领取。" if ban else "删除。如需继续使用，可以在 🔑｜领取key 重新 /register。"))
-        await (registrar.ban if ban else registrar.revoke)(discord_id)
+        reason = request.query_params.get("reason", "站长手动删除并封禁")
+        if ban:
+            await registrar.ban(discord_id, reason=reason, banned_by="站长")
+        else:
+            await registrar.revoke(discord_id)
         return {"ok": True, "discord_id": discord_id, "banned": bool(ban)}
     await gate.db.delete_key(key_id)
     return {"ok": True}
+
+
+@router.get("/bans")
+async def list_bans(request: Request, q: str = ""):
+    """获取黑名单列表，支持按 ID、用户名、原因搜索。"""
+    require_admin(request)
+    st = request.app.state.gate
+    bans = await st.db.list_bans(q.strip())
+    return {"bans": bans, "total": len(bans)}
+
+
+@router.post("/bans")
+async def create_ban(request: Request):
+    """手动将某个 Discord ID 加入黑名单。"""
+    require_admin(request)
+    st = request.app.state.gate
+    body = await read_json_body(request)
+    discord_id = str(body.get("discord_id") or "").strip()
+    if not discord_id or not discord_id.isdecimal():
+        raise HTTPException(422, "Discord ID 必须为纯数字")
+    reason = str(body.get("reason") or "站长手动封禁").strip()[:100]
+    reg = getattr(request.app.state, "registrar", None)
+    if reg is not None:
+        await reg.ban(discord_id, reason=reason, banned_by="站长")
+    else:
+        await st.db.ban_discord(discord_id, reason=reason, banned_by="站长")
+    await log_action(st.db, "站长", "添加黑名单", f"Discord:{discord_id}", reason)
+    return {"ok": True, "discord_id": discord_id}
+
+
+@router.delete("/bans/{discord_id}")
+async def delete_ban(request: Request, discord_id: str):
+    """将某个 Discord ID 移出黑名单（解封）。"""
+    require_admin(request)
+    st = request.app.state.gate
+    discord_id = str(discord_id).strip()
+    ok = await st.db.unban_discord(discord_id)
+    if not ok:
+        raise HTTPException(404, "该账号不在黑名单中")
+    await log_action(st.db, "站长", "移出黑名单", f"Discord:{discord_id}", "已解除封禁，允许重新领取 Key")
+    return {"ok": True, "discord_id": discord_id}
 
 
 @router.get("/logs")
@@ -1547,9 +1650,21 @@ async def members(request: Request):
     for row in await st.db.list_keys():
         counter = await st.db.get_counter(row["id"], today)
         w = week.get(row["id"], {})
+        m_tags = [t["tag"] for t in manual_tags.get(row["id"], [])]
+        if row["is_admin"]:
+            role = ROLE_ADMIN
+        elif row["is_test"]:
+            role = ROLE_TEST
+        elif INVITE_TAG in m_tags:
+            role = ROLE_INVITE
+        else:
+            role = ROLE_REGULAR
+        role_label = ROLE_LABELS[role]
         out.append({
             "id": row["id"], "name": row["name"], "enabled": bool(row["enabled"]),
-            "is_admin": bool(row["is_admin"]), "is_test": bool(row["is_test"]), "discord_id": str(reg[row["id"]][1]) if row["id"] in reg else None,
+            "is_admin": bool(row["is_admin"]), "is_test": bool(row["is_test"]),
+            "role": role, "role_label": role_label,
+            "discord_id": str(reg[row["id"]][1]) if row["id"] in reg else None,
             "discord": _discord_profile(reg.get(row["id"])),
             "created_at": row["created_at"], "last_used_at": row["last_used_at"],
             "expires_at": row["expires_at"],

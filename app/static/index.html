@@ -747,9 +747,28 @@ td.note{min-width:220px}
 
 /* 日志页内的标签：生成记录 / 用量日志 / 操作日志 / Bug 追踪 */
 .subtabs{display:flex;flex-wrap:wrap;gap:4px;margin:0 0 14px;padding:4px;border:1px solid var(--border);background:var(--surface);border-radius:10px;width:max-content;max-width:100%}
-.subtabs button{border:0;background:none;color:var(--muted);padding:6px 12px;border-radius:7px;font:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
-.subtabs button.on{background:var(--accent-soft);color:var(--accent-text);font-weight:600}
-.subtabs .sub-badge{background:var(--warn);color:var(--on-bad);border-radius:999px;font-size:11px;line-height:16px;padding:0 6px}
+/* 身份组徽章与切换器 */
+.role-badge{display:inline-flex;align-items:center;padding:1px 6px;border-radius:999px;font-size:11px;font-weight:600;line-height:16px;white-space:nowrap;margin-left:4px}
+.role-badge.r-admin{background:rgba(168,85,247,0.18);color:#c084fc;border:1px solid rgba(168,85,247,0.35)}
+.role-badge.r-test{background:rgba(6,182,212,0.18);color:#22d3ee;border:1px solid rgba(6,182,212,0.35)}
+.role-badge.r-invite{background:rgba(245,158,11,0.18);color:#fbbf24;border:1px solid rgba(245,158,11,0.35)}
+.role-badge.r-regular{background:rgba(148,163,184,0.12);color:#94a3b8;border:1px solid rgba(148,163,184,0.22)}
+
+.role-selector-box{display:flex;align-items:center;gap:8px;margin:10px 0 12px;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)}
+.role-selector-box .role-label{font-size:12px;color:var(--muted);font-weight:600}
+.seg-role{display:inline-flex;border-radius:6px;background:rgba(0,0,0,0.25);padding:2px;gap:2px}
+.seg-role button{background:none;border:0;color:var(--muted);font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;font-weight:500;transition:all 0.15s ease}
+.seg-role button.on.r-regular{background:var(--border-strong);color:var(--fg);font-weight:700}
+.seg-role button.on.r-invite{background:#fbbf24;color:#000;font-weight:700}
+.seg-role button.on.r-test{background:#22d3ee;color:#000;font-weight:700}
+.seg-role button.on.r-admin{background:#c084fc;color:#000;font-weight:700}
+.seg-role button:hover:not(.on){color:var(--fg);background:rgba(255,255,255,0.06)}
+
+/* 黑名单表格与弹窗 */
+.bans-table{width:100%;border-collapse:collapse;font-size:13px}
+.bans-table th{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);color:var(--muted);font-weight:600;background:var(--surface)}
+.bans-table td{padding:10px;border-bottom:1px solid var(--border);vertical-align:middle}
+.bans-table tr:hover td{background:rgba(255,255,255,0.02)}
 </style>
 </head>
 <body>
@@ -890,6 +909,7 @@ td.note{min-width:220px}
         <section id="tab-members" hidden>
           <div class="page-head">
             <div class="tools">
+              <button class="btn" data-act="open-bans" id="bansBtn" title="查看与管理满 3 天未活动回收或手动拉黑的账号，支持搜索与移出黑名单"><span data-ic="shield"></span>🚫 封禁黑名单 <span class="badge sm" id="bansCount">0</span></button>
               <button class="btn" data-act="new-invite"><span data-ic="plus"></span>新建邀请 Key</button><button class="btn primary" data-act="new-key"><span data-ic="plus"></span>新建 Key</button><button class="btn danger outline" data-act="reset-all-keys" title="使全站所有非管理员成员的 Key 失效并解除绑定，用于全站杀头重置"><span data-ic="refresh"></span>全站重置 Key</button></div></div>
           <div class="mtools">
             <div class="search"><span data-ic="search"></span><input id="memberSearch" type="search" placeholder="搜索名称、Discord ID、标签或备注" aria-label="搜索成员"></div>
@@ -1087,13 +1107,19 @@ td.note{min-width:220px}
         <div class="field"><label for="f_expires">有效天数</label><input id="f_expires" type="number" min="0" step="1" required value="30"><div class="hint">0 = 永久</div></div>
       </div>
       <label class="check"><input id="f_allow_img2img" type="checkbox"><span title="还需服务器开启 ALLOW_IMG2IMG；会扣 Anlas 的请求还要允许消耗 Anlas">允许 img2img / 局部重绘</span></label>
-      <label class="check"><input id="f_is_test" type="checkbox"><span title="不计入成员统计、上游表现和首页稳定性，不会被闲置回收">测试 Key</span></label>
+      <div class="sec-title">身份组（账号类型）</div>
+      <div class="opt-group" role="radiogroup" aria-label="身份组">
+        <label class="check"><input type="radio" name="f_role" value="regular" checked><span>普通（参与成员统计与算法，受 3 天未活动闲置回收约束）</span></label>
+        <label class="check"><input type="radio" name="f_role" value="invite"><span>邀请（站长邀请特批，豁免 3 天闲置回收）</span></label>
+        <label class="check"><input type="radio" name="f_role" value="test"><span>测试（测试 Key，额度固定手动，不计入成员统计，豁免闲置回收）</span></label>
+        <label class="check"><input type="radio" name="f_role" value="admin"><span>站长（最高权限 Key，不限额度，豁免闲置回收）</span></label>
+      </div>
       <label class="check"><input id="f_notify" type="checkbox"><span title="停用 / 恢复、额度、模型、Anlas、有效期的变化；仅限 Discord 领取的成员">保存后私信通知成员</span></label>
       <div class="err" id="modalErr"></div>
     </div>
     <div class="dialog-foot">
       <button class="btn" data-act="close-modal">取消</button>
-      <button class="btn primary" id="modalSave" data-act="save-key">创建</button>
+      <button class="btn primary" id="modalSave" data-act="save-key">保存</button>
     </div>
   </div>
 </div>
@@ -1109,6 +1135,37 @@ td.note{min-width:220px}
       <div class="keybox" id="keyModalOnly"><input id="keyModalVal" readonly aria-label="Key"><button class="btn primary" data-act="copy-modal-key">复制</button></div>
     </div>
     <div class="dialog-foot"><button class="btn" data-act="close-keymodal">完成</button></div>
+  </div>
+</div>
+
+<!-- ===== Bans management modal ===== -->
+<div class="overlay" id="bansModal">
+  <div class="dialog" style="max-width:820px" role="dialog" aria-modal="true" aria-labelledby="bansTitle">
+    <div class="dialog-head">
+      <div>
+        <h3 id="bansTitle" style="margin:0">🚫 封禁黑名单</h3>
+        <p class="muted sm" style="margin:4px 0 0">满 3 天未活动自动回收或手动拉黑的账号；移出黑名单后可重新在 Discord 领取 Key</p>
+      </div>
+      <button class="btn ghost icon" data-act="close-bans" aria-label="关闭"><span data-ic="x"></span></button>
+    </div>
+    <div class="dialog-body">
+      <div style="display:flex;gap:12px;margin-bottom:12px">
+        <div class="search" style="flex:1"><span data-ic="search"></span><input id="bansSearch" type="search" placeholder="搜索 Discord ID、用户名、昵称或封禁理由..." aria-label="搜索黑名单"></div>
+        <button class="btn" id="bansReloadBtn" type="button"><span data-ic="refresh"></span>刷新</button>
+      </div>
+      <div id="bansListContainer" style="max-height:380px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm)">
+        <div class="skel" style="height:120px"></div>
+      </div>
+      <div class="sec-title" style="margin-top:16px">手动添加封禁</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="newBanId" style="flex:1 1 180px" placeholder="Discord ID（纯数字）">
+        <input id="newBanReason" style="flex:2 1 240px" placeholder="封禁理由（例如：小号刷取、恶意滥用等）">
+        <button class="btn danger" id="newBanSubmitBtn" type="button">加入黑名单</button>
+      </div>
+    </div>
+    <div class="dialog-foot">
+      <button class="btn" data-act="close-bans">关闭</button>
+    </div>
   </div>
 </div>
 
@@ -1940,6 +1997,10 @@ async function loadMembers(){
     membersCache.forEach(m=>{ m.k = km.get(m.id); m.features = m.k ? m.k.features : undefined; });
     fillMemberFilter();
     renderMembers();
+    api('/admin/api/bans').then(bd => {
+      const el = $('#bansCount');
+      if(el) el.textContent = bd.total ?? (bd.bans ? bd.bans.length : 0);
+    }).catch(()=>{});
   }catch(e){ toastErr(e); $('#memberGrid').innerHTML = ''; }
 }
 const DC_CDN = 'https://cdn.discordapp.com/', DC_SITE = 'https://discord.com/';
@@ -2116,6 +2177,10 @@ function memberFilters(now){
       ['shared', '疑似分享', m => shareHot(m)],
       ['manual', '后台手动建的 Key', isManual],
       ['staff', '站长 / 测试', m => m.is_test || m.is_admin],
+      ['role:invite', '身份组：邀请', m => m.role === 'invite' || userTags(m).some(t=>t.tag==='邀请')],
+      ['role:regular', '身份组：普通', m => (m.role||'regular') === 'regular'],
+      ['role:test', '身份组：测试', m => m.role === 'test' || m.is_test],
+      ['role:admin', '身份组：站长', m => m.role === 'admin' || m.is_admin],
     ],
   };
 }
@@ -2173,7 +2238,18 @@ function memberPanel(m, now){
   const mode = m.is_admin ? '' : (m.quota_auto ? '算法' : '手动');
   const anl = !k.allow_anlas ? (m.quota_auto ? '今天没分配' : '关闭') : `${inf(Math.round(k.daily_anlas||0))}/天`;
   const resetInfo = m.reset_today && m.reset_today.count ? `<dt>今日重置</dt><dd class="warn-text" title="最近重置时间：${fullTime(m.reset_today.last_ts)}">已重置 <b>${m.reset_today.count}</b> 次（最近 ${rel(m.reset_today.last_ts)}）</dd>` : '';
+  const curRole = m.role || (m.is_admin ? 'admin' : m.is_test ? 'test' : (userTags(m).some(t=>t.tag==='邀请')?'invite':'regular'));
+  const roleBox = `<div class="role-selector-box">
+      <span class="role-label">身份组</span>
+      <div class="seg-role" data-id="${m.id}">
+        <button type="button" class="s-role r-regular ${curRole==='regular'?'on':''}" data-role="regular" title="普通成员：受 3 天未活动闲置回收约束">普通</button>
+        <button type="button" class="s-role r-invite ${curRole==='invite'?'on':''}" data-role="invite" title="邀请特批：豁免 3 天未活动回收">邀请</button>
+        <button type="button" class="s-role r-test ${curRole==='test'?'on':''}" data-role="test" title="测试账号：固定额度，豁免回收">测试</button>
+        <button type="button" class="s-role r-admin ${curRole==='admin'?'on':''}" data-role="admin" title="站长账号：不限额度，豁免回收">站长</button>
+      </div>
+    </div>`;
   const settings = `<div><h4>额度与权限${mode ? ` <span class="h4-note">${mode}</span>` : ''}</h4>
+      ${roleBox}
       <dl class="kv">${m.is_admin ? '' : `<dt>每天</dt><dd>V4.5 ${inf(k.daily_images)}${k.image_model_scope==='all' ? ` · V5 ${inf(k.daily_v5)}` : ' · 不能用 V5'}</dd>`}
         ${resetInfo}
         <dt>Anlas</dt><dd>${esc(anl)}</dd>
@@ -2221,7 +2297,7 @@ function renderMembers(){
   const autoFilters = autoSet.map(t => ['auto:' + t, t, m => (m.auto_tags||[]).some(x => x.tag === t)]);
   const tagFilters = [...userFilters, ...autoFilters];
   const all = [...fs.main, ...fs.more, ...tagFilters];
-  const staffish = id => id === 'staff' || id === 'alt' || id.startsWith('tag:');      // 这几个筛选也算站长 / 测试账号
+  const staffish = id => id === 'staff' || id === 'alt' || id.startsWith('tag:') || id.startsWith('role:');      // 这几个筛选也算站长 / 测试账号
   const count = ([id, , fn]) => (staffish(id) ? everyone : members).filter(fn).length;
   if(memberFilterAuto && everyone.length){ memberFilterAuto = false; if(!fs.main[0][2] || !count(fs.main[0])) memberFilter = 'all'; else memberFilter = 'attention'; }
   if(!all.some(f => f[0] === memberFilter)) memberFilter = 'all';
@@ -2263,11 +2339,14 @@ function renderMembers(){
     const cap = m.daily_images > 0 ? m.daily_images : 0, v5 = m.today.v5 || 0, v45 = Math.max(0, m.today.images - v5);
     const bar = (label, used, max, cls) => `<div class="tb ${cls}"><span class="tb-l">${label}</span><span class="tb-b"><i style="width:${max > 0 ? Math.min(100, used / max * 100) : 0}%"></i></span><span class="num">${used}${max > 0 ? '<span class="muted"> / ' + max + '</span>' : ''}</span></div>`;
     const status = memberStatus(m, now), tag = userTags(m)[0];
+    const curRole = m.role || (m.is_admin ? 'admin' : m.is_test ? 'test' : (userTags(m).some(t=>t.tag==='邀请')?'invite':'regular'));
+    const roleCls = curRole === 'admin' ? 'role-badge r-admin' : curRole === 'test' ? 'role-badge r-test' : curRole === 'invite' ? 'role-badge r-invite' : 'role-badge r-regular';
+    const roleText = curRole === 'admin' ? '站长' : curRole === 'test' ? '测试' : curRole === 'invite' ? '邀请' : '普通';
     const open = memberOpen.has(m.id);
     return `<tr class="mr${m.enabled?'':' dim'}${open?' open':''}" data-mid="${m.id}">
       <td class="mcell" data-label="成员"><div class="mrow">
         <div class="avatar sm ${dc?'dc':''}">${esc([...String(title||'?')][0]||'?')}${av?`<img class="av" src="${esc(av)}" alt="" width="28" height="28" referrerpolicy="no-referrer" loading="lazy">`:''}</div>
-        <div style="min-width:0"><div class="mn">${esc(title)}</div><div class="msub">${esc(handle || (m.discord_id ? '' : '后台建的 Key'))}${tag ? ` <span class="mf tag" title="${esc(tag.note||'')}">${esc(tag.tag)}</span>` : ''}</div></div></div></td>
+        <div style="min-width:0"><div class="mn">${esc(title)} <span class="${roleCls}">${roleText}</span></div><div class="msub">${esc(handle || (m.discord_id ? '' : '后台建的 Key'))}${tag && tag.tag !== '邀请' ? ` <span class="mf tag" title="${esc(tag.note||'')}">${esc(tag.tag)}</span>` : ''}</div></div></div></td>
       <td class="mtoday" data-label="今日">${m.is_admin ? `<span class="muted sm">不限 · 今天 ${m.today.images} 张</span>` : bar('V4.5', v45, cap, '') + (m.daily_v5 > 0 || v5 ? bar('V5', v5, m.daily_v5, 'v5') : '')}</td>
       <td class="mstat" data-label="状态">${status}</td>
       <td class="mtime" data-label="最近使用" title="${esc(m.last_used_at ? '最近使用 ' + fullTime(m.last_used_at) : '从未使用')}">${esc(rel(m.last_used_at))}</td>
@@ -2593,7 +2672,8 @@ async function openCreate(){
   $('#f_expires').placeholder='';
   $('#f_allow_anlas').checked=false; $('#f_allow_img2img').checked=false;
   $('#f_exclude_global_v5').checked=false;
-  $('#f_is_test').checked=false;
+  const rRegular = document.querySelector('input[name="f_role"][value="regular"]');
+  if(rRegular) rRegular.checked = true;
   $('#f_notify').checked=false;                  // Discord 应用申诉期：默认不私信
   setQuotaMode('manual');
   // 默认只开通“新成员默认功能”（通常只有文生图），而不是全部功能。
@@ -2604,7 +2684,7 @@ async function openCreate(){
 /* 额度来源只有两种：算法（全部交给算法，不显示输入框）/ 手动（填多少就是多少） */
 /* 通用：某个选项在当前条件下不可用时，禁用它并在下面说明原因（不让站长选了以后才发现没效果） */
 const QUOTA_LOCKS = [
-  [() => $('#f_is_test').checked, 'auto', '测试 Key 不归算法管理，只能手动设置额度。'],
+  [() => document.querySelector('input[name="f_role"]:checked')?.value === 'test', 'auto', '测试 Key 不归算法管理，只能手动设置额度。'],
 ];
 function setQuotaMode(v){
   const lock = QUOTA_LOCKS.find(([when, opt]) => when() && opt === v);
@@ -2620,7 +2700,7 @@ function setQuotaMode(v){
 }
 document.addEventListener('change', e => {
   if(e.target.name === 'f_quota') setQuotaMode(e.target.value);
-  else if(e.target.id === 'f_is_test') setQuotaMode(document.querySelector('input[name="f_quota"]:checked').value);
+  else if(e.target.name === 'f_role') setQuotaMode(document.querySelector('input[name="f_quota"]:checked')?.value || 'manual');
 });
 function setFeatForm(list){
   document.querySelector(`input[name="f_feat_mode"][value="${list==null?'legacy':'custom'}"]`).checked = true;
@@ -2645,7 +2725,9 @@ function openEdit(id){
   $('#f_allow_anlas').checked = k.allow_anlas;
   $('#f_allow_img2img').checked = k.allow_img2img;
   $('#f_exclude_global_v5').checked = k.exclude_global_v5;
-  $('#f_is_test').checked = !!k.is_test;
+  const curRole = k.role || (k.is_admin ? 'admin' : k.is_test ? 'test' : ((k.tags||[]).some(t=>t.tag==='邀请')?'invite':'regular'));
+  const rInput = document.querySelector(`input[name="f_role"][value="${curRole}"]`);
+  if(rInput) rInput.checked = true;
   $('#f_notify').checked = false;
   setFeatForm(k.features == null ? null : k.features);
   setQuotaMode(k.quota_auto ? 'auto' : 'manual');                  // 测试 Key 由 QUOTA_LOCKS 锁成手动
@@ -2658,6 +2740,7 @@ async function saveKey(){
   if(savingKey) return;
   let body;
   try{
+    const role = document.querySelector('input[name="f_role"]:checked')?.value || 'regular';
     body = {
       name: $('#f_name').value,
       image_model_scope: $('#f_image_model_scope').value,
@@ -2670,7 +2753,9 @@ async function saveKey(){
       allow_anlas: $('#f_allow_anlas').checked,
       allow_img2img: $('#f_allow_img2img').checked,
       exclude_global_v5: $('#f_exclude_global_v5').checked,
-      is_test: $('#f_is_test').checked,
+      role: role,
+      is_test: role === 'test',
+      is_admin: role === 'admin',
       notify: $('#f_notify').checked,
     };
     if(!editingId || $('#f_expires').value.trim() !== '') body.expires_days = readNum('f_expires', '有效天数', {max:3650});
@@ -2747,6 +2832,143 @@ async function bindDiscordModal(id, currentDcId='', currentUsername=''){
     membersCache = null; loadMembers();
   }catch(e){ toastErr(e); }
 }
+
+/* ---------- 身份组与封禁黑名单 ---------- */
+const ROLE_NAMES = { regular: '普通', invite: '邀请', test: '测试', admin: '站长' };
+async function switchRole(id, role, btn){
+  const m = findMember(id);
+  const name = m ? memberLabel(m) : `Key #${id}`;
+  const targetLabel = ROLE_NAMES[role] || role;
+  if(btn) btn.disabled = true;
+  try{
+    await api(`/admin/api/keys/${id}/role`, {
+      method: 'POST',
+      body: JSON.stringify({ role })
+    });
+    toast(`已将「${name}」身份组切换为「${targetLabel}」`, 'ok');
+    membersCache = null;
+    await loadMembers();
+  }catch(e){
+    toastErr(e);
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+let bansCache = [];
+let bansSearchTimer = null;
+async function openBansModal(){
+  openOverlay('#bansModal');
+  const searchInput = $('#bansSearch');
+  if(searchInput) searchInput.value = '';
+  await loadBans();
+}
+function closeBansModal(){
+  closeOverlay('#bansModal');
+}
+async function loadBans(q = ''){
+  const box = $('#bansListContainer');
+  if(!box) return;
+  box.innerHTML = '<div class="skel" style="height:120px"></div>';
+  try{
+    const url = '/admin/api/bans' + (q ? '?q=' + encodeURIComponent(q) : '');
+    const d = await api(url);
+    bansCache = d.bans || [];
+    const countEl = $('#bansCount');
+    if(countEl && !q) countEl.textContent = d.total ?? bansCache.length;
+    renderBansList(bansCache);
+  }catch(e){
+    box.innerHTML = `<div class="empty" style="padding:20px;color:var(--bad)">读取黑名单失败：${esc(e.message)}</div>`;
+  }
+}
+function renderBansList(list){
+  const box = $('#bansListContainer');
+  if(!box) return;
+  if(!list.length){
+    box.innerHTML = '<div class="empty" style="padding:28px 12px;text-align:center;color:var(--muted)">当前没有封禁黑名单记录</div>';
+    return;
+  }
+  const rows = list.map(b => {
+    const title = b.display_name || b.username || b.discord_id;
+    const handle = b.username && b.username !== title ? '@' + b.username : '';
+    const av = b.avatar ? safeUrl(b.avatar, DC_CDN) : '';
+    const reason = b.reason || '满 3 天未活动自动回收或手动封禁';
+    const by = b.banned_by ? ` (经手人: ${b.banned_by})` : '';
+    return `<tr>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="avatar sm dc">${esc([...String(title||'?')][0]||'?')}${av?`<img class="av" src="${esc(av)}" alt="" width="28" height="28" referrerpolicy="no-referrer" loading="lazy">`:''}</div>
+          <div>
+            <div style="font-weight:600">${esc(title)}</div>
+            <div class="muted sm mono">${esc(b.discord_id)}${handle ? ' · ' + esc(handle) : ''}</div>
+          </div>
+        </div>
+      </td>
+      <td>
+        <div style="color:var(--fg)">${esc(reason)}</div>
+        <div class="muted sm">${esc(rel(b.created_at))}${esc(by)}</div>
+      </td>
+      <td style="text-align:right">
+        <button class="btn mini outline" data-act="unban-user" data-dcid="${esc(b.discord_id)}" data-name="${esc(title)}">移出黑名单</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  box.innerHTML = `<table class="bans-table">
+    <thead>
+      <tr>
+        <th>成员</th>
+        <th>封禁理由与时间</th>
+        <th style="text-align:right">操作</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+async function unbanUser(discordId, name){
+  if(!await askConfirm(`确定将「${name || discordId}」移出黑名单？\n移出后该用户可以在 Discord 中重新使用 /register 领取 Key。`, '移出黑名单')) return;
+  try{
+    await api('/admin/api/bans/' + encodeURIComponent(discordId), { method: 'DELETE' });
+    toast(`已将「${name || discordId}」移出黑名单，允许重新领取`, 'ok');
+    const q = ($('#bansSearch')?.value || '').trim();
+    await loadBans(q);
+    membersCache = null;
+    await loadMembers();
+  }catch(e){
+    toastErr(e);
+  }
+}
+async function addBanUser(){
+  const idInput = $('#newBanId');
+  const reasonInput = $('#newBanReason');
+  const discordId = (idInput?.value || '').trim();
+  const reason = (reasonInput?.value || '').trim();
+  if(!discordId || !/^\d{17,20}$/.test(discordId)){
+    toast('Discord ID 必须为 17~20 位纯数字', 'err');
+    idInput?.focus();
+    return;
+  }
+  const btn = $('#newBanSubmitBtn');
+  if(btn) btn.disabled = true;
+  try{
+    await api('/admin/api/bans', {
+      method: 'POST',
+      body: JSON.stringify({ discord_id: discordId, reason: reason || '站长手动拉黑' })
+    });
+    toast(`已将 Discord ID ${discordId} 加入黑名单`, 'ok');
+    if(idInput) idInput.value = '';
+    if(reasonInput) reasonInput.value = '';
+    const q = ($('#bansSearch')?.value || '').trim();
+    await loadBans(q);
+    membersCache = null;
+    await loadMembers();
+  }catch(e){
+    toastErr(e);
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
 /* ---------- logs ---------- */
 function fmtTiming(l){
   const sec = ms => ms >= 10000 ? Math.round(ms/1000) + 's' : (ms/1000).toFixed(1) + 's';
@@ -3156,6 +3378,16 @@ document.addEventListener('click', ev=>{
   if(nav){ tab(nav.dataset.tab); return; }
   const sub = ev.target.closest('.subtabs button[data-sub]');
   if(sub){ tab(sub.dataset.sub); return; }
+  const roleBtn = ev.target.closest('button.s-role');
+  if(roleBtn && !roleBtn.disabled){
+    const seg = roleBtn.closest('.seg-role');
+    if(seg){
+      const mid = +seg.dataset.id;
+      const r = roleBtn.dataset.role;
+      switchRole(mid, r, roleBtn);
+      return;
+    }
+  }
   const el = ev.target.closest('[data-act]');
   if(!el){
     // 点遮罩不关闭确认框与 Key 编辑框（避免误触丢失未保存的修改）。
@@ -3246,6 +3478,9 @@ document.addEventListener('click', ev=>{
     case 'save-guard': saveGuard(); break;
     case 'save-anlas': saveAnlasPool(); break;
     case 'save-announce': saveAnnounce(); break;
+    case 'open-bans': openBansModal(); break;
+    case 'close-bans': closeBansModal(); break;
+    case 'unban-user': unbanUser(el.dataset.dcid, el.dataset.name); break;
   }
 });
 $('#loginBtn').addEventListener('click', doLogin);
@@ -3309,8 +3544,17 @@ document.addEventListener('keydown', e=>{
   else if($('#keyModal').classList.contains('show')){ closeOverlay('#keyModal'); $('#keyModalVal').value=''; }
   else if($('#tokModal').classList.contains('show')) closeTokModal();
   else if($('#modal').classList.contains('show')) closeModal();
+  else if($('#bansModal').classList.contains('show')) closeBansModal();
   document.body.classList.remove('nav-open');
 });
+$('#bansReloadBtn')?.addEventListener('click', () => loadBans(($('#bansSearch')?.value || '').trim()));
+$('#newBanSubmitBtn')?.addEventListener('click', addBanUser);
+$('#bansSearch')?.addEventListener('input', e => {
+  clearTimeout(bansSearchTimer);
+  bansSearchTimer = setTimeout(() => loadBans(e.target.value.trim()), 250);
+});
+$('#newBanId')?.addEventListener('keydown', e => { if(e.key === 'Enter') addBanUser(); });
+$('#newBanReason')?.addEventListener('keydown', e => { if(e.key === 'Enter') addBanUser(); });
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden && allowanceTimer) loadAllowance(); });
 // 有弹窗、下拉菜单打开、正在输入，或在带表单的设置页时不刷新，免得冲掉正在填的内容。
 /* 页面不放刷新按钮（10-11 站长）：看数据的页面每 15 秒自动刷新（标签页在后台、弹窗打开或正在输入时暂停）；

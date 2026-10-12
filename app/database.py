@@ -14,6 +14,17 @@ import aiosqlite
 
 INVITE_TAG = "邀请"     # 站长手动发的邀请 Key：只由站长手动删除，闲置回收跳过（10-11 站长）
 
+ROLE_ADMIN = "admin"
+ROLE_TEST = "test"
+ROLE_INVITE = "invite"
+ROLE_REGULAR = "regular"
+ROLE_LABELS = {
+    ROLE_ADMIN: "站长",
+    ROLE_TEST: "测试",
+    ROLE_INVITE: "邀请",
+    ROLE_REGULAR: "普通",
+}
+
 from .reasons import reason_label
 
 SCHEMA = """
@@ -55,7 +66,12 @@ CREATE TABLE IF NOT EXISTS discord_registrations (
 );
 CREATE TABLE IF NOT EXISTS discord_bans (
     discord_id TEXT PRIMARY KEY,
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    username TEXT NOT NULL DEFAULT '',
+    display_name TEXT NOT NULL DEFAULT '',
+    avatar TEXT NOT NULL DEFAULT '',
+    banned_by TEXT NOT NULL DEFAULT '系统'
 );
 CREATE TABLE IF NOT EXISTS pending_role_removals (
     discord_id TEXT PRIMARY KEY,
@@ -385,6 +401,11 @@ class Database:
             "ALTER TABLE upstream_token_counters ADD COLUMN units REAL",
             # 非防分享的暂停（如自动驾驶限流）的原因：存库，重启后成员仍看到正确的原因；空 = 防分享暂停
             "ALTER TABLE share_state ADD COLUMN pause_reason TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE discord_bans ADD COLUMN reason TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE discord_bans ADD COLUMN username TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE discord_bans ADD COLUMN display_name TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE discord_bans ADD COLUMN avatar TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE discord_bans ADD COLUMN banned_by TEXT NOT NULL DEFAULT '系统'",
         ):
             try:
                 await self._db.execute(ddl)
@@ -897,6 +918,85 @@ class Database:
         await self._db.execute("DELETE FROM discord_registrations WHERE key_id=?", (key_id,))
         await self._db.commit()
         return [str(r[0]) for r in rows]
+
+    async def get_key_role(self, key: Any, tags: Optional[list[str]] = None) -> str:
+        """根据 key 字段与标签判断当前身份组（regular / invite / test / admin）。"""
+        keys = key.keys() if hasattr(key, "keys") else ()
+        if "is_admin" in keys and bool(key["is_admin"]):
+            return ROLE_ADMIN
+        if "is_test" in keys and bool(key["is_test"]):
+            return ROLE_TEST
+        if tags is not None:
+            if INVITE_TAG in tags:
+                return ROLE_INVITE
+        else:
+            rows = await self._db.execute_fetchall(
+                "SELECT 1 FROM key_tags WHERE key_id=? AND tag=?", (key["id"], INVITE_TAG))
+            if rows:
+                return ROLE_INVITE
+        return ROLE_REGULAR
+
+    async def set_key_role(self, key_id: int, role: str) -> None:
+        """原子切换账号身份组：regular / invite / test / admin。"""
+        if role not in (ROLE_ADMIN, ROLE_TEST, ROLE_INVITE, ROLE_REGULAR):
+            raise ValueError(f"未知身份组: {role}")
+        if role == ROLE_ADMIN:
+            await self._db.execute("UPDATE api_keys SET is_admin=1, is_test=0 WHERE id=?", (key_id,))
+            await self._db.execute("DELETE FROM key_tags WHERE key_id=? AND tag=?", (key_id, INVITE_TAG))
+        elif role == ROLE_TEST:
+            await self._db.execute("UPDATE api_keys SET is_admin=0, is_test=1 WHERE id=?", (key_id,))
+            await self._db.execute("DELETE FROM key_tags WHERE key_id=? AND tag=?", (key_id, INVITE_TAG))
+        elif role == ROLE_INVITE:
+            await self._db.execute("UPDATE api_keys SET is_admin=0, is_test=0 WHERE id=?", (key_id,))
+            await self._db.execute(
+                "INSERT INTO key_tags(key_id, tag, note, by, ts) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(key_id, tag) DO UPDATE SET note=excluded.note, by=excluded.by, ts=excluded.ts",
+                (key_id, INVITE_TAG, "站长手动设为邀请账号，豁免闲置回收", "站长", time.time()))
+        elif role == ROLE_REGULAR:
+            await self._db.execute("UPDATE api_keys SET is_admin=0, is_test=0 WHERE id=?", (key_id,))
+            await self._db.execute("DELETE FROM key_tags WHERE key_id=? AND tag=?", (key_id, INVITE_TAG))
+        await self._db.commit()
+
+    async def ban_discord(self, discord_id: str, *, reason: str = "", username: str = "",
+                          display_name: str = "", avatar: str = "", banned_by: str = "系统") -> None:
+        """拉入黑名单：记录封禁理由、操作者及 Discord 用户资料。"""
+        now = time.time()
+        await self._db.execute(
+            """INSERT INTO discord_bans(discord_id, created_at, reason, username, display_name, avatar, banned_by)
+               VALUES (?,?,?,?,?,?,?)
+               ON CONFLICT(discord_id) DO UPDATE SET
+                   created_at=excluded.created_at,
+                   reason=excluded.reason,
+                   username=COALESCE(NULLIF(excluded.username, ''), discord_bans.username),
+                   display_name=COALESCE(NULLIF(excluded.display_name, ''), discord_bans.display_name),
+                   avatar=COALESCE(NULLIF(excluded.avatar, ''), discord_bans.avatar),
+                   banned_by=excluded.banned_by""",
+            (str(discord_id), now, reason, username, display_name, avatar, banned_by))
+        await self._db.commit()
+
+    async def unban_discord(self, discord_id: str) -> bool:
+        """移出黑名单。"""
+        cur = await self._db.execute("DELETE FROM discord_bans WHERE discord_id=?", (str(discord_id),))
+        await self._db.commit()
+        return cur.rowcount > 0
+
+    async def list_bans(self, q: str = "") -> list[dict]:
+        """查询黑名单列表，支持按 discord_id, username, display_name, reason 模糊匹配。"""
+        q = (q or "").strip()
+        if q:
+            pat = f"%{q}%"
+            cur = await self._db.execute(
+                """SELECT discord_id, created_at, reason, username, display_name, avatar, banned_by
+                   FROM discord_bans
+                   WHERE discord_id LIKE ? OR username LIKE ? OR display_name LIKE ? OR reason LIKE ?
+                   ORDER BY created_at DESC""",
+                (pat, pat, pat, pat))
+        else:
+            cur = await self._db.execute(
+                """SELECT discord_id, created_at, reason, username, display_name, avatar, banned_by
+                   FROM discord_bans
+                   ORDER BY created_at DESC""")
+        return [dict(r) for r in await cur.fetchall()]
 
     async def execute_fetchall_compat(self, sql: str, args: tuple = ()) -> list:
         return list(await (await self._db.execute(sql, args)).fetchall())
