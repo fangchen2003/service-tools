@@ -48,9 +48,9 @@ def test_landing_html_clean_and_valid():
     assert "lim5" in content
     assert 'title="个人不限额度，仍受全站日上限约束"' in content
 
-    # 10-11 站长：运行情况不再单独列「成员数」等 4 个数字，和下面的卡片重复；结论并进第一张卡
+    # 运行情况看板整合为单一 board-card
     assert 'id="kMem"' not in content and 'class="kpis"' not in content
-    assert 'class="dtile dme verdict"' in content
+    assert "board-card" in content
 
     # 提取脚本并通过 node 语法校验
     scripts = re.findall(r"<script>(.*?)</script>", content, re.DOTALL)

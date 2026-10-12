@@ -171,45 +171,38 @@ section{margin-top:40px}
 #live{margin-top:24px}
 #live .pills{justify-content:flex-end}
 .live-head .t{font-weight:600;font-size:17px;display:flex;align-items:center;gap:8px}
-.dash{margin-top:14px;display:flex;flex-direction:column;gap:12px}
-.dstrip{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-size:12px;color:var(--muted)}
-.dstrip li{display:flex;align-items:center;gap:4px}
-.dstrip li span{padding:2px 7px;border-radius:6px;background:var(--surface-2)}
-.dstrip li+li::before{content:"›";color:var(--muted)}
-.dstrip li.on span{background:var(--warn-soft);color:var(--warn);font-weight:600}
-.dgrid{display:grid;gap:12px;grid-template-columns:minmax(0,1fr)}
-@media (min-width:640px){.dgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-.dtile{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;display:flex;flex-direction:column;gap:8px;min-width:0}
-.dk{font-size:12.5px;color:var(--muted)}
-.dbig{font-size:clamp(22px,6vw,28px);font-weight:700;line-height:1.15;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
-.dsub,.dnote{font-size:12.5px;color:var(--text-2)}
-.dnote{color:var(--muted)}
-.dnote:empty{display:none}
-.dme.mine{background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 40%,transparent)}
-.dme.mine .dbig{color:var(--warn)}
-.dnum{display:flex;align-items:baseline;gap:8px;font-size:14px;color:var(--muted)}
-.dnum b{font-size:28px;line-height:1.15;color:var(--text);font-variant-numeric:tabular-nums}
-.dbar{height:7px;border-radius:4px;background:var(--surface-3);overflow:hidden}
-.dbar i{display:block;height:100%;width:0;background:var(--accent);border-radius:4px;transition:width .6s}
-.dbar.v5 i{background:var(--v5)}
-.dseg{display:flex;gap:4px}
-.dseg i{flex:1;height:7px;border-radius:4px;background:var(--surface-3);transition:background .3s}
-.dseg i.on{background:var(--accent)}
-.dseg i.me{background:var(--warn)}
-.drow{display:flex;justify-content:space-between;font-size:13px;font-variant-numeric:tabular-nums}
-@media (prefers-reduced-motion: reduce){.dash *{transition:none!important}}
-/* 运行情况：一句结论 + 4 个关键数字 */
-.v-title{font-size:16px;line-height:1.35;font-weight:600;letter-spacing:-.01em;display:flex;align-items:center;gap:10px;text-wrap:balance;margin:0}
-.v-title i{width:11px;height:11px;border-radius:50%;background:var(--muted);flex:none}
-.verdict[data-tone=ok] .v-title i{background:var(--ok);animation:pulse 2.4s infinite}
-.verdict[data-tone=busy] .v-title i{background:var(--accent)}
-.verdict[data-tone=warn] .v-title i{background:var(--warn)}
-.verdict[data-tone=bad] .v-title i{background:var(--bad)}
-.verdict[data-tone=paced] .v-title i{background:var(--accent);animation:pulse 2s infinite}
-.verdict[data-tone=paced] .v-title{color:var(--accent-text)}
-.verdict[data-tone=warn] .v-title{color:var(--warn)}
-.verdict[data-tone=bad] .v-title{color:var(--bad)}
-#board{margin-top:16px}
+/* 统一全站通道看板 */
+#board{margin-top:14px}
+.board-card{padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.board-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.board-st{display:flex;flex-direction:column;gap:3px;min-width:0}
+.board-h{display:flex;align-items:center;gap:8px}
+.board-dot{width:10px;height:10px;border-radius:50%;background:var(--ok);flex-shrink:0}
+.board-dot.ok{background:var(--ok)}
+.board-dot.busy{background:var(--accent)}
+.board-dot.paced{background:var(--accent)}
+.board-dot.warn{background:var(--warn)}
+.board-dot.bad{background:var(--bad)}
+.board-dot.mine{background:var(--warn)}
+.board-dot.pulse{animation:pulse 2s infinite ease-in-out}
+.board-big{font-size:18px;font-weight:800;color:var(--text);line-height:1.2;font-variant-numeric:tabular-nums}
+.board-sub{font-size:11.5px;color:var(--muted);padding-left:18px}
+.board-sub:empty{display:none}
+.board-q{font-size:13px;font-weight:700;color:var(--text);text-align:right;flex-shrink:0;font-variant-numeric:tabular-nums}
+.board-strip{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);font-size:10.5px;color:var(--muted);list-style:none;margin:0}
+.board-strip .step-badge{padding:2px 7px;border-radius:4px;background:var(--surface-2);color:var(--muted);transition:all .2s}
+.board-strip .step-badge.on{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn);font-weight:600}
+.board-strip .step-badge.accent{background:color-mix(in srgb,var(--accent) 25%,transparent);color:var(--accent);font-weight:600}
+.board-strip .arr{color:var(--muted);opacity:.6}
+.board-quota{display:flex;flex-direction:column;gap:6px;padding-top:2px}
+.board-quota-txt{display:flex;justify-content:space-between;align-items:center;font-size:11.5px;font-variant-numeric:tabular-nums}
+.board-quota-txt .q-total{color:var(--muted)}
+.board-quota-txt .q-total b{color:var(--text);font-weight:600}
+.board-quota-txt .q-v5{color:var(--v5);font-weight:600}
+.board-quota-txt .q-v5 b{font-weight:700}
+.board-bar{width:100%;height:6px;border-radius:999px;background:var(--surface-3);overflow:hidden;display:flex}
+.board-bar .bar-total{height:100%;background:var(--accent);transition:width .4s}
+.board-bar .bar-v5{height:100%;background:var(--v5);transition:width .4s}
 .algo-note{margin:0 0 10px;font-size:12.5px;color:var(--muted)}
 /* steps */
 .steps{display:grid;gap:16px;grid-template-columns:1fr}
@@ -379,17 +372,46 @@ body.authed #board{margin-top:22px}
     </div>
   </section>
 
-  <section id="board" aria-labelledby="boardTitle">
-    <div class="card">
-      <div class="dash" id="dash" style="margin-top:0">
-        <div class="dgrid">
-          <div class="dtile dme verdict" id="dMe" data-tone="idle"><h2 class="v-title" id="boardTitle"><i aria-hidden="true"></i><span id="vText">正在读取运行情况…</span></h2><div class="dbig" id="dMeV">—</div><div class="dsub" id="dMeS" aria-live="polite"></div></div>
-          <div class="dtile"><ol class="dstrip" aria-label="出图流程"><li data-step="client"><span>客户端</span></li><li data-step="auth"><span>验 Key</span></li><li data-step="quota"><span>查额度</span></li><li data-step="queue"><span>排队</span></li><li data-step="pace"><span>控速</span></li><li data-step="nai"><span>NovelAI</span></li></ol><div class="dnum"><b id="dQ">0</b><span id="dQs"></span></div><div class="dseg" id="dQbar"></div><div class="dnote" id="dQn"></div></div>
-          <div class="dtile"><div class="dk">近 60 分钟出图</div><div class="dnum"><b id="dP">0</b><span id="dPs"></span></div><div class="dbar" role="progressbar" aria-label="近 60 分钟出图占上限的比例" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="dPbar"></i></div><div class="dnote" id="dPn"></div></div>
-          <div class="dtile"><div class="dk">全站今日额度</div>
-            <div class="drow"><span>全部出图<small class="muted" style="font-size:11px;margin-left:4px">（含 V4.5 与 V5）</small></span><span><b id="d45">0</b> / <span id="d45c">0</span></span></div><div class="dbar" role="progressbar" aria-label="全部出图占今日额度的比例" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="d45bar"></i></div>
-            <div class="drow"><span>V5</span><span><b id="d5">0</b> / <span id="d5c">0</span></span></div><div class="dbar v5" role="progressbar" aria-label="V5 出图占今日额度的比例" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="d5bar"></i></div>
-            </div>
+  <section id="board" aria-labelledby="stBig">
+    <div class="card board-card">
+      <!-- 实时状态行：大字 + 单行理由 + 0人排队 -->
+      <div class="board-top">
+        <div class="board-st">
+          <div class="board-h">
+            <span id="dot" class="board-dot ok pulse"></span>
+            <div id="stBig" class="board-big">正在读取…</div>
+          </div>
+          <div id="stReason" class="board-sub"></div>
+        </div>
+        <div class="board-q">
+          <div id="stQueue">0 人排队</div>
+        </div>
+      </div>
+
+      <!-- 单行极简流水线链路 -->
+      <div class="board-strip">
+        <span class="step-badge" data-step="client">客户端</span>
+        <span class="arr">›</span>
+        <span class="step-badge" data-step="auth">验Key</span>
+        <span class="arr">›</span>
+        <span class="step-badge" data-step="quota">查额</span>
+        <span class="arr">›</span>
+        <span class="step-badge" data-step="queue">排队</span>
+        <span class="arr">›</span>
+        <span class="step-badge" data-step="pace" id="paceStep">控速</span>
+        <span class="arr">›</span>
+        <span class="step-badge" data-step="nai">NovelAI</span>
+      </div>
+
+      <!-- 全站大盘：左右两端对齐 + 单行双色堆叠条 -->
+      <div class="board-quota">
+        <div class="board-quota-txt">
+          <span class="q-total">全站今日 <b id="dTotal">0</b> / <span id="dTotalCap">0</span></span>
+          <span class="q-v5">V5 <b id="dV5">0</b> / <span id="dV5Cap">0</span></span>
+        </div>
+        <div class="board-bar">
+          <div id="barTotal" class="bar-total" style="width: 0%;"></div>
+          <div id="barV5" class="bar-v5" style="width: 0%;"></div>
         </div>
       </div>
     </div>
@@ -836,8 +858,8 @@ function fmtDate(sec){
     if(lastQueueCount > 0){
       var passed = Math.floor((Date.now() - queueSeenAt) / 1000);
       var curSec = Math.max(2, lastQueueSec - passed);
-      var el = $id('dMeV'), tile = $id('dMe');
-      if(el && tile && tile.dataset.tone === 'busy' && !tile.classList.contains('mine')){
+      var el = $id('stBig'), dot = $id('dot');
+      if(el && dot && dot.classList.contains('busy') && !dot.classList.contains('mine')){
         el.textContent = '约 ' + curSec + ' 秒后开始';
       }
     }
@@ -845,77 +867,72 @@ function fmtDate(sec){
 
   function render(d, me){
     var q = d.quota || {}, g = d.guard || {}, r = d.rules || {};
-    var qu = me || d.queue || {}, w = qu.waiting || 0, run = qu.running || 0;   /* 有 Key 时用不带缓存的数字，和「排第几」一致 */
+    var qu = me || d.queue || {}, w = qu.waiting || 0, run = qu.running || 0;
     var mine = me && me.mine || null, iv = Number(d.interval) || 15;
     var myRun = !!(mine && mine.some(function(x){ return x.state === 'running'; }));
     var myPos = mine && mine.filter(function(x){ return x.state === 'waiting'; })[0];
-    /* 第一格：一句结论（按严重程度取第一条）+ 现在发一张图要等多久；有自己的图时显示自己的进度 */
     var hour = g.hour || 0, hcap = g.hour_cap || 0, qcap = r.queue_cap || 0, bk = g.blocked, bw = bk && /约 (\d+) 分钟/.exec(bk.text);
-    var tone, txt, val, sub = '';
-    if(g.cooldown){ tone = 'bad'; txt = '上游限流，全站暂停出图'; val = '约 ' + g.cooldown + ' 秒后'; sub = '期间发的图会被拒绝，不用重试'; }
+    var tone, val, sub = '', step = '';
+    if(g.cooldown){ tone = 'bad'; val = '约 ' + g.cooldown + ' 秒后'; sub = '上游限流，全站暂停出图'; step = 'pace'; }
     else if(bk){
       if(bk.code === 'paced'){
-        tone = 'paced'; txt = BLOCK_TITLE.paced;
+        tone = 'paced';
         val = bw ? '约 ' + bw[1] + ' 分钟后放行' : '时段平滑放行中';
         sub = '全天平稳补给中，到点自动放行';
+        step = 'pace';
       } else {
-        tone = bk.code === 'breaker' ? 'bad' : 'warn'; txt = BLOCK_TITLE[bk.code] || '暂时不能出图';
-        val = bk.code === 'daily_cap' ? '明天 0 点恢复' : bw ? '约 ' + bw[1] + ' 分钟后' : '稍后再试'; sub = bk.text;
+        tone = bk.code === 'breaker' ? 'bad' : 'warn';
+        val = bk.code === 'daily_cap' ? '明天 0 点恢复' : bw ? '约 ' + bw[1] + ' 分钟后' : '稍后再试';
+        sub = bk.text;
+        step = 'pace';
       }
     }
-    else if(qcap && w >= qcap){ tone = 'warn'; txt = '排队已满'; val = '稍后再发'; sub = '队伍最多 ' + qcap + ' 张，新请求会被拒绝'; }
+    else if(qcap && w >= qcap){ tone = 'warn'; val = '排队已满'; sub = '队伍最多 ' + qcap + ' 张，请稍后再试'; step = 'queue'; }
     else if(w + run > 0){ 
-      tone = 'busy'; txt = '运行正常'; 
+      tone = 'busy'; 
       var estSec = getEstimatedSec(w + run, iv);
       val = '约 ' + estSec + ' 秒后开始'; 
-      sub = '前面有 ' + (w + run) + ' 张，每张约 ' + iv + ' 秒'; 
+      sub = '前面有 ' + (w + run) + ' 张在等'; 
+      step = 'queue';
     }
     else { 
       lastQueueCount = 0;
-      tone = 'ok'; txt = '运行正常'; val = '马上开始'; 
+      tone = 'ok'; val = '马上开始'; sub = '通道空闲，即发即画'; step = 'client';
     }
-    if(!g.cooldown && !bk && hcap && hour >= hcap * 0.95){ tone = 'warn'; txt = '本小时出图快满了'; }
-    var tile = $id('dMe');
-    tile.dataset.tone = tone; $id('vText').textContent = txt;
-    tile.classList.toggle('mine', !!(myRun || myPos));
-    if(myRun){ val = '你的图正在生成'; sub = '预计十几秒'; mark('nai'); }
-    else if(myPos){ val = '你的图排第 ' + myPos.position + ' 位'; sub = '约 ' + Math.max(5, myPos.eta) + ' 秒后开始画'; mark('queue'); }
-    else mark(g.cooldown || bk ? 'pace' : '');
-    $id('dMeV').textContent = val; $id('dMeS').textContent = sub;
-    /* 排队 */
-    $id('dQ').textContent = w;
-    $id('dQs').textContent = '张在等 · ' + run + ' 张在画';
-    var cap = Math.max(1, Math.min(20, r.queue_cap || 10)), segs = $id('dQbar');
-    if(segs.children.length !== cap){ segs.textContent = ''; for(var i = 0; i < cap; i++) segs.appendChild(document.createElement('i')); }
-    Array.prototype.forEach.call(segs.children, function(c, i){ c.className = i < w ? (myPos && myPos.position === i + 1 ? 'me' : 'on') : ''; });
-    var qNote = '';
-    if(myPos){ qNote = '橙色是你的图'; }
-    else if(r.queue_cap && w >= r.queue_cap){ qNote = '队伍已满，新请求暂时会被拒绝，请稍后再试'; }
-    else if(bk && bk.code === 'paced' && w === 0 && run === 0){ qNote = '当前无排队任务 · 等待时段平滑放行'; }
-    $id('dQn').textContent = qNote;
-    /* 控速 */
-    $id('dP').textContent = g.hour || 0;
-    $id('dPs').textContent = '/ ' + (g.hour_cap || 0) + ' 张';
-    setBar('dPbar', g.hour || 0, g.hour_cap || 0);
-    var nx = Number(g.next_in) || 0;
-    var noteP = '';
-    if(g.hour_cap && (g.hour || 0) >= g.hour_cap){
-      noteP = '近 60 分钟已满，最早那张满 60 分钟后就有空位';
-    } else if(bk && bk.code === 'paced'){
-      noteP = '全天平稳巡航中（防封保护）；时段配额补充中，约 ' + (bw ? bw[1] + ' 分钟后放行' : '稍后放行');
-    } else if(nx > 0){
-      noteP = '下一张约 ' + Math.ceil(nx) + ' 秒后可以发';
+    if(myRun){ tone = 'mine'; val = '你的图正在生成'; sub = '预计十几秒'; step = 'nai'; }
+    else if(myPos){ tone = 'mine'; val = '你的图排第 ' + myPos.position + ' 位'; sub = '约 ' + Math.max(5, myPos.eta) + ' 秒后开始画'; step = 'queue'; }
+
+    var dot = $id('dot');
+    if(dot) dot.className = 'board-dot pulse ' + tone;
+    var stBig = $id('stBig');
+    if(stBig) stBig.textContent = val;
+    var stReason = $id('stReason');
+    if(stReason) stReason.textContent = sub;
+    var stQueue = $id('stQueue');
+    if(stQueue){
+      stQueue.textContent = myRun ? '生成中…' : (w === 0 && run === 0 ? '0 人排队' : (w > 0 ? (w + ' 人排队') : (run + ' 人在画')));
     }
-    $id('dPn').textContent = noteP;
+
+    var allSteps = document.querySelectorAll('#board [data-step]');
+    Array.prototype.forEach.call(allSteps, function(el){
+      var s = el.getAttribute('data-step');
+      el.className = 'step-badge' + (s === step ? (step === 'pace' ? ' on' : ' accent') : '');
+    });
+
     /* 额度 */
     var used45 = (q.units_today !== undefined && q.units_today !== null) ? q.units_today : (q.images_today || 0);
-    $id('d45').textContent = Math.round(used45);
-    $id('d45').title = '今天全站出图 ' + (q.images_today || 0) + ' 张';
-    $id('d45c').textContent = q.images_cap || 0;
-    setBar('d45bar', used45, q.images_cap || 0);
-    $id('d5').textContent = q.v5_today || 0;
-    $id('d5c').textContent = q.v5_cap || 0;
-    setBar('d5bar', q.v5_today || 0, q.v5_cap || 0);
+    var cap45 = q.images_cap || 1700;
+    var used5 = q.v5_today || 0;
+    var cap5 = q.v5_cap || 260;
+    if($id('dTotal')) $id('dTotal').textContent = Math.round(used45);
+    if($id('dTotalCap')) $id('dTotalCap').textContent = cap45;
+    if($id('dV5')) $id('dV5').textContent = used5;
+    if($id('dV5Cap')) $id('dV5Cap').textContent = cap5;
+
+    var pctTotal = cap45 > 0 ? Math.min(100, Math.round((used45 / cap45) * 100)) : 0;
+    var pctV5 = cap5 > 0 ? Math.min(100, Math.round((used5 / cap5) * 100)) : 0;
+    if($id('barTotal')) $id('barTotal').style.width = Math.max(0, pctTotal - (pctV5 * 0.2)) + '%';
+    if($id('barV5')) $id('barV5').style.width = Math.min(100, pctV5 * 0.3) + '%';
   }
   /* 只用查询成功过的 Key，避免输错的 Key 每秒请求一次触发防暴力破解 */
   function poll(){

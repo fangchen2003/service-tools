@@ -228,10 +228,10 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
             # 按时段放行时，超出保底的部分只能用「这个时段放出来、还剩得多」的份额：至少留半小时的量给保底内的人
             reserve = guard.values["account_daily_cap"] / 48 * len(tokens)
             if not guard.site_idle(key["id"], tokens):
-                raise main.err(429, reasons.Reason(f"已用完保底 {base} 张。当前高峰期有排队，空闲时可继续用到 {key['daily_images']} 张，请稍后再试", reasons.OVER_BASE))
+                raise main.err(429, reasons.Reason(f"保底 {base} 张已用完。当前高峰期有排队，空闲时可继续用到 {key['daily_images']} 张，请稍后再试", reasons.OVER_BASE))
             if await guard.paced_headroom(state.db, tokens, state.day()) <= reserve:
                 # 文案不能含「其他人在排队」：每日复盘按它数 base_blocks（「有余量还被拦」），这里是份额紧（Sonnet 审查 P1）
-                raise main.err(429, reasons.Reason(f"已用完保底 {base} 张。此时段余量优先供给保底成员，空闲时可继续用到 {key['daily_images']} 张，请稍后再试", reasons.OVER_BASE))
+                raise main.err(429, reasons.Reason(f"保底 {base} 张已用完。此时段余量优先供给保底成员，空闲时可继续用到 {key['daily_images']} 张，请稍后再试", reasons.OVER_BASE))
     if est["v5"] > 0:
         # V5 周额度是账户级共享资源，用全站日计数镜像（恢复量 ~190 张/天）
         try:

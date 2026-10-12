@@ -393,7 +393,7 @@ async def authenticate(request: Request, *, passive: bool = False):
         getattr(STATE, "record_auth_failure", lambda _ip: None)(client_id)
         raise err(401, "无效的 API Key")
     if not row["enabled"]:
-        raise err(403, "该 Key 已被停用")
+        raise err(403, "该 Key 已被禁用")
     if row["expires_at"] and row["expires_at"] < time.time():
         raise err(403, "该 Key 已过期")
     if passive:          # 首页每秒查排队位置：只读，不算使用，不参与防分享统计
