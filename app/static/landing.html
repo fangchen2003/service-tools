@@ -272,11 +272,12 @@ footer{max-width:960px;margin:0 auto;padding:24px 16px 40px;text-align:center;co
 .me .tag.ok{font-size:11.5px;padding:2px 8px;border-radius:999px;background:var(--ok-soft);color:var(--ok)}
 .me .link{background:none;border:0;color:var(--text-2);cursor:pointer;font-size:13px;margin-left:auto;text-decoration:underline;text-underline-offset:2px;transition:color .15s}
 .me .link:hover{color:var(--text)}
-.me-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.me-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
 .me-grid:last-child{margin-bottom:0}
 .me-grid>div{background:var(--surface);border-radius:var(--radius-sm);padding:8px 10px}
 .me-grid span{display:block;font-size:11.5px;color:var(--text-2)}
 .me-grid b{font-size:17px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.me-grid b small{font-size:11px;font-weight:400;color:var(--text-2);margin-left:3px;vertical-align:baseline}
 .lh-left{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-width:0}
 .head-key{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}
 .head-key code{font-family:var(--mono);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 9px;font-size:13px;white-space:nowrap}
@@ -297,7 +298,8 @@ footer{max-width:960px;margin:0 auto;padding:24px 16px 40px;text-align:center;co
 .me-export-btns .btn small{display:block;font-weight:400;font-size:12px;color:var(--text-2)}
 .me-export-btns .btn[aria-disabled=true]{opacity:.55;pointer-events:none}
 @media(max-width:560px){.me-export-btns{grid-template-columns:1fr}}
-@media(max-width:719px){.me-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:860px){.me-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:560px){.me-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .guest-only{}
 body.authed .guest-only{display:none!important}
 body.haskey #algoNote{display:none!important}
@@ -630,8 +632,14 @@ function renderMe(d){
           + '<div class="me-export-btns"><a class="btn exp" href="/public/my-export?format=epub">' + icon('book') + '<span>EPUB 画册<small>一图一页，附提示词和参数，手机、电脑的图书 App 都能打开</small></span></a>'
           + '<a class="btn exp" href="/public/my-export?format=zip">' + icon('image') + '<span>原图 ZIP<small>PNG 原图 + prompts.txt，适合存档或二次编辑</small></span></a></div>'
         : '<p class="muted sm">最近 ' + retDays + ' 天还没有可备份的原图。出图后会出现在这里。</p>');
+    var tm = d.timing || {};
+    var durText = (tm.avg_dur_s != null) ? (tm.avg_dur_s + ' 秒') : '暂无';
+    var durTip = (tm.avg_wait_s != null ? '我的平均排队：' + tm.avg_wait_s + ' 秒\n' : '') + '全站近24小时出图均耗：' + (tm.site_avg_dur_s != null ? tm.site_avg_dur_s + ' 秒' : '约 9 秒');
+    var durSite = tm.site_avg_dur_s != null ? ('<small title="全站近24h均耗">(' + tm.site_avg_dur_s + 's)</small>') : '';
+
     me.innerHTML = '<div class="me-grid"><div><span>今日 V4.5（张）</span><b>' + v45 + ' / ' + lim45 + '</b></div>'
       + '<div><span>今日 V5（张）</span><b' + (lim5 === '不限' ? ' title="个人不限额度，仍受全站日上限约束"' : '') + '>' + (t.v5 || 0) + ' / ' + lim5 + '</b></div>'
+      + '<div><span>生图均耗</span><b title="' + esc(durTip) + '">' + durText + durSite + '</b></div>'
       + '<div><span>出图状态</span><b>' + pos + '</b></div>'
       + '<div><span>有效期</span><b>' + (d.expires_at ? '至 ' + fmtDate(d.expires_at) : '长期') + '</b></div></div>'
       + (d.invite_unbound ? '<div class="invite-bind">' + icon('info') + '<span>这是邀请 Key，还没绑定 Discord 账号。请在 Discord 的 <code>🔑｜领取key</code> 输入 <code>/register</code>，把这把 Key 粘贴到 <code>key</code> 一栏完成绑定。</span></div>' : '')

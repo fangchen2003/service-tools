@@ -1405,3 +1405,41 @@ class Database:
                 "SELECT COALESCE(SUM(anlas),0) FROM counters WHERE substr(day,1,7)=?",
                 (today[:7],))), 2), **anomaly["month"]},
         }
+
+    async def user_image_timing(self, key_id: int) -> dict[str, Any]:
+        """返回指定 Key 的平均出图耗时（秒）及全站近 24 小时参考耗时。"""
+        now = time.time()
+        day_ago = now - 86400
+        cur = await self._db.execute(
+            """SELECT COUNT(*), AVG(dur_ms), AVG(wait_ms)
+               FROM usage_log
+               WHERE key_id=? AND kind IN ('image', 'image_stream') AND status='ok' AND dur_ms>0 AND ts>=?""",
+            (key_id, day_ago),
+        )
+        row = await cur.fetchone()
+        cnt, avg_dur, avg_wait = (row[0] or 0), row[1], row[2]
+        if cnt < 3:
+            cur_all = await self._db.execute(
+                """SELECT COUNT(*), AVG(dur_ms), AVG(wait_ms)
+                   FROM usage_log
+                   WHERE key_id=? AND kind IN ('image', 'image_stream') AND status='ok' AND dur_ms>0""",
+                (key_id,),
+            )
+            row_all = await cur_all.fetchone()
+            if row_all and row_all[0] > 0:
+                cnt, avg_dur, avg_wait = row_all[0], row_all[1], row_all[2]
+
+        cur_site = await self._db.execute(
+            """SELECT AVG(dur_ms) FROM usage_log
+               WHERE kind IN ('image', 'image_stream') AND status='ok' AND dur_ms>0 AND ts>=?""",
+            (day_ago,),
+        )
+        row_site = await cur_site.fetchone()
+        site_avg = row_site[0] if (row_site and row_site[0]) else 9000.0
+
+        return {
+            "count": int(cnt or 0),
+            "avg_dur_s": round(avg_dur / 1000.0, 1) if avg_dur else None,
+            "avg_wait_s": round(avg_wait / 1000.0, 1) if avg_wait else None,
+            "site_avg_dur_s": round(site_avg / 1000.0, 1),
+        }

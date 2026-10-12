@@ -479,6 +479,10 @@ async def public_me(request: Request):
                    images_stored=await gate.db.audit_image_count(key["id"], since=_time.time() - img_days * 86400),
                    image_retention_days=img_days)
         try:
+            out["timing"] = await gate.db.user_image_timing(key["id"])
+        except Exception:
+            out["timing"] = None
+        try:
             if await service.is_unbound_invite(key["id"]):
                 out["invite_unbound"] = True
         except Exception:

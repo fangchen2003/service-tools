@@ -33,3 +33,34 @@ def test_generated_image_totals_are_historical_and_generation_only(tmp_path):
             await db.close()
 
     asyncio.run(run())
+
+
+def test_user_image_timing(tmp_path):
+    async def run():
+        db = Database(str(tmp_path / "timing.db"))
+        await db.connect()
+        try:
+            await db._db.execute("INSERT INTO api_keys(id,name,token,created_at) VALUES(1, 'alice', 'key-1', 0)")
+            await db._db.commit()
+
+            # 初始没有日志
+            t0 = await db.user_image_timing(1)
+            assert t0["count"] == 0
+            assert t0["avg_dur_s"] is None
+
+            # 添加出图日志，dur_ms = 8000 (8s), wait_ms = 4000 (4s)
+            await db.add_log(1, "alice", "image", "v4.5", "ok", images=1, dur_ms=8000, wait_ms=4000)
+            await db.add_log(1, "alice", "image", "v4.5", "ok", images=1, dur_ms=10000, wait_ms=6000)
+            # 失败的请求不计入耗时
+            await db.add_log(1, "alice", "image", "v4.5", "error", images=0, dur_ms=5000)
+
+            t1 = await db.user_image_timing(1)
+            assert t1["count"] == 2
+            assert t1["avg_dur_s"] == 9.0
+            assert t1["avg_wait_s"] == 5.0
+            assert isinstance(t1["site_avg_dur_s"], float)
+        finally:
+            await db.close()
+
+    asyncio.run(run())
+
