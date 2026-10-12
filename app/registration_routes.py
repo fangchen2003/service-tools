@@ -425,8 +425,8 @@ async def login_with_key(request: Request, body: KeyLogin):
     row = await gate.db.get_key_by_token(token) if token.startswith("nai-") and len(token) <= 200 else None
     reg = await gate.db._db.execute_fetchall(
         "SELECT discord_id FROM discord_registrations WHERE key_id=?", (row["id"],)) if row is not None else []
-    # 没走 /register 的 Key（站长后台手动发的、测试 Key）也能登录：会话用 "key:<id>" 代替 discord_id。站长 Key 不行。
-    usable = row is not None and row["enabled"] and not row["is_admin"]
+    # 没走 /register 的 Key（站长后台手动发、测试 Key、站长自己的 Key）也能登录：会话用 "key:<id>" 代替 discord_id
+    usable = row is not None and bool(row["enabled"])
     unbound = usable and not reg
     if not usable:
         fails.append(now)
