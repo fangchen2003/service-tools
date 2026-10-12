@@ -979,7 +979,7 @@ async def delete_key(request: Request, key_id: int, ban: bool = False):
     if discord_id is not None:
         if request.query_params.get("notify", "1") != "0":
             await _notify_member(request, key_id, "你的 Key 已被站长" + (
-                "删除，并且这个 Discord 账号不能再领取。" if ban else "删除。如需继续使用，可以在 🔑｜领取key 重新 /register。"))
+                "删除，并且这个 Discord 账号不能再领取。" if ban else "删除。如需继续使用，可以在任意频道重新 /register。"))
         reason = request.query_params.get("reason", "站长手动删除并封禁")
         if ban:
             await registrar.ban(discord_id, reason=reason, banned_by="站长")

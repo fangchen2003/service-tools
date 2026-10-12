@@ -368,13 +368,13 @@ class RegistrationService:
                                  f"已保留 {hold // 3600} 小时（不私信，已在公告频道统一通知）")
                 continue
             sent = await self.send_dm(discord_id,
-                "🦉 猫头鹰公益站有空位了！为你保留 24 小时：请在 🔑｜领取key 输入 /register 领取。"
+                "🦉 猫头鹰公益站有空位了！为你保留 24 小时：请在任意频道输入 /register 领取。"
                 "超过 24 小时未领取，名额会让给下一位候补。")
             await log_action(self.db, "系统", "邀请候补", name or f"Discord {discord_id}",
                              "已私信" if sent else "私信失败（对方可能关闭了私信），名额仍保留 24 小时", ok=sent)
         if rows and not use_dm and announce is not None:
             announce(f"🦉 **候补有空位了**：已为候补前 {len(rows)} 位保留名额 {hold // 3600} 小时。"
-                     f"在候补里的朋友请到 🔑｜领取key 输入 `/register` 领取；{hold // 3600} 小时内没领，名额会顺延给下一位。")
+                     f"在候补里的朋友请到任意频道输入 `/register` 领取；{hold // 3600} 小时内没领，名额会顺延给下一位。")
         return len(rows)
 
     async def registration_profile(self, discord_id: str) -> Optional[dict]:

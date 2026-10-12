@@ -118,14 +118,15 @@ svg.ic{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-wid
 .brand-link:hover .brand-mark{filter:brightness(1.08)}
 .brand-link:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .brand-mark{width:32px;height:32px;border-radius:var(--radius-sm);font-size:20px;line-height:1;font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;flex-shrink:0}
-.top-link{color:var(--text-2);text-decoration:none;font-size:13.5px;padding:6px 8px;border-radius:6px;display:none;white-space:nowrap;flex-shrink:0;transition:color .15s,background .15s}
+.top-link{color:var(--text-2);text-decoration:none;font-size:13.5px;padding:6px 10px;border-radius:6px;display:none;align-items:center;gap:6px;white-space:nowrap;flex-shrink:0;transition:color .15s,background .15s}
+.top-link svg.ic{width:16px;height:16px;flex-shrink:0;margin-top:-1px}
 .top-link:hover{color:var(--text);background:var(--surface-3)}
 .top-link:focus-visible{outline-offset:0}
 @media (max-width:639px){
   .topbar-in{gap:8px;padding:6px 12px;min-height:50px}
   .brand-link{font-size:14.5px;gap:8px}
   .brand-mark{width:28px;height:28px;font-size:18px}
-  #navStatus{display:inline-block;font-size:12.5px;padding:4px 6px}
+  #navStatus{display:inline-flex;font-size:12.5px;padding:4px 6px}
 }
 @media (max-width:390px){
   .brand-link{font-size:13.5px;gap:6px}
@@ -221,7 +222,7 @@ code{font-family:var(--mono);font-size:12.5px;background:var(--surface-3);border
 .copyline{display:flex;align-items:center;gap:8px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px 4px 4px 12px;margin-top:4px;transition:border-color .15s,background .15s}
 .step .copyline{margin-top:0}
 .copyline:hover{border-color:var(--border-strong);background:var(--surface-3)}
-.copyline .mono{flex:1;min-width:0;overflow-wrap:anywhere;user-select:all}
+.copyline .mono{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;user-select:all}
 .guide{display:grid;gap:16px;margin-top:16px;grid-template-columns:1fr}
 .guide h3{font-size:15px;margin-bottom:8px;display:flex;gap:8px;align-items:center}
 .guide ol{counter-reset:s;display:flex;flex-direction:column;gap:8px;color:var(--text-2);font-size:14px}
@@ -254,8 +255,8 @@ footer{max-width:960px;margin:0 auto;padding:24px 16px 40px;text-align:center;co
 
 @media (min-width:640px){
   body{font-size:15.5px}
-  .top-link{display:inline-block}
-  .steps{grid-template-columns:repeat(3,1fr)}
+  .top-link{display:inline-flex}
+  .steps{grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.45fr)}
   .guide{grid-template-columns:1fr 1fr}
   .rules{grid-template-columns:1fr 1fr}
   .card{padding:24px}
@@ -274,6 +275,19 @@ footer{max-width:960px;margin:0 auto;padding:24px 16px 40px;text-align:center;co
 .me .tag.ok{font-size:11.5px;padding:2px 8px;border-radius:999px;background:var(--ok-soft);color:var(--ok)}
 .me .link{background:none;border:0;color:var(--text-2);cursor:pointer;font-size:13px;margin-left:auto;text-decoration:underline;text-underline-offset:2px;transition:color .15s}
 .me .link:hover{color:var(--text)}
+.me-tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:8px}
+.me-tile{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 12px;display:flex;align-items:center;justify-content:space-between;min-height:42px}
+.me-tile .me-tag{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.02em}
+.me-tile.v5 .me-tag{color:var(--v5)}
+.me-tile .me-num{display:flex;align-items:baseline;gap:3px}
+.me-tile .me-num b{font-size:19px;font-weight:800;color:var(--text);font-variant-numeric:tabular-nums;line-height:1}
+.me-tile.v5 .me-num b{color:var(--v5)}
+.me-tile .me-num span{font-size:11.5px;font-weight:500;color:var(--muted);font-variant-numeric:tabular-nums}
+.me-foot{display:flex;align-items:center;justify-content:space-between;font-size:11.5px;color:var(--muted);padding:2px 4px 0}
+.me-foot b{color:var(--text-2);font-weight:600;font-variant-numeric:tabular-nums}
+.me-foot .btn-text{background:none;border:0;color:var(--accent-text);padding:0;cursor:pointer;font-size:11.5px;font-weight:500}
+.me-foot .btn-text:hover{text-decoration:underline}
+.me-busy{margin-top:8px;padding:8px 12px;border-radius:var(--radius-sm);background:var(--warn-soft);color:var(--warn);font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:6px}
 .me-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
 .me-grid:last-child{margin-bottom:0}
 .me-grid>div{background:var(--surface);border-radius:var(--radius-sm);padding:8px 10px}
@@ -394,7 +408,7 @@ body.authed #board{margin-top:22px}
     <ol class="steps">
       <li class="card step"><h3><span class="n">1</span>加入 Discord</h3>
         <div class="step-act" id="discordSlot"></div></li>
-      <li class="card step"><h3><span class="n">2</span>领取你的 Key</h3><p>在 <code>🔑｜领取key</code> 输入 <code>/register</code></p></li>
+      <li class="card step"><h3><span class="n">2</span>领取你的 Key</h3><p>在任意频道输入 <code>/register</code></p></li>
       <li class="card step"><h3><span class="n">3</span>填入客户端</h3>
         <div class="copyline"><span class="mono" id="siteTxt1">—</span><button class="btn mini icon" type="button" data-copy="site" aria-label="复制" title="复制"><span data-ic="copy"></span></button></div>
       </li>
@@ -613,14 +627,13 @@ function renderMe(d){
   lr.hidden = true; me.hidden = false;
   var dc = d.discord || {}, nm = esc(dc.display_name || dc.username || '成员');
   if(!d.has_key){
-    var tip = '到 Discord 的 🔑｜领取key 频道输入 <code>/register</code> 即可领取。';
+    var tip = '在 Discord 任意频道输入 <code>/register</code> 即可领取。';
     me.innerHTML = '<p class="me-empty">你好，' + nm + '！你还没有 Key。' + tip + '</p>';
   }else{
     var t = d.today || {}, q = d.queue || [];
     var v45 = t.legacy != null ? t.legacy : Math.max(0, (t.images || 0) - (t.v5 || 0));
     var lim45 = t.daily_images > 0 ? t.daily_images : '不限';
     var lim5 = t.daily_v5 > 0 ? t.daily_v5 : (d.image_scope === 'all' ? '不限' : '0');
-    var pos = q.length ? (q[0].state === 'running' ? '生成中' : '排队第 ' + q[0].position + ' 位') : '空闲';
     if(hk){
       hk.innerHTML = '<code title="你的 Key（已打码）">' + esc(maskKey(d.key)) + '</code>'
         + '<button class="btn primary mini" id="copyKeyBtn" type="button">' + icon('copy') + '复制 Key</button>';
@@ -628,29 +641,39 @@ function renderMe(d){
     }
     var retDays = d.image_retention_days != null ? d.image_retention_days : 3;
     var expBlock = retDays === 0
-      ? '<p class="muted sm">原图下载暂未开放。</p>'
+      ? ''
       : (d.images_stored
-        ? '<p class="muted sm">可以打包你最近 ' + retDays + ' 天的 ' + d.images_stored + ' 张原图，用来找回客户端里误删的图。这不是长期相册，请自己保存好；打包较重，每分钟限 1 次。</p>'
+        ? '<div class="me-export"><div class="me-export-h">' + icon('archive') + '作品备份<span class="beta">beta</span></div>'
+          + '<p class="muted sm">可以打包你最近 ' + retDays + ' 天的 ' + d.images_stored + ' 张原图，用来找回客户端里误删的图。这不是长期相册，请自己保存好；打包较重，每分钟限 1 次。</p>'
           + '<div class="me-export-btns"><a class="btn exp" href="/public/my-export?format=epub">' + icon('book') + '<span>EPUB 画册<small>一图一页，附提示词和参数，手机、电脑的图书 App 都能打开</small></span></a>'
-          + '<a class="btn exp" href="/public/my-export?format=zip">' + icon('image') + '<span>原图 ZIP<small>PNG 原图 + prompts.txt，适合存档或二次编辑</small></span></a></div>'
-        : '<p class="muted sm">最近 ' + retDays + ' 天还没有可备份的原图。出图后会出现在这里。</p>');
+          + '<a class="btn exp" href="/public/my-export?format=zip">' + icon('image') + '<span>原图 ZIP<small>PNG 原图 + prompts.txt，适合存档或二次编辑</small></span></a></div></div>'
+        : '<div class="me-export"><div class="me-export-h">' + icon('archive') + '作品备份<span class="beta">beta</span></div>'
+          + '<p class="muted sm">最近 ' + retDays + ' 天还没有可备份的原图。出图后会出现在这里。</p></div>');
     var tm = d.timing || {};
-    var durText = (tm.avg_dur_s != null) ? (tm.avg_dur_s + ' 秒') : '暂无';
-    var durTip = (tm.avg_wait_s != null ? '我的平均排队：' + tm.avg_wait_s + ' 秒\n' : '') + '全站近24小时出图均耗：' + (tm.site_avg_dur_s != null ? tm.site_avg_dur_s + ' 秒' : '约 9 秒');
-    var durSite = tm.site_avg_dur_s != null ? ('<small title="全站近24h均耗">(' + tm.site_avg_dur_s + 's)</small>') : '';
+    var durText = (tm.avg_dur_s != null) ? (tm.avg_dur_s + 's') : '—';
+    var expText = d.expires_at ? fmtDate(d.expires_at).slice(5, 10) : '长期';
+    var busyHtml = '';
+    if(q.length){
+      if(q[0].state === 'running') busyHtml = '<div class="me-busy">' + icon('image') + '<span>你的图正在生成，预计十几秒</span></div>';
+      else busyHtml = '<div class="me-busy">' + icon('clock') + '<span>你的图排在第 ' + q[0].position + ' 位</span></div>';
+    }
 
-    me.innerHTML = '<div class="me-grid"><div><span>今日 V4.5（张）</span><b>' + v45 + ' / ' + lim45 + '</b></div>'
-      + '<div><span>今日 V5（张）</span><b' + (lim5 === '不限' ? ' title="个人不限额度，仍受全站日上限约束"' : '') + '>' + (t.v5 || 0) + ' / ' + lim5 + '</b></div>'
-      + '<div><span>生图均耗</span><b title="' + esc(durTip) + '">' + durText + durSite + '</b></div>'
-      + '<div><span>出图状态</span><b>' + pos + '</b></div>'
-      + '<div><span>有效期</span><b>' + (d.expires_at ? '至 ' + fmtDate(d.expires_at) : '长期') + '</b></div></div>'
-      + (d.invite_unbound ? '<div class="invite-bind">' + icon('info') + '<span>这是邀请 Key，还没绑定 Discord 账号。请在 Discord 的 <code>🔑｜领取key</code> 输入 <code>/register</code>，把这把 Key 粘贴到 <code>key</code> 一栏完成绑定。</span></div>' : '')
+    me.innerHTML = '<div class="me-tiles">'
+      + '<div class="me-tile"><span class="me-tag">V4.5</span><div class="me-num"><b class="num">' + v45 + '</b><span> / ' + lim45 + '</span></div></div>'
+      + '<div class="me-tile v5"><span class="me-tag">V5</span><div class="me-num"><b class="num"' + (lim5 === '不限' ? ' title="个人不限额度，仍受全站日上限约束"' : '') + '>' + (t.v5 || 0) + '</b><span> / ' + lim5 + '</span></div></div>'
+      + '</div>'
+      + '<div class="me-foot">'
+      + '<div>均耗 <b class="num">' + durText + '</b></div>'
+      + '<div>有效期至 <b class="num">' + expText + '</b></div>'
+      + '<button type="button" class="btn-text" id="copyKeyInline">复制Key</button>'
+      + '</div>'
+      + busyHtml
+      + (d.invite_unbound ? '<div class="invite-bind">' + icon('info') + '<span>这是邀请 Key，还没绑定 Discord 账号。请在 Discord 任意频道输入 <code>/register</code>，把这把 Key 粘贴到 <code>key</code> 一栏完成绑定。</span></div>' : '')
       + shareCheckHtml(d.share_check)
       + couponsHtml(d.coupons || [])
-      + '<div class="me-export"><div class="me-export-h">' + icon('archive') + '作品备份<span class="beta">beta</span></div>'
-      + expBlock
-      + '</div>';
+      + expBlock;
     var ck = $('copyKeyBtn'); if(ck) ck.onclick = function(){ copyText(d.key, '已复制 Key'); };
+    var cki = $('copyKeyInline'); if(cki) cki.onclick = function(){ copyText(d.key, '已复制 Key'); };
     bindCoupons(me);
     bindShareCheck(me);
     Array.prototype.forEach.call(me.querySelectorAll('a.exp'), function(a){
@@ -832,7 +855,7 @@ function fmtDate(sec){
       if(bk.code === 'paced'){
         tone = 'paced'; txt = BLOCK_TITLE.paced;
         val = bw ? '约 ' + bw[1] + ' 分钟后放行' : '时段平滑放行中';
-        sub = '为防封控与保障晚高峰，配额全天平稳补给；约 ' + (bw ? bw[1] + ' 分钟后' : '稍后') + '自动放行下一批出图';
+        sub = '全天平稳补给中，到点自动放行';
       } else {
         tone = bk.code === 'breaker' ? 'bad' : 'warn'; txt = BLOCK_TITLE[bk.code] || '暂时不能出图';
         val = bk.code === 'daily_cap' ? '明天 0 点恢复' : bw ? '约 ' + bw[1] + ' 分钟后' : '稍后再试'; sub = bk.text;
@@ -853,7 +876,7 @@ function fmtDate(sec){
     var tile = $id('dMe');
     tile.dataset.tone = tone; $id('vText').textContent = txt;
     tile.classList.toggle('mine', !!(myRun || myPos));
-    if(myRun){ val = '你的图正在生成'; sub = '通常十几秒，画好直接回到客户端'; mark('nai'); }
+    if(myRun){ val = '你的图正在生成'; sub = '预计十几秒'; mark('nai'); }
     else if(myPos){ val = '你的图排第 ' + myPos.position + ' 位'; sub = '约 ' + Math.max(5, myPos.eta) + ' 秒后开始画'; mark('queue'); }
     else mark(g.cooldown || bk ? 'pace' : '');
     $id('dMeV').textContent = val; $id('dMeS').textContent = sub;

@@ -122,7 +122,7 @@ async def set_registration(db, body: dict, state=None, service=None) -> None:
             if not after["open"]:
                 text = "📢 **名额公告**：自助领取已暂停，已领取的成员不受影响。"
             elif not before["open"]:
-                text = f"📢 **名额公告**：自助领取已开放{left}。在 🔑｜领取key 输入 `/register` 即可。"
+                text = f"📢 **名额公告**：自助领取已开放{left}。在任意频道输入 `/register` 即可。"
             else:
                 text = f"📢 **名额公告**：名额上限已调整{left}。"
             announcer.post(text)
