@@ -21,6 +21,7 @@ ADMIN_ACTIONS = {
     ("POST", "/keys/{key_id}/regenerate"): "重新生成 Key",
     ("PATCH", "/keys/{key_id}"): "修改 Key",
     ("POST", "/keys/{key_id}/reset-daily-image-quota"): "重置今日额度",
+    ("POST", "/keys/{key_id}/bind-discord"): "手动绑定 Discord",
     ("DELETE", "/keys/{key_id}"): "删除 Key",
     ("PUT", "/keys/{key_id}/tags"): "成员标签",
     ("POST", "/keys/{key_id}/coupons"): "发重置券",

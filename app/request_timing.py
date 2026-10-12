@@ -35,6 +35,9 @@ def begin(scope) -> object:
     if is_aalice or "dart" in ua.lower():
         if not cname.startswith("Aaalice"):
             cname = f"Aaalice_NAI_Launcher ({cname})"[:CLIENT_MAX]
+    elif "dsh" in ua.lower():
+        if not cname.startswith("DSH-Tavern"):
+            cname = f"DSH-Tavern-Image ({cname})"[:CLIENT_MAX]
     elif "luker" in ua.lower():
         if not cname.startswith("Luker"):
             cname = f"Luker ({cname})"[:CLIENT_MAX]
@@ -134,3 +137,29 @@ def set_source(label: str) -> None:
     holder = _TIMING.get()
     if holder is not None:
         holder["src"] = label or ""
+
+
+def refine_client_from_payload(body: dict) -> None:
+    """对无明确自报 UA 的客户端，利用 Payload 参数指纹进行精准识别（如 dsh-tavern-image）。"""
+    holder = _TIMING.get()
+    if holder is None or not isinstance(body, dict):
+        return
+    current = holder.get("client", "")
+    if current.startswith(("Aaalice", "Luker", "TauriTavern", "NAI-Workbench", "DSH-Tavern")):
+        return
+
+    params = body.get("parameters") if isinstance(body.get("parameters"), dict) else {}
+    v4_prompt = params.get("v4_prompt") if isinstance(params.get("v4_prompt"), dict) else {}
+
+    # dsh-tavern-image (weixinlll/dsh-tavern-image) 专有特征指纹
+    if (
+        body.get("action") == "generate"
+        and params.get("params_version") == 3
+        and params.get("ucPreset") == 3
+        and v4_prompt.get("use_order") is True
+        and v4_prompt.get("use_coords") is False
+        and params.get("add_original_image") is True
+        and params.get("controlnet_strength") == 1
+    ):
+        suffix = f" ({current})" if current else ""
+        holder["client"] = f"DSH-Tavern-Image{suffix}"[:CLIENT_MAX]

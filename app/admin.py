@@ -711,6 +711,56 @@ async def reset_daily_image_quota(request: Request, key_id: int):
     return {"ok": True, "key": _key_json(row, counter, totals.get(key_id, 0))}
 
 
+@router.post("/keys/{key_id}/bind-discord")
+async def bind_discord(request: Request, key_id: int):
+    """管理员手动给指定 Key 绑定或换绑 Discord 账号。"""
+    require_admin(request)
+    body = await read_json_body(request)
+    if not isinstance(body, dict):
+        raise HTTPException(422, "参数必须是对象")
+    discord_id = str(body.get("discord_id") or "").strip()
+    if not discord_id.isdecimal():
+        raise HTTPException(422, "Discord ID 必须是纯数字")
+    username = str(body.get("username") or "").strip()[:80]
+    display_name = str(body.get("display_name") or username)[:80]
+    st = request.app.state.gate
+    row = await st.db.get_key(key_id)
+    if not row:
+        raise HTTPException(404, "key 不存在")
+
+    # 检查 discord_id 是否已被其他 key 占用
+    existing = await st.db._db.execute_fetchall(
+        "SELECT key_id FROM discord_registrations WHERE discord_id=?", (discord_id,)
+    )
+    if existing and existing[0][0] != key_id:
+        raise HTTPException(400, f"该 Discord 账号已绑定到 Key #{existing[0][0]}")
+
+    # 检查当前 key 是否已有绑定
+    key_existing = await st.db._db.execute_fetchall(
+        "SELECT discord_id FROM discord_registrations WHERE key_id=?", (key_id,)
+    )
+    if key_existing:
+        await st.db._db.execute(
+            "UPDATE discord_registrations SET discord_id=?, username=?, display_name=? WHERE key_id=?",
+            (discord_id, username, display_name, key_id)
+        )
+    else:
+        await st.db._db.execute(
+            "INSERT INTO discord_registrations(discord_id, key_id, created_at, username, display_name, avatar) "
+            "VALUES (?,?,?,?,?,?)",
+            (discord_id, key_id, time.time(), username, display_name, "")
+        )
+    await st.db._db.commit()
+    await log_action(st.db, "站长", "手动绑定 Discord", f"Key #{key_id} {row['name']}", f"@{username} ({discord_id})")
+
+    reg_rows = await st.db._db.execute_fetchall(
+        "SELECT key_id, discord_id, username, display_name, avatar, created_at FROM discord_registrations WHERE key_id=?",
+        (key_id,)
+    )
+    reg = reg_rows[0] if reg_rows else None
+    return {"ok": True, "discord_id": discord_id, "discord": _discord_profile(reg) if reg else None}
+
+
 @router.post("/keys/{key_id}/coupons")
 async def give_coupon(request: Request, key_id: int):
     """给成员发一张券（现在只有重置券）：{"kind": "reset", "days": 7, "note": "唱得真好听"}。成员在首页自己使用。"""

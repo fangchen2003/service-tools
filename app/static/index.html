@@ -2172,8 +2172,10 @@ function memberPanel(m, now){
       <p class="muted sm" style="margin:8px 0 0">近 7 天 ${m.week.images} 张 · 累计 ${m.total_images} 张</p></div>`;
   const mode = m.is_admin ? '' : (m.quota_auto ? '算法' : '手动');
   const anl = !k.allow_anlas ? (m.quota_auto ? '今天没分配' : '关闭') : `${inf(Math.round(k.daily_anlas||0))}/天`;
+  const resetInfo = m.reset_today && m.reset_today.count ? `<dt>今日重置</dt><dd class="warn-text" title="最近重置时间：${fullTime(m.reset_today.last_ts)}">已重置 <b>${m.reset_today.count}</b> 次（最近 ${rel(m.reset_today.last_ts)}）</dd>` : '';
   const settings = `<div><h4>额度与权限${mode ? ` <span class="h4-note">${mode}</span>` : ''}</h4>
       <dl class="kv">${m.is_admin ? '' : `<dt>每天</dt><dd>V4.5 ${inf(k.daily_images)}${k.image_model_scope==='all' ? ` · V5 ${inf(k.daily_v5)}` : ' · 不能用 V5'}</dd>`}
+        ${resetInfo}
         <dt>Anlas</dt><dd>${esc(anl)}</dd>
         <dt>功能</dt><dd><div class="chips">${featChips(k.features)}</div></dd>
         <dt>到期</dt><dd>${esc(exp)}</dd>
@@ -2184,7 +2186,7 @@ function memberPanel(m, now){
   const tags = userTags(m);
   const info = `<div><h4>资料</h4><dl class="kv">
       <dt>Key</dt><dd class="keyline" data-kid="${k.id}"><span class="mono" data-tok="${esc(k.token)}">${esc(mask(k.token))}</span><button class="btn mini ghost" type="button" data-act="copy-key">${ic('copy')}复制</button></dd>
-      ${dcId ? `<dt>Discord</dt><dd>${dc && dc.username ? '@' + esc(dc.username) : esc(dcId)} ${prof ? `<a class="btn mini ghost" href="${esc(prof)}" target="_blank" rel="noopener noreferrer">打开</a>` : ''}<button class="btn mini ghost" type="button" data-act="copy-dc" data-dcid="${esc(dcId)}">复制 ID</button></dd>` : ''}
+      ${dcId ? `<dt>Discord</dt><dd>${dc && dc.username ? '@' + esc(dc.username) : esc(dcId)} ${prof ? `<a class="btn mini ghost" href="${esc(prof)}" target="_blank" rel="noopener noreferrer">打开</a>` : ''}<button class="btn mini ghost" type="button" data-act="copy-dc" data-dcid="${esc(dcId)}">复制 ID</button><button class="btn mini ghost" type="button" data-act="bind-dc" data-id="${k.id}" data-dcid="${esc(dcId)}" data-user="${esc((dc&&dc.username)||'')}">换绑</button></dd>` : `<dt>Discord</dt><dd><span class="muted">未绑定</span> <button class="btn mini ghost" type="button" data-act="bind-dc" data-id="${k.id}">手动绑定</button></dd>`}
       <dt>${m.discord_id ? '领取' : '创建'}</dt><dd title="${esc(fullTime(m.registered_at))}">${m.registered_at ? esc(rel(m.registered_at)) : '—'}</dd>
       <dt>最近使用</dt><dd title="${esc(fullTime(k.last_used_at))}">${k.last_used_at ? esc(rel(k.last_used_at)) : '从未使用'}</dd>
       ${m.last_client ? `<dt>常用设备</dt><dd title="${esc(m.last_client)}">${esc(formatClient(m.last_client))}</dd>` : ''}
@@ -2198,7 +2200,7 @@ function memberPanel(m, now){
   return `<tr class="mx" data-mx="${m.id}"><td colspan="5"><div class="mx2">${head}${todo}
     <div class="mx-sec mx-cols">${today}${settings}${info}</div>
     <div class="share-ev" id="sev-${k.id}"></div>
-    <div class="mx-foot">${k ? `<button class="btn mini" type="button" data-act="reset-quota" data-id="${m.id}">重置今日额度</button>` : ''}
+    <div class="mx-foot">${k ? `<button class="btn mini" type="button" data-act="reset-quota" data-id="${m.id}">重置今日额度${m.reset_today && m.reset_today.count ? ` (${m.reset_today.count})` : ''}</button>` : ''}
       <button class="btn mini" type="button" data-act="view-audit" data-id="${m.id}">生成记录</button>
       <button class="btn mini" type="button" data-act="give-coupon" data-id="${k.id}" title="成员在首页自己点一下，重置当天的 V5 额度；7 天内有效">🎟️ 发重置券</button><span class="sp"></span>${more}</div></div></td></tr>`;
 }
@@ -2725,6 +2727,26 @@ async function resetDailyImageQuota(id){
     membersCache = null; loadMembers();
   }catch(e){ toastErr(e); }
 }
+async function bindDiscordModal(id, currentDcId='', currentUsername=''){
+  const key = keysCache.find(k=>k.id===id); if(!key) return;
+  const name = findMember(id) ? memberLabel(findMember(id)) : key.name;
+  const dcId = prompt(`为「${name}」绑定 Discord 账号\n请输入该成员的 Discord 用户 ID（17~20 位纯数字，在 Discord 开启开发者模式后右键头像复制）：`, currentDcId || '');
+  if(!dcId || !dcId.trim()) return;
+  const cleanId = dcId.trim();
+  if(!/^\d{17,20}$/.test(cleanId)){
+    toast('Discord ID 必须是 17~20 位纯数字', 'err');
+    return;
+  }
+  const username = prompt(`请输入该成员的 Discord 用户名（仅作后台备注展示，如 yuexiaying）：`, currentUsername || '') || '';
+  try{
+    await api('/admin/api/keys/'+id+'/bind-discord', {
+      method: 'POST',
+      body: JSON.stringify({ discord_id: cleanId, username: username.trim() })
+    });
+    toast(`已成功为「${name}」绑定 Discord 账号`, 'ok');
+    membersCache = null; loadMembers();
+  }catch(e){ toastErr(e); }
+}
 /* ---------- logs ---------- */
 function fmtTiming(l){
   const sec = ms => ms >= 10000 ? Math.round(ms/1000) + 's' : (ms/1000).toFixed(1) + 's';
@@ -2751,6 +2773,7 @@ function formatClient(ua){
   if(/Luker/i.test(ua)) return 'Luker 酒馆客户端';
   if(/TauriTavern|Tauri/i.test(ua)) return 'TauriTavern';
   if(/NAI-Workbench|workbench/i.test(ua)) return 'NAI 工作台 (官方)';
+  if(/DSH-Tavern|dsh-tavern-image|dsh-tavern/i.test(ua)) return 'DSH Tavern 配图插件';
   if(/SillyTavern/i.test(ua)) return 'SillyTavern';
   if(/undici/i.test(ua)) return 'SillyTavern (酒馆/智绘姬)';
   if(/axios/i.test(ua)) return 'axios (聊天前端/脚本)';
@@ -3213,6 +3236,7 @@ document.addEventListener('click', ev=>{
     case 'give-coupon': giveCoupon(id, el); break;
     case 'tag-del': delMemberTag(id, el.dataset.tag); break;
     case 'reset-quota': resetDailyImageQuota(id); break;
+    case 'bind-dc': bindDiscordModal(id, el.dataset.dcid || '', el.dataset.user || ''); break;
     case 'copy-key': copyKey(el); break;
     case 'copy-modal-msg': { const v=$('#keyModalText').value; copyText(v, '已复制整段消息').then(ok=>{ if(!ok){ $('#keyModalText').select(); toast('请按 Ctrl/Cmd+C 复制', 'err'); } }); break; }
     case 'copy-modal-key': { const v=$('#keyModalVal').value; copyText(v).then(ok=>{ if(!ok){ $('#keyModalVal').select(); toast('请按 Ctrl/Cmd+C 复制', 'err'); } }); break; }

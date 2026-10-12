@@ -79,6 +79,46 @@ async def test_admin_members_returns_last_client(tmp_path):
         await db.close()
 
 
+@pytest.mark.asyncio
+async def test_admin_bind_discord(tmp_path):
+    from types import SimpleNamespace
+    db = Database(str(tmp_path / "test_bind.db"))
+    await db.connect()
+    try:
+        await db._db.execute("INSERT INTO api_keys(id, name, token, created_at) VALUES (1, 'invite-4', 'tok-4', 100)")
+        await db._db.commit()
+
+        settings = Settings(admin_password="test-password-123", secret_key="test-secret", data_dir=tmp_path, admin_cookie_secure=False)
+        app = FastAPI()
+        async def fake_hit_login(ip):
+            return True
+
+        gate = SimpleNamespace(
+            db=db,
+            settings=settings,
+            day=lambda: "2026-10-11",
+            week_days=lambda n: ["2026-10-11"],
+            hit_login=fake_hit_login,
+        )
+        app.state.gate = gate
+        app.include_router(router)
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            login_resp = await client.post("/admin/api/login", json={"password": "test-password-123"})
+            assert login_resp.status_code == 200
+
+            bind_resp = await client.post("/admin/api/keys/1/bind-discord", json={"discord_id": "1134557553011998840", "username": "yuexiaying"})
+            assert bind_resp.status_code == 200
+            assert bind_resp.json()["ok"] is True
+            assert bind_resp.json()["discord_id"] == "1134557553011998840"
+
+            resp = await client.get("/admin/api/members")
+            data = resp.json()
+            assert data["members"][0]["discord_id"] == "1134557553011998840"
+    finally:
+        await db.close()
+
+
 def test_request_timing_identifies_aalice_launcher_and_luker():
     from app import request_timing
     # Test Aaalice Launcher with x-correlation-id
@@ -103,4 +143,41 @@ def test_request_timing_identifies_aalice_launcher_and_luker():
     token = request_timing.begin(scope_luker)
     snap = request_timing.snapshot()
     assert snap["client"].startswith("Luker")
+    request_timing.end(token)
+
+    # Test DSH Tavern Image client by UA
+    scope_dsh = {
+        "headers": [
+            (b"user-agent", b"dsh-tavern-image/2.5.1"),
+        ]
+    }
+    token = request_timing.begin(scope_dsh)
+    snap = request_timing.snapshot()
+    assert snap["client"].startswith("DSH-Tavern-Image")
+    request_timing.end(token)
+
+    # Test DSH Tavern Image client by payload fingerprint (undici / generic UA)
+    scope_undici = {
+        "headers": [
+            (b"user-agent", b"undici"),
+        ]
+    }
+    token = request_timing.begin(scope_undici)
+    dsh_payload = {
+        "action": "generate",
+        "parameters": {
+            "params_version": 3,
+            "ucPreset": 3,
+            "add_original_image": True,
+            "controlnet_strength": 1,
+            "v4_prompt": {
+                "use_order": True,
+                "use_coords": False,
+                "caption": {"base_caption": "1girl", "char_captions": []},
+            },
+        },
+    }
+    request_timing.refine_client_from_payload(dsh_payload)
+    snap = request_timing.snapshot()
+    assert snap["client"].startswith("DSH-Tavern-Image")
     request_timing.end(token)

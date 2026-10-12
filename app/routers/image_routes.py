@@ -527,6 +527,7 @@ async def _generate_image(request: Request, *, streaming: bool):
     await main.require_feature(key, "image")
     body = await read_image_payload(request)
     request_timing.set_model(str(body.get("model") or ""))
+    request_timing.refine_client_from_payload(body)
     if not isinstance(body.get("parameters"), dict):
         raise main.err(400, "缺少 parameters 对象")
     try:
