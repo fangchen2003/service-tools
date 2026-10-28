@@ -759,84 +759,81 @@ async def quote_identity(request: Request):
 async def quote_image(request: Request):
     """Read local policy without touching usage, queues, logs or upstream accounts."""
     key = await authenticate(request, touch=False)
-    if STATE.image_quote_slots.locked():
-        raise err(429, "报价处理繁忙，请稍后再试")
-    async with STATE.image_quote_slots:
-        query = await read_json(request)
-        if set(query) - {"operation", "payload", "pending_vibe_indices"}:
-            raise err(400, "报价请求包含未知字段")
-        operation, body = query.get("operation"), query.get("payload")
-        if (not isinstance(operation, str)
-                or operation not in {"generate-image", "upscale", "augment-image", "encode-vibe"}
-                or not isinstance(body, dict)):
-            raise err(400, "报价需要有效的 operation 和 payload")
-        body = copy.deepcopy(body)
-        take_cost_limit(body)
-        pending = query.get("pending_vibe_indices", [])
-        if (not isinstance(pending, list) or len(pending) > 16
-                or any(type(index) is not int for index in pending) or len(set(pending)) != len(pending)
-                or (pending and operation != "generate-image")):
-            raise err(400, "Vibe 待编码索引无效")
-        encoding_count = 0
-        if pending:
-            p = body.get("parameters")
-            refs = p.get("reference_image_multiple") if isinstance(p, dict) else None
-            extracted = p.get("reference_information_extracted_multiple") if isinstance(p, dict) else None
-            if (not isinstance(refs, list) or not isinstance(extracted, list)
-                    or any(not 0 <= index < min(len(refs), len(extracted)) for index in pending)):
-                raise err(400, "Vibe 待编码索引与参考图不匹配")
-            encodings = set()
-            for index in pending:
-                payload = prepare_vibe_encoding({"model": body.get("model"), "image": refs[index],
-                                                 "informationExtracted": extracted[index]})
-                encodings.add((payload["image"], payload["information_extracted"]))
-                # Only the quote copy uses this placeholder; no request is dispatched.
-                refs[index] = "cGVuZGluZy12aWJl"
-            encoding_count = len(encodings)
-        notes = []
-        legacy = 0
-        output_size = None
-        billing_size = None
-        if operation == "generate-image":
-            body, tier, notes, _ = await prepare_image_generation(body, key)
-            async with STATE.image_budget_lock:
-                try:
-                    if tier == "v5":
-                        price, changes = await resolve_v5_price(body, key)
-                        notes.extend(changes)
-                    else:
-                        price = estimate_image_cost(body)
-                except (TypeError, ValueError, OverflowError):
-                    raise err(400, "图片参数无效，无法报价") from None
-                legacy = int(tier == "legacy" and legacy_normal_free_eligible(body))
-                await quota_image_check(key, {**price, "anlas": price["anlas"] + encoding_count * VIBE_ENCODING_ANLAS},
-                                        legacy_free_images=legacy)
-            p = body["parameters"]
-            billing_size = image_cost_size(body, int(p.get("width", 832)), int(p.get("height", 1216)))
-            output_size = max_enhance_sizes(p["width"], p["height"])[1] if p.get("upscaled_enhance") else billing_size
-        elif operation == "encode-vibe":
-            body = prepare_vibe_encoding(body)
-            price = {"anlas": VIBE_ENCODING_ANLAS, "v5": 0}
-        else:
-            check_image_tool_permission(key)
+    query = await read_json(request)
+    if set(query) - {"operation", "payload", "pending_vibe_indices"}:
+        raise err(400, "报价请求包含未知字段")
+    operation, body = query.get("operation"), query.get("payload")
+    if (not isinstance(operation, str)
+            or operation not in {"generate-image", "upscale", "augment-image", "encode-vibe"}
+            or not isinstance(body, dict)):
+        raise err(400, "报价需要有效的 operation 和 payload")
+    body = copy.deepcopy(body)
+    take_cost_limit(body)
+    pending = query.get("pending_vibe_indices", [])
+    if (not isinstance(pending, list) or len(pending) > 16
+            or any(type(index) is not int for index in pending) or len(set(pending)) != len(pending)
+            or (pending and operation != "generate-image")):
+        raise err(400, "Vibe 待编码索引无效")
+    encoding_count = 0
+    if pending:
+        p = body.get("parameters")
+        refs = p.get("reference_image_multiple") if isinstance(p, dict) else None
+        extracted = p.get("reference_information_extracted_multiple") if isinstance(p, dict) else None
+        if (not isinstance(refs, list) or not isinstance(extracted, list)
+                or any(not 0 <= index < min(len(refs), len(extracted)) for index in pending)):
+            raise err(400, "Vibe 待编码索引与参考图不匹配")
+        encodings = set()
+        for index in pending:
+            payload = prepare_vibe_encoding({"model": body.get("model"), "image": refs[index],
+                                             "informationExtracted": extracted[index]})
+            encodings.add((payload["image"], payload["information_extracted"]))
+            # Only the quote copy uses this placeholder; no request is dispatched.
+            refs[index] = "cGVuZGluZy12aWJl"
+        encoding_count = len(encodings)
+    notes = []
+    legacy = 0
+    output_size = None
+    billing_size = None
+    if operation == "generate-image":
+        body, tier, notes, _ = await prepare_image_generation(body, key)
+        async with STATE.image_budget_lock:
             try:
-                body, cost = await anyio.to_thread.run_sync(prepare_tool, body, operation)
-            except ValueError as exc:
-                raise err(400, str(exc)) from None
-            price = {"anlas": cost, "v5": 0}
-        if operation != "generate-image":
-            async with STATE.image_budget_lock:
-                await quota_image_check(key, price)
-        encoding_cost = encoding_count * VIBE_ENCODING_ANLAS
-        p = body.get("parameters", {})
-        return {"source": "gate", "anlas": price["anlas"] + encoding_cost, "v5": price["v5"],
-                "generation_anlas": price["anlas"], "encoding_anlas": encoding_cost,
-                "encoding_count": encoding_count, "legacy_free_images": legacy,
-                "cost_limit": price, "encoding_cost_limit": {"anlas": VIBE_ENCODING_ANLAS, "v5": 0},
-                "effective_model": body.get("model"),
-                "effective_parameters": {name: p[name] for name in ("width", "height", "steps", "sampler", "upscaled_enhance") if name in p},
-                "billing_size": billing_size, "output_size": output_size, "notes": notes,
-                "upstream_allowance_verified": False}
+                if tier == "v5":
+                    price, changes = await resolve_v5_price(body, key)
+                    notes.extend(changes)
+                else:
+                    price = estimate_image_cost(body)
+            except (TypeError, ValueError, OverflowError):
+                raise err(400, "图片参数无效，无法报价") from None
+            legacy = int(tier == "legacy" and legacy_normal_free_eligible(body))
+            await quota_image_check(key, {**price, "anlas": price["anlas"] + encoding_count * VIBE_ENCODING_ANLAS},
+                                    legacy_free_images=legacy)
+        p = body["parameters"]
+        billing_size = image_cost_size(body, int(p.get("width", 832)), int(p.get("height", 1216)))
+        output_size = max_enhance_sizes(p["width"], p["height"])[1] if p.get("upscaled_enhance") else billing_size
+    elif operation == "encode-vibe":
+        body = prepare_vibe_encoding(body)
+        price = {"anlas": VIBE_ENCODING_ANLAS, "v5": 0}
+    else:
+        check_image_tool_permission(key)
+        try:
+            body, cost = await anyio.to_thread.run_sync(prepare_tool, body, operation)
+        except ValueError as exc:
+            raise err(400, str(exc)) from None
+        price = {"anlas": cost, "v5": 0}
+    if operation != "generate-image":
+        async with STATE.image_budget_lock:
+            await quota_image_check(key, price)
+    encoding_cost = encoding_count * VIBE_ENCODING_ANLAS
+    p = body.get("parameters", {})
+    return {"source": "gate", "anlas": price["anlas"] + encoding_cost, "v5": price["v5"],
+            "generation_anlas": price["anlas"], "encoding_anlas": encoding_cost,
+            "encoding_count": encoding_count, "legacy_free_images": legacy,
+            "cost_limit": price, "encoding_cost_limit": {"anlas": VIBE_ENCODING_ANLAS, "v5": 0},
+            "effective_model": body.get("model"),
+            "effective_parameters": {name: p[name] for name in ("width", "height", "steps", "sampler", "upscaled_enhance") if name in p},
+            "billing_size": billing_size, "output_size": output_size, "notes": notes,
+            "upstream_allowance_verified": False}
 
 
 async def generate_image(request: Request):
