@@ -1,738 +1,194 @@
 <!doctype html>
-<html lang="zh">
+<html lang="zh-CN" data-palette="colorful">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>NAI Gate 管理后台</title>
-<style>
-:root{
-  --bg:#0f151d; --panel:#161e29; --panel2:#1b2533; --line:#243043;
-  --txt:#dbe4f0; --muted:#8496ad; --accent:#7cc4ff; --accent2:#8be2b9;
-  --warn:#ffb26b; --bad:#ff8a8a;
-}
-*{box-sizing:border-box}
-body{margin:0;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
-     background:var(--bg);color:var(--txt);font-size:14px}
-button{font-family:inherit}
-a{color:var(--accent)}
-input,select,textarea{background:#101823;border:1px solid var(--line);color:var(--txt);
-  border-radius:8px;padding:8px 10px;font-size:14px;outline:none;width:100%}
-input:focus,textarea:focus{border-color:var(--accent)}
-label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
-
-/* login */
-#login{display:flex;align-items:center;justify-content:center;height:100vh}
-.login-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:32px;width:340px}
-.login-card h1{font-size:18px;margin:0 0 18px;color:var(--accent)}
-
-/* layout */
-#app{display:none;min-height:100vh}
-header{display:flex;align-items:center;gap:16px;padding:14px 22px;border-bottom:1px solid var(--line);
-  background:var(--panel);position:sticky;top:0;z-index:5}
-header .logo{font-weight:700;color:var(--accent);font-size:16px}
-header .sp{flex:1}
-.tabs{display:flex;gap:4px}
-.tabs button{background:none;border:none;color:var(--muted);padding:8px 14px;border-radius:8px;cursor:pointer;font-size:14px}
-.tabs button.active{background:var(--panel2);color:var(--txt)}
-main{max-width:1080px;margin:0 auto;padding:22px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:18px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
-.card .k{font-size:12px;color:var(--muted)}
-.card .v{font-size:22px;font-weight:700;margin-top:4px}
-.card .v small{font-size:12px;color:var(--muted);font-weight:400}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:18px}
-.panel h2{font-size:14px;margin:0 0 12px;color:var(--muted);font-weight:600}
-
-/* table */
-table{width:100%;border-collapse:collapse}
-th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
-th{color:var(--muted);font-weight:500;font-size:12px;white-space:nowrap}
-tr:hover td{background:#182230}
-.tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px}
-.tag.on{background:#173529;color:var(--accent2)}
-.tag.off{background:#3a2226;color:var(--bad)}
-.tag.warn{background:#3a2f1c;color:var(--warn)}
-.logs .tag{white-space:nowrap}
-.btn{background:var(--panel2);border:1px solid var(--line);color:var(--txt);
-  padding:6px 12px;border-radius:8px;cursor:pointer;font-size:13px}
-.btn:hover{border-color:var(--accent)}
-.btn.primary{background:#1c4d74;border-color:#2a6ea3}
-.btn.danger{background:#5b2530;border-color:#7c3644}
-.btn.mini{padding:3px 8px;font-size:12px}
-.row-actions{display:flex;gap:6px;flex-wrap:wrap}
-.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
-.key-summary{font-size:12px;line-height:1.6;white-space:nowrap}
-.key-summary .muted{font-size:11px}
-#keysTable .key-name{width:150px;max-width:150px;overflow-wrap:anywhere;word-break:break-word}
-#keysTable th:last-child,#keysTable td:last-child{
-  position:sticky;right:0;min-width:180px;background:var(--panel);box-shadow:-8px 0 12px -10px #000;
-}
-#keysTable th:last-child{z-index:2}
-#keysTable td:last-child{z-index:1}
-#keysTable tr:hover td:last-child{background:#182230}
-
-/* chart */
-.chart{display:flex;align-items:flex-end;gap:10px;height:120px;padding-top:8px}
-.chart .bar{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;height:100%;justify-content:flex-end}
-.chart .bar .fill{width:70%;background:linear-gradient(180deg,#7cc4ff,#2a6ea3);border-radius:6px 6px 0 0;min-height:2px}
-.chart .bar .lb{font-size:11px;color:var(--muted)}
-
-/* modal */
-#modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;
-  align-items:center;justify-content:center}
-.modal-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
-  padding:24px;width:440px;max-height:90vh;overflow:auto}
-.modal-card h3{margin:0 0 8px}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
-.check{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px}
-.check input{width:auto}
-.modal-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
-.err{color:var(--bad);font-size:13px;margin-top:10px;min-height:18px}
-.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1c4d74;
-  color:#fff;padding:10px 18px;border-radius:10px;z-index:99;display:none}
-.muted{color:var(--muted)}
-.logs td{font-size:12.5px}
-.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
-.gallery-item{background:var(--panel2);border:1px solid var(--line);border-radius:10px;overflow:hidden}
-.gallery-item img{display:block;width:100%;height:180px;object-fit:contain;background:#0b1017}
-.gallery-meta{padding:9px;font-size:12px;line-height:1.65;word-break:break-all}
-#allowanceStatus{margin:0 0 14px;padding:7px 10px;border-left:2px solid var(--warn);
-  color:var(--warn);font-size:12px;line-height:1.6;white-space:pre-line}
-#allowanceDetails{margin-top:10px;font-size:12px;line-height:1.8;white-space:pre-line}
-</style>
+<link rel="stylesheet" href="/admin/assets/common.css?v=20261028-art-title">
+<link rel="stylesheet" href="/admin/assets/gate.css?v=20261028-art-title">
+<link rel="stylesheet" href="/admin/assets/palettes.css?v=20261028-palette-harmony">
+<link rel="stylesheet" href="/admin/assets/palette-picker.css?v=20261027-sidebar-shell">
+<link rel="stylesheet" href="/admin/assets/mobile-tables.css?v=20261027-single-metric-center">
+<script src="/admin/assets/lucide-icons.js?v=20261027-drawing-brush" defer></script>
+<script src="/admin/assets/theme.js?v=20261027-parity" defer></script>
+<script src="/admin/assets/sidebar-tools.js?v=20261027-sidebar-collapse" defer></script>
+<script src="/admin/assets/palette-picker.js?v=20261027-rose-pine" defer></script>
+<script src="/admin/assets/gate.js?v=20261027-mobile-records" defer></script>
 </head>
-<body>
-
+<body class="gate-page">
 <div id="login">
-  <div class="login-card">
-    <h1>NAI Gate 管理后台</h1>
-    <label>管理密码</label>
-    <input id="pwd" type="password" placeholder="ADMIN_PASSWORD" onkeydown="if(event.key==='Enter')doLogin()">
-    <div class="err" id="loginErr"></div>
-    <button class="btn primary" style="width:100%" onclick="doLogin()">登录</button>
-  </div>
+  <form class="login-card" onsubmit="event.preventDefault();doLogin()">
+    <h1 class="brand">NAI Gate</h1>
+    <label for="pwd">管理密码</label><input id="pwd" type="password" autocomplete="current-password" required>
+    <div class="err" id="loginErr" role="alert"></div>
+    <button class="btn btn-primary" type="submit">登录</button>
+  </form>
 </div>
+<div id="app" hidden>
 
-<div id="app">
-<header>
-  <span class="logo">NAI Gate</span>
-  <nav class="tabs">
-    <button data-tab="ov" class="active" onclick="tab('ov')">总览</button>
-    <button data-tab="keys" onclick="tab('keys')">密钥管理</button>
-    <button data-tab="logs" onclick="tab('logs')">用量日志</button>
-    <button data-tab="set" onclick="tab('set')">设置</button>
-  </nav>
-  <span class="sp"></span>
-  <button class="btn" onclick="logout()">退出</button>
-</header>
-<main>
-  <div id="allowanceStatus" role="status" aria-live="polite" hidden></div>
-
-  <!-- 总览 -->
-  <section id="tab-ov">
-    <div class="cards" id="ovCards"></div>
-    <div class="panel"><h2>近 7 天生成量（图片）</h2><div class="chart" id="chart"></div></div>
-    <div class="panel"><h2>上游 NovelAI 令牌池</h2><div id="pool"></div><div id="allowanceDetails" class="muted">V5 余量：正在读取本地状态…</div></div>
-    <div class="panel">
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-        <h2 style="margin:0;flex:1">Anlas 消耗核对</h2>
-        <button class="btn" id="reconReload" onclick="loadReconciliation()">刷新记录</button>
-        <button class="btn primary" id="reconRun" onclick="runReconciliation()" disabled>查询并核对</button>
+  <dialog class="palette-dialog" id="paletteDialog" aria-labelledby="paletteTitle">
+    <header><h2 id="paletteTitle">选择配色</h2><button class="palette-close" type="button" aria-label="关闭配色选择">×</button></header>
+    <div class="palette-options" id="paletteOptions"></div>
+  </dialog>
+  <div class="gate-layout">
+    <aside class="gate-sidebar">
+      <div class="gate-sidebar-head"><a class="brand gate-sidebar-brand" aria-label="NAI Gate" title="NAI Gate" href="/admin"><span class="brand-mark"><i data-icon="brush"></i></span><span>NAI Gate</span></a><button class="gate-sidebar-collapse" id="sidebarCollapse" type="button" aria-label="收起侧栏" title="收起侧栏" aria-expanded="true"><i data-icon="chevron-left"></i></button></div>
+      <nav class="tabs gate-navigation" aria-label="后台导航">
+        <button data-tab="ov" class="active" onclick="tab('ov')" aria-label="总览" title="总览"><i data-icon="grid"></i><span>总览</span></button>
+        <button data-tab="keys" onclick="tab('keys')" aria-label="密钥管理" title="密钥管理"><i data-icon="key"></i><span>密钥管理</span><small id="keyNavCount"></small></button>
+        <button data-tab="logs" onclick="tab('logs')" aria-label="用量日志" title="用量日志"><i data-icon="log"></i><span>用量日志</span></button>
+        <button data-tab="set" onclick="tab('set')" aria-label="设置" title="设置"><i data-icon="settings"></i><span>设置</span></button>
+      </nav>
+      <button class="gate-sidebar-menu" id="sidebarToolsToggle" type="button" aria-label="外观与账户" aria-expanded="false" aria-controls="sidebarTools"><span aria-hidden="true">⋯</span></button>
+      <div class="gate-sidebar-tools" id="sidebarTools">
+        <button class="palette-trigger" id="palettePicker" type="button" aria-haspopup="dialog" aria-controls="paletteDialog" aria-label="选择配色，当前缤纷"><span class="palette-dot" aria-hidden="true"></span><span id="paletteName">缤纷</span></button>
+        <div class="theme-switch" role="group" aria-label="外观">
+        <button type="button" data-theme-mode="light" aria-label="浅色" title="浅色" aria-pressed="false"><i data-icon="sun"></i></button>
+        <button type="button" data-theme-mode="dark" aria-label="深色" title="深色" aria-pressed="false"><i data-icon="moon"></i></button>
+        <button type="button" data-theme-mode="system" aria-label="跟随系统" title="跟随系统" aria-pressed="true"><i data-icon="monitor"></i></button>
       </div>
-      <div id="reconStatus" class="muted" role="status" aria-live="polite">正在读取记录…</div>
-      <div id="reconResult"></div>
-      <details style="margin-top:12px"><summary>历史记录与说明</summary>
-        <p class="muted">点击「查询并核对」会读取官方账号余额，再和本站记录的消耗比较。充值、续费或在其他地方使用账号，也会影响余额。核对结果不会修改用户积分。</p>
-        <div style="overflow-x:auto"><table><thead><tr><th>查询时间</th><th>官方余额</th><th>余额减少</th><th>本站记录</th><th>相差</th><th>说明</th></tr></thead><tbody id="reconHistory"></tbody></table></div>
-      </details>
-    </div>
-  </section>
-
-  <!-- 密钥 -->
-  <section id="tab-keys" style="display:none">
-    <div class="panel">
-      <div style="display:flex;align-items:center;margin-bottom:12px">
-        <h2 style="margin:0;flex:1">虚拟 Key</h2>
-        <button class="btn primary" onclick="openCreate()">＋ 新建 Key</button>
-        <button class="btn" style="margin-left:8px" onclick="loadKeys()">刷新</button>
+        <div class="gate-sidebar-foot"><div class="gate-sidebar-bottom" id="upstreamConnection"><span class="gate-status-dot"></span><span id="upstreamConnectionText">正在读取状态</span></div><button class="btn gate-row-button" type="button" onclick="logout()">退出</button></div>
       </div>
-      <div style="overflow-x:auto">
-      <table id="keysTable">
-        <thead><tr>
-          <th class="key-name">名称</th><th>Key</th><th>状态</th>
-          <th>今日用量</th><th>配额</th><th>RPM</th><th>最近使用</th><th>到期</th><th>操作</th>
-        </tr></thead>
-        <tbody></tbody>
-      </table>
-      </div>
-    </div>
-  </section>
-
-  <!-- 日志 -->
-  <section id="tab-logs" style="display:none">
-    <div class="panel">
-      <div style="display:flex;align-items:center;margin-bottom:12px">
-        <h2 style="margin:0;flex:1">最近用量</h2>
-        <select id="logFilter" style="width:180px" onchange="logPage=1;loadLogs()"><option value="">全部 Key</option></select>
-        <button class="btn" style="margin-left:8px" onclick="loadLogs()">刷新</button>
-      </div>
-      <div style="overflow-x:auto">
-      <table class="logs">
-        <thead><tr><th>时间</th><th>Key</th><th>类型</th><th>模型</th><th>状态</th>
-          <th>图</th><th>Anlas</th><th title="失败请求可能产生的费用，实际扣款尚未确认">可能消耗 Anlas</th><th>tokens</th><th>备注</th></tr></thead>
-        <tbody id="logBody"></tbody>
-      </table>
-      </div>
-      <div id="logPager" style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:12px"></div>
-    </div>
-  </section>
-
+    </aside>
+    <main class="gate-main">
+      <header class="gate-page-heading"><h1 id="pageTitle">总览</h1><button class="btn" id="refreshView" onclick="refreshCurrentView()"><i data-icon="refresh"></i>刷新</button></header>
+      <div id="allowanceStatus" role="status" aria-live="polite" hidden></div>
+      <section id="tab-ov" class="gate-view">
+        <div class="gate-stats" id="ovCards"></div>
+        <div class="gate-overview-grid">
+          <section class="panel gate-chart-section"><div class="gate-section-heading"><h2>近 7 天生成量</h2><span class="gate-date-note" id="chartDate"></span></div><div class="gate-chart" id="chart" role="img" aria-label="近七天生成量"></div></section>
+          <section class="panel gate-budget-card"><div class="gate-section-heading"><h2>全站今日 V5 额度</h2><i data-icon="brush"></i></div><div id="v5Budget"></div></section>
+        </div>
+        <section class="panel gate-upstream"><div class="gate-section-heading"><h2>上游 NovelAI 令牌池</h2><button class="btn gate-row-button" onclick="settingsPage('upstream');tab('set')">管理账号</button></div><div id="pool" class="gate-table-scroll"></div><div id="allowanceDetails" class="muted"></div></section>
+        <section class="panel gate-reconciliation">
+          <div class="gate-section-heading"><h2>Anlas 消耗核对</h2><button class="btn" id="reconRun" onclick="runReconciliation()" disabled><i data-icon="refresh"></i>查询并核对</button></div>
+          <div id="reconStatus" class="muted recon-status" role="status" aria-live="polite">正在读取记录…</div><div id="reconResult"></div>
+          <details class="gate-history"><summary>查看核对记录<i data-icon="chevron"></i></summary><div class="details-note"><button class="btn gate-row-button" id="reconReload" onclick="loadReconciliation()">刷新记录</button></div><div id="reconComparisonDetails" class="details-note"></div><div class="gate-table-scroll"><table><thead><tr><th>查询时间</th><th>官方余额</th><th>余额减少</th><th>本站记录</th><th>相差</th><th>说明</th></tr></thead><tbody id="reconHistory"></tbody></table></div></details>
+        </section>
+        <div id="billingStatus" class="billing-status" hidden></div>
+        <details class="panel usage-details"><summary>更多统计</summary><div id="usageDetails"></div></details>
+      </section>
+      <section id="tab-keys" class="gate-view" hidden>
+        <section class="panel"><div class="gate-key-toolbar"><label class="gate-search"><i data-icon="search"></i><input id="keySearch" type="search" placeholder="搜索名称或备注" aria-label="搜索 Key" oninput="renderKeys()"></label><select id="keyStatusFilter" class="gate-filter-select" aria-label="筛选 Key 状态" onchange="renderKeys()"><option value="all">全部状态</option><option value="on">已启用</option><option value="off">已停用</option></select><button class="btn btn-primary" onclick="openCreate()"><i data-icon="plus"></i>新建 Key</button></div><div class="gate-table-scroll"><table id="keysTable" class="gate-keys-table gate-mobile-table"><thead><tr><th>名称 / Key</th><th>状态</th><th>今日生成</th><th>今日用量</th><th>每日配额</th><th>最近使用</th><th class="gate-align-right">操作</th></tr></thead><tbody></tbody></table></div><div class="gate-table-foot"><span id="keyCount"></span></div></section>
+      </section>
+      <section id="tab-logs" class="gate-view" hidden>
+        <section class="panel"><div class="gate-section-heading"><h2>最近用量</h2><select id="logFilter" class="gate-filter-select" aria-label="按 Key 筛选日志" onchange="logPage=1;loadLogs()"><option value="">全部 Key</option></select></div><div class="gate-table-scroll"><table class="logs gate-log-table gate-mobile-table"><thead><tr><th>时间</th><th>Key</th><th>模型</th><th>状态</th><th>图片</th><th>Anlas</th><th>备注</th></tr></thead><tbody id="logBody"></tbody></table></div><div id="logPager" class="gate-log-foot"></div></section>
+      </section>
   <!-- 设置 -->
-  <section id="tab-set" style="display:none">
-    <div class="panel">
-      <h2>Anlas 预算</h2>
-      <label>全站月度 Anlas 预算（0 = 不限。Opus Anlas 每月账单日回满到 10000、不叠加，建议留 20~30% 余量）</label>
-      <div style="display:flex;gap:8px">
-        <input id="s_budget" type="number" value="10000">
+  <section id="tab-set" class="gate-view" hidden>
+    <div class="settings-layout">
+      <nav class="settings-nav" aria-label="设置分组">
+        <button class="active" data-setting-page="budget" onclick="settingsPage('budget')" aria-current="page">预算</button>
+        <button data-setting-page="generation" onclick="settingsPage('generation')">生成</button>
+        <button data-setting-page="upstream" onclick="settingsPage('upstream')">上游账号</button>
+        <button data-setting-page="defaults" onclick="settingsPage('defaults')">Key 默认</button>
+        <button data-setting-page="cleanup" onclick="settingsPage('cleanup')">自动清理</button>
+        <button data-setting-page="advanced" onclick="settingsPage('advanced')">高级</button>
+        <button data-setting-page="announcement" onclick="settingsPage('announcement')">公告</button>
+        <button data-setting-page="effective" onclick="settingsPage('effective')">生效配置</button>
+      </nav>
+      <div class="settings-content">
+        <section class="panel settings-page settings-fields" id="settings-budget">
+          <h2>预算与额度</h2>
+          <div class="setting-row"><label for="s_budget">全站月度预算<small>0 = 不限</small></label><div class="setting-control"><input id="s_budget" type="number" min="0" max="1000000" step="any" required><span>Anlas</span></div></div>
+          <div class="setting-row"><label for="s_v5">全站每日 V5 额度<small>0 = 不限</small></label><div class="setting-control"><input id="s_v5" type="number" min="0" max="100000" step="1" required><span>单位</span></div></div>
+          <div class="setting-row"><label for="s_auto_medium">V5 Full 自动节省<small>仅免费 Key 自动切换 Medium</small></label><div class="setting-check"><input id="s_auto_medium" type="checkbox"></div></div>
+          <div class="setting-row"><label for="s_medium_threshold">Medium 切换阈值</label><div class="setting-control"><input id="s_medium_threshold" type="number" min="0" max="100" step="any" required><span>%</span></div></div>
+          <div class="setting-row"><label for="s_medium_multiplier">Medium 每张扣除额度</label><div class="setting-control"><input id="s_medium_multiplier" type="number" min="0.01" max="1" step="0.01" required><span>单位</span></div></div>
+          <div class="setting-row"><label for="s_v5_alert">官方余量告警阈值<small>官方 V5 余量低于此比例时提醒</small></label><div class="setting-control"><input id="s_v5_alert" type="number" min="1" max="100" step="1" required><span>%</span></div></div>
+          <div class="settings-actions"><button class="btn btn-primary" type="button" onclick="saveBudget()">保存设置</button></div>
+        </section>
+        <section class="panel settings-page settings-fields" id="settings-generation" hidden>
+          <h2>生成权限与限制</h2><div id="config-generation"></div>
+          <h3 class="settings-subheading">排队与冷却</h3>
+          <div class="setting-row"><label for="r_queue_timeout">单阶段排队等待上限</label><div class="setting-control"><input id="r_queue_timeout" type="number" min="15" max="300" step="1" required><span>秒</span></div></div>
+          <div class="setting-row"><label for="r_key_image_min_interval">用户 Key 图片任务间隔</label><div class="setting-control"><input id="r_key_image_min_interval" type="number" min="15" max="120" step="1" required><span>秒</span></div></div>
+          <div class="setting-row"><label for="r_image_min_interval">上游图片请求间隔</label><div class="setting-control"><input id="r_image_min_interval" type="number" min="15" max="120" step="1" required><span>秒</span></div></div>
+          <div class="setting-row"><label for="r_image_429_cooldown_seconds">上游 429 最短冷却</label><div class="setting-control"><input id="r_image_429_cooldown_seconds" type="number" min="60" max="3600" step="1" required><span>秒</span></div></div>
+          <div class="settings-actions"><button class="btn is-positive" type="button" onclick="restoreGenerationDefaults()">恢复默认</button><button class="btn btn-primary" type="button" id="saveGenerationSettings" data-save-config="generation" onclick="saveConfigurationGroup('generation')">保存设置</button></div>
+        </section>
+        <section class="panel settings-page" id="settings-upstream" hidden>
+          <div class="gate-section-heading"><h2>上游账号</h2><button class="btn" type="button" onclick="openUpstreamDialog()"><i data-icon="plus"></i>添加账号</button></div>
+          <div id="settingsUpstreamAccounts">正在读取账号…</div>
+        </section>
+        <section class="panel settings-page settings-fields" id="settings-defaults" hidden>
+          <h2>新 Key 默认值</h2><p class="settings-note">用于之后新建的 Key，已有 Key 保持原设置。</p><div id="config-defaults"></div>
+          <div class="settings-actions"><button class="btn btn-primary" type="button" data-save-config="defaults" onclick="saveConfigurationGroup('defaults')">保存设置</button></div>
+        </section>
+        <section class="panel settings-page settings-fields" id="settings-cleanup" hidden>
+          <h2>闲置 Key 自动清理</h2>
+          <div class="setting-row"><label for="cleanupEnabled">自动清理闲置 Key</label><div class="setting-check"><input id="cleanupEnabled" type="checkbox" onchange="updateCleanupControls()"></div></div>
+          <div class="setting-row"><label for="c_key_inactivity_delete_days">连续闲置天数</label><div class="setting-control"><input id="c_key_inactivity_delete_days" type="number" min="1" max="3650" step="1" required onchange="clearCleanupPreview()"><span>天</span></div></div>
+          <div class="settings-cleanup-preview"><button class="btn" type="button" onclick="previewCleanup()">查看受影响的 Key</button><div id="cleanupPreview" class="settings-status" role="status"></div></div>
+          <div class="settings-actions"><button class="btn btn-primary" type="button" data-save-config="cleanup" onclick="saveConfigurationGroup('cleanup')">保存设置</button></div>
+        </section>
+        <section class="panel settings-page settings-fields" id="settings-advanced" hidden>
+          <h2>并发与文本限制</h2><div id="config-advanced"></div>
+          <div class="settings-actions"><button class="btn btn-primary" type="button" data-save-config="advanced" onclick="saveConfigurationGroup('advanced')">保存设置</button></div>
+        </section>
+        <section class="panel settings-page" id="settings-announcement" hidden>
+          <h2>站点公告</h2><textarea id="announce" aria-label="公告内容" rows="7" placeholder="填写站点公告"></textarea>
+          <div class="settings-actions"><button class="btn btn-primary" type="button" onclick="saveAnnounce()">保存设置</button></div>
+        </section>
+        <section class="panel settings-page" id="settings-effective" hidden>
+          <h2>当前生效配置</h2>
+          <div id="cfgInfo" class="settings-table"></div>
+        </section>
       </div>
-      <label>全站每日 V5 用量额度（0 = 不限；High 每张 1 单位，Medium 按设置倍率折算）</label>
-      <div style="display:flex;gap:8px">
-        <input id="s_v5" type="number" value="150">
-        <button class="btn primary" style="white-space:nowrap" onclick="saveBudget()">保存</button>
-      </div>
-      <div class="muted" style="font-size:12px;margin-top:8px">普通用户所有图片模型最多 23 步。V5 符合免费条件且官方余量可用时不扣 Anlas；图片张数与用量额度分别统计。</div>
-      <div class="check"><input id="s_auto_medium" type="checkbox" checked><span>V5 Full 自动节省模式（管理员 Key 保留档位选择）</span></div>
-      <div class="grid2">
-        <div><label>今日剩余额度 ≤ 此比例时切换 Medium（%）</label><input id="s_medium_threshold" type="number" min="0" max="100" value="20"></div>
-        <div><label>Medium 每张扣除额度（0.01～1）</label><input id="s_medium_multiplier" type="number" min="0.01" max="1" step="0.01" value="0.60"></div>
-      </div>
-      <div class="muted" style="font-size:12px;margin-top:8px">自动切换仅适用于 V5 Full 纯文生图；发送前按剩余共享额度（包含进行中的预留）判断。Medium 固定 14 步 / Euler Ancestral / Heavy 负面预设，自定义负面词和 Rescale 不生效。倍率是本站折算，并非官方精确计费。点击“保存”生效。</div>
-      <label>V5 官方余量告警阈值（%，低于此值持续提醒）</label>
-      <input id="s_v5_alert" type="number" min="1" max="100" step="1" value="20">
-      <div class="muted" style="font-size:12px;margin-top:8px">低于此比例时持续告警；余量随 V5 生成按需查询。点击上方“保存”生效。</div>
     </div>
-    <div class="panel">
-      <h2>图片排队与冷却</h2>
-      <div class="grid2">
-        <div><label>单阶段排队等待上限（秒，15～300）</label><input id="r_queue_timeout" type="number" min="15" max="300" step="1"></div>
-        <div><label>用户 Key 图片任务间隔（秒，15～120）</label><input id="r_key_image_min_interval" type="number" min="15" max="120" step="1"></div>
-        <div><label>每把上游 Key 图片请求间隔（秒，15～120）</label><input id="r_image_min_interval" type="number" min="15" max="120" step="1"></div>
-        <div><label>上游 429 最短冷却（秒，60～3600）</label><input id="r_image_429_cooldown_seconds" type="number" min="60" max="3600" step="1"></div>
-      </div>
-      <div class="muted" style="font-size:12px;margin:8px 0">保存后对新请求生效，重启后仍保留。已在等待中的请求可能沿用保存前的时间；不允许低于保护下限。</div>
-      <button class="btn primary" onclick="saveRuntimeLimits()">保存运行限制</button>
-    </div>
-    <div class="panel">
-      <h2>站点公告（用户访问首页看到的内容，支持 HTML）</h2>
-      <textarea id="announce" rows="10" placeholder="&lt;h2&gt;欢迎&lt;/h2&gt;&lt;p&gt;申请 Key 请联系……&lt;/p&gt;"></textarea>
-      <div style="margin-top:10px;text-align:right">
-        <button class="btn primary" onclick="saveAnnounce()">保存公告</button>
-      </div>
-    </div>
-    <div class="panel"><h2>服务端配置（只读，修改请编辑 .env 后重启）</h2><div id="cfgInfo" class="mono" style="font-size:12px;line-height:2"></div></div>
   </section>
 
-</main>
-</div>
-
-<!-- 新建/编辑 key 弹窗 -->
-<div id="modal" onclick="if(event.target===this)closeModal()">
-  <div class="modal-card">
-    <h3 id="modalTitle">新建 Key</h3>
-    <label>名称 / 备注</label><input id="f_name" placeholder="例如：张三">
-    <label>图片模型范围</label>
-    <select id="f_image_model_scope">
-      <option value="legacy">仅 V4.5 及更低（默认）</option>
-      <option value="all">所有当前支持模型（含 V5）</option>
-    </select>
-    <div class="grid2">
-      <div><label>每日 V4.5 及以下免费图张数（0=不限）</label><input id="f_daily_images" type="number" value="100"></div>
-      <div><label>每日 Anlas 上限（0=不限）</label><input id="f_daily_anlas" type="number" value="100"></div>
-      <div><label>每月 Anlas 上限</label><input id="f_monthly_anlas" type="number" value="2500"></div>
-      <div><label>每日 V5 用量额度（High=1，Medium 按倍率，0=不限）</label><input id="f_daily_v5" type="number" value="50"></div>
-      <div><label>每日文本 tokens</label><input id="f_daily_text" type="number" value="150000"></div>
-      <div><label>每分钟请求数 (RPM)</label><input id="f_rpm" type="number" value="10"></div>
-      <div><label>有效天数（0=永久）</label><input id="f_expires" type="number" value="30"></div>
-    </div>
-    <div class="check"><input id="f_allow_anlas" type="checkbox"><span>允许消耗 Anlas（旧模型和 V5 的付费规格均受 日Anlas/月Anlas/全站预算 约束；不开启时仅允许免费档或 V5 额度规格）</span></div>
-    <div class="check"><input id="f_allow_img2img" type="checkbox"><span>允许 img2img / 局部重绘（需同时开启上面一项）</span></div>
-    <div class="check"><input id="f_exclude_global_v5" type="checkbox"><span>独立 V5 额度（此 Key 的 V5 使用不计入、也不受全站 V5 日额度限制）</span></div>
-    <div class="err" id="modalErr"></div>
-    <div class="modal-foot">
-      <button class="btn" onclick="closeModal()">取消</button>
-      <button class="btn primary" id="modalSave" onclick="saveKey()">创建</button>
-    </div>
+    </main>
   </div>
 </div>
-
-<div class="toast" id="toast"></div>
-
-<script>
-const $ = s => document.querySelector(s);
-let editingId = null, keysCache = [], logPage = 1;
-let allowanceTimer = null, allowanceLoading = false;
-let reconBusy = false, reconReady = false, reconRemoteRunning = false, reconRetryAt = 0, reconTimer = null, reconVersion = 0;
-let reconCsrf = '';
-
-const reconReasons = {first:'已记下当前余额', accounts_changed:'账号列表有变化，已重新记录余额',
-  cycle_changed:'订阅周期已更新，已重新记录余额', balance_increased:'余额增加了，已重新记录余额',
-  ledger_reset:'本站用量记录有变动，已重新记录余额'};
-const reconNumber = n => n == null ? '—' : Number(n).toLocaleString('zh-CN', {maximumFractionDigits:4});
-const reconTime = n => new Date(n*1000).toLocaleString('zh-CN');
-function updateReconciliationButton(){
-  const seconds = Math.max(0, Math.ceil((reconRetryAt-Date.now())/1000));
-  $('#reconRun').disabled = reconBusy || reconRemoteRunning || !reconReady || seconds>0;
-  $('#reconRun').textContent = reconBusy ? '正在核对…' : seconds ? `${seconds} 秒后可再次查询` : '查询并核对';
-  $('#reconReload').disabled = reconBusy;
-  if(!seconds){ clearInterval(reconTimer); reconTimer=null; }
-}
-function renderReconciliation(d){
-  reconCsrf=typeof d.csrf_token === 'string' ? d.csrf_token : '';
-  reconReady=!!reconCsrf;
-  reconRemoteRunning=d.running;
-  reconRetryAt=Date.now() + d.retry_after*1000;
-  clearInterval(reconTimer);
-  if(d.retry_after>0) reconTimer=setInterval(updateReconciliationButton, 1000); // Local countdown only.
-  updateReconciliationButton();
-  const rows=d.history || [], latest=rows[0], c=latest?.comparison;
-  const differenceText = !c || c.reason ? '' : c.difference === 0 ? '余额变化与本站记录一致。'
-    : `官方余额减少了 ${reconNumber(c.balance_decrease)} Anlas，比本站记录${c.difference>0?'多':'少'} ${reconNumber(Math.abs(c.difference))} Anlas。`;
-  $('#reconStatus').textContent=d.running ? '其他页面正在核对，稍后刷新记录即可。'
-    : !latest ? '还没有记录。点击「查询并核对」获取当前余额。'
-    : `上次查询 ${reconTime(latest.checked_at)} · ${Object.keys(latest.accounts).length} 个账号 · 官方余额 ${reconNumber(latest.balance)} Anlas`;
-  $('#reconResult').innerHTML=!latest ? '' : c.reason ? `<p>${esc(reconReasons[c.reason] || '已记下当前余额')}。下次查询时，会核对这期间用了多少 Anlas。</p>`
-    : `<p class="muted">这次核对的时间段：${esc(reconTime(c.since))} — ${esc(reconTime(latest.checked_at))}</p>
-       <div class="cards" style="margin:12px 0">
-        ${[['官方余额减少',c.balance_decrease],['本站记录消耗',c.recorded],['相差',c.difference]].map(([label,value])=>
-          `<div class="card"><div class="k">${label}</div><div class="v">${reconNumber(value)} <small>Anlas</small></div></div>`).join('')}
-       </div><p>${differenceText}</p>${c.unconfirmed_requests>0 ? `<div class="muted">有 ${reconNumber(c.unconfirmed_requests)} 笔失败请求可能产生费用，合计预估 ${reconNumber(c.unconfirmed_anlas)} Anlas。</div>` : ''}`;
-  $('#reconHistory').innerHTML=rows.map(row=>{ const x=row.comparison; return `<tr>
-    <td>${esc(reconTime(row.checked_at))}</td><td>${reconNumber(row.balance)}</td><td>${reconNumber(x.balance_decrease)}</td>
-    <td>${reconNumber(x.recorded)}</td><td>${reconNumber(x.difference)}</td><td>${esc(reconReasons[x.reason] || '核对完成')}</td></tr>`; }).join('')
-    || '<tr><td colspan="6" class="muted">尚无记录</td></tr>';
-}
-async function loadReconciliation(){
-  if(reconBusy) return;
-  const version=++reconVersion;
-  try{
-    const d=await api('/admin/api/reconciliation'); // Read local history.
-    if(version===reconVersion) renderReconciliation(d);
-  }catch(e){ if(version===reconVersion) $('#reconStatus').textContent=e.message; }
-}
-async function runReconciliation(){
-  if($('#reconRun').disabled) return;
-  ++reconVersion; reconBusy=true; updateReconciliationButton();
-  $('#reconStatus').textContent='正在核对，请稍候…';
-  try{
-    renderReconciliation(await api('/admin/api/reconciliation', {method:'POST', body:'{}',
-      headers:{'Content-Type':'application/json', 'X-NAI-Admin-CSRF':reconCsrf}}));
-  }catch(e){
-    // Refresh the cooldown after failure, then restore the error message.
-    try{ renderReconciliation(await api('/admin/api/reconciliation')); }catch(_){}
-    $('#reconStatus').textContent=e.message;
-  }finally{ reconBusy=false; updateReconciliationButton(); }
-}
-
-function renderAllowance(d){
-  const rows = d.accounts || [], box = $('#allowanceStatus');
-  const warnings = rows.filter(p=>p.low || p.error);
-  box.hidden = warnings.length === 0;
-  box.textContent = warnings.map(p=>{
-    const value = p.is_negative ? '已耗尽' : `低于 ${d.threshold}%（上次 ${p.percent}%）`;
-    return `账号 ${p.account} · ${p.low ? 'V5 余量' + value : ''}${p.low && p.error ? '；' : ''}${p.error ? '额度查询失败，V5 生图需确认后继续' : p.uncertain ? '，待下次生成确认' : ''}`;
-  }).join('\n');
-  $('#allowanceDetails').textContent = rows.length ? rows.map(p=>{
-    const value = p.percent == null ? '未查询 · 首次 V5 生图时确认'
-      : `${p.is_negative ? '已耗尽' : p.percent + '%'}${p.uncertain ? '（上次记录）' : ''}`;
-    const checked = p.checked_at ? ` · ${new Date(p.checked_at*1000).toLocaleTimeString()} 更新` : '';
-    return `账号 ${p.account} · V5 ${value}${checked}`;
-  }).join('\n') : 'V5 余量：未配置上游账号';
-}
-async function loadAllowance(){
-  if(allowanceLoading || $('#app').style.display==='none') return;
-  allowanceLoading = true;
-  try{ renderAllowance(await api('/admin/api/allowance')); }
-  catch(e){
-    const box = $('#allowanceStatus');
-    $('#allowanceDetails').textContent = 'V5 状态暂时无法读取，稍后自动重试。';
-    if(!box.hidden && !box.textContent.startsWith('状态刷新失败')) box.textContent = '状态刷新失败，以下告警为上次记录。\n' + box.textContent;
-  }finally{ allowanceLoading = false; }
-}
-
-function toast(msg){
-  const t = $('#toast'); t.textContent = msg; t.style.display = 'block';
-  setTimeout(()=>t.style.display='none', 2200);
-}
-function esc(s){
-  return String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-async function api(path, opts={}){
-  const r = await fetch(path, {headers:{'Content-Type':'application/json'}, credentials:'same-origin', ...opts});
-  if(r.status === 401 && path !== '/admin/api/login'){ showLogin(); throw new Error('未登录'); }
-  const data = await r.json().catch(()=>({}));
-  if(!r.ok) throw new Error(data.error?.message || data.detail || ('HTTP '+r.status));
-  return data;
-}
-
-/* ---------- auth ---------- */
-async function doLogin(){
-  $('#loginErr').textContent = '';
-  try{
-    await api('/admin/api/login', {method:'POST', body: JSON.stringify({password: $('#pwd').value})});
-    if(!await boot()){
-      $('#loginErr').textContent = location.protocol === 'http:'
-        ? '登录状态未能保存。请使用 HTTPS，或由管理员开启 HTTP 登录兼容；同时检查浏览器 Cookie 设置。'
-        : '登录状态未能保存，请检查浏览器是否允许本站 Cookie。';
-    }
-  }catch(e){ $('#loginErr').textContent = e.message; }
-}
-async function logout(){
-  await api('/admin/api/logout', {method:'POST'}).catch(()=>{});
-  showLogin();
-}
-function showLogin(){
-  reconCsrf=''; reconReady=false; ++reconVersion;
-  clearInterval(allowanceTimer); allowanceTimer = null;
-  clearInterval(reconTimer); reconTimer = null;
-  $('#login').style.display='flex'; $('#app').style.display='none';
-}
-async function boot(){
-  try{ await api('/admin/api/me'); }catch(e){ return false; }
-  $('#login').style.display='none'; $('#app').style.display='block';
-  clearInterval(allowanceTimer);
-  loadAllowance();
-  allowanceTimer = setInterval(()=>{ if(!document.hidden) loadAllowance(); }, 30000);
-  tab('ov');
-  return true;
-}
-
-/* ---------- tabs ---------- */
-function tab(name){
-  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
-  ['ov','keys','logs','set'].forEach(t=> $('#tab-'+t).style.display = t===name?'':'none');
-  if(name==='ov') loadOverview();
-  if(name==='keys') loadKeys();
-  if(name==='logs') loadLogs();
-  if(name==='set') loadSettings();
-}
-
-/* ---------- overview ---------- */
-async function loadOverview(){
-  loadReconciliation();
-  try{
-    const d = await api('/admin/api/overview');
-    const t = d.today;
-    $('#ovCards').innerHTML = `
-      <div class="card"><div class="k">今日生成图片</div><div class="v">${t.images} <small>张</small></div></div>
-      <div class="card"><div class="k">今日消耗 Anlas（估算）</div><div class="v">${t.anlas}</div></div>
-      <div class="card"><div class="k">今日 V5 用量 / 全站日额度</div><div class="v">${t.v5||0} <small>/ ${d.v5_limit>0?d.v5_limit:'∞'}</small></div></div>
-      <div class="card"><div class="k">本月 Anlas / 全站预算</div><div class="v">${d.month.anlas} <small>/ ${d.anlas_budget>0?d.anlas_budget:'∞'}</small></div></div>
-      <div class="card" title="按今日、本月累计；查询官方余额不会清空这些记录"><div class="k">失败请求可能产生的费用</div><div class="v">${t.unconfirmed_anlas||0} <small>Anlas</small></div><div class="muted">今日预估 · ${t.unconfirmed_requests||0} 笔</div><div class="muted">本月预估 ${d.month.unconfirmed_anlas||0} Anlas · ${d.month.unconfirmed_requests||0} 笔</div><div class="muted" style="margin-top:8px">仅为估算，实际扣款尚未确认。</div></div>
-      <div class="card"><div class="k">今日文本 tokens</div><div class="v">${fmt(t.text_tokens)}</div></div>
-      <div class="card"><div class="k">今日请求数</div><div class="v">${t.requests}</div></div>
-      <div class="card"><div class="k">Key 总数 / 有效</div><div class="v">${d.keys_total} <small>/ ${d.keys_active}</small></div></div>`;
-    const max = Math.max(1, ...d.week.map(w=>w.images));
-    $('#chart').innerHTML = d.week.map(w=>`
-      <div class="bar" title="${w.day}：${w.images} 张 / ${w.anlas}A / ${fmt(w.text_tokens)}tk">
-        <div class="lb">${w.images}</div>
-        <div class="fill" style="height:${Math.round(w.images/max*80)}%"></div>
-        <div class="lb">${w.day.slice(5)}</div>
-      </div>`).join('');
-    const pool = d.pool.length ? d.pool : [];
-    $('#pool').innerHTML = (!d.pool_configured)
-      ? `<span class="tag warn">未配置上游 Token —— 请设置环境变量 NAI_TOKENS 后重启</span>`
-      : pool.map(p=>`
-        <div style="padding:6px 0;border-bottom:1px solid var(--line)">
-          <span class="mono">#${p.position} ${esc(p.token)}</span>
-          ${!p.admin_enabled ? '<span class="tag off">已停用</span>'
-            : p.disabled ? '<span class="tag off">已失效(401)</span>'
-            : p.blocked_for>0 ? `<span class="tag warn">限流中 ${p.blocked_for}s</span>`
-            : '<span class="tag on">正常</span>'}
-          ${!p.admin_enabled && p.disabled ? '<span class="tag warn">401 失效</span>' : ''}
-          <button class="btn mini ${p.admin_enabled?'danger':''}" onclick="setUpstreamEnabled('${p.token_id}',${!p.admin_enabled})">${p.admin_enabled?'停用':'启用'}</button>
-          <span class="muted" style="margin-left:12px;font-size:12px">今日生成 ${p.images_today||0} 张 · 失败 ${p.fails} · Anlas ${p.allow_anlas?'允许':'禁止'} · V5 用量 ${p.v5_used}/${p.v5_daily_limit||'∞'}</span>
-          <div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px">
-            <span class="muted">V5 日额度</span>
-            <input id="token-limit-${p.token_id}" type="number" min="0" max="100000" step="1" value="${p.v5_daily_limit}" style="width:100px" aria-label="第 ${p.position} 把上游 Token 的免费 V5 每日上限">
-            <button class="btn mini" onclick="saveUpstreamV5Limit('${p.token_id}')">保存</button>
-            <span class="muted">0 = 不限；High=1，Medium 按倍率</span>
-          </div>
-          <div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px">
-            <span class="muted">图片并发</span>
-            <input id="token-concurrency-${p.token_id}" type="number" min="1" max="4" step="1" value="${p.image_concurrency}" style="width:70px" aria-label="第 ${p.position} 把上游 Token 的图片并发上限">
-            <button class="btn mini" onclick="saveUpstreamImageConcurrency('${p.token_id}')">保存</button>
-            <span class="muted">当前 ${p.image_active} / ${p.image_concurrency}；默认 1，调高会增加上游限流风险</span>
-          </div>
-        </div>`).join('');
-  }catch(e){ toast(e.message); }
-}
-async function saveUpstreamV5Limit(tokenId){
-  const input = $('#token-limit-' + tokenId);
-  const limit = Number(input.value);
-  if(!Number.isInteger(limit) || limit<0 || limit>100000){ toast('请输入 0～100000 的整数'); return; }
-  try{
-    await api('/admin/api/upstream-tokens/' + tokenId + '/v5-limit', {
-      method:'PUT', body:JSON.stringify({v5_daily_limit:limit})});
-    toast('上游 V5 日限已保存');
-    loadOverview();
-  }catch(e){ toast(e.message); }
-}
-async function saveUpstreamImageConcurrency(tokenId){
-  const limit = Number($('#token-concurrency-' + tokenId).value);
-  if(!Number.isInteger(limit) || limit<1 || limit>4){ toast('请输入 1～4 的整数'); return; }
-  try{
-    await api('/admin/api/upstream-tokens/' + tokenId + '/image-concurrency', {
-      method:'PUT', body:JSON.stringify({image_concurrency:limit})});
-    toast('上游图片并发已保存');
-    loadOverview();
-  }catch(e){ toast(e.message); }
-}
-async function setUpstreamEnabled(tokenId, enabled){
-  if(!enabled && !confirm('确定停用这把上游 Key？它将不再接收新请求；已发出的请求继续完成。')) return;
-  try{
-    await api('/admin/api/upstream-tokens/' + tokenId + '/enabled', {
-      method:'PUT', body:JSON.stringify({enabled})});
-    toast(enabled?'上游 Key 已启用（401 失效仍需更换 Token）':'上游 Key 已停用');
-    loadOverview();
-  }catch(e){ toast(e.message); }
-}
-function fmt(n){ n=+n||0; return n>=1e6? (n/1e6).toFixed(1)+'M' : n>=1e3? (n/1e3).toFixed(1)+'k' : n; }
-
-/* ---------- keys ---------- */
-async function loadKeys(){
-  try{
-    const d = await api('/admin/api/keys');
-    keysCache = d.keys;
-    const tb = $('#keysTable tbody');
-    tb.innerHTML = d.keys.map(k=>{
-      const exp = k.expires_at ? new Date(k.expires_at*1000).toLocaleDateString() : '永久';
-      return `<tr>
-        <td class="key-name">${esc(k.name)}</td>
-        <td><span class="mono" data-tok="${esc(k.token)}">${mask(k.token)}</span><br>
-            <button class="btn mini" onclick="copyKey(this)">复制</button></td>
-        <td>${k.enabled?'<span class="tag on">启用</span>':'<span class="tag off">禁用</span>'}
-            ${k.allow_anlas?'<span class="tag warn">Anlas</span>':''}
-            ${k.is_admin?'<span class="tag on">站长</span>':''}
-            <span class="tag ${k.image_model_scope==='all'?'on':'off'}">${k.image_model_scope==='all'?'含 V5':'仅 V4.5↓'}</span>
-            ${k.allow_img2img?'<span class="tag warn">img2img</span>':''}</td>
-        <td class="key-summary">累计生成 ${k.used.generated_images_total||0} · 今日图片 ${k.used.images}<br>
-          <span class="muted">今日免费 ${k.used.legacy_free_images||0} · V5 用量 ${k.used.v5||0}</span><br>
-          <span class="muted">Anlas ${k.used.anlas} · 文本 ${fmt(k.used.text_tokens)}</span></td>
-        <td class="key-summary">${k.is_admin ? '单 Key 不限<br><span class="muted">仍受全站保护</span>' : `
-          免费图 ${k.daily_images>0?k.daily_images:'∞'}/日${k.image_model_scope==='all' ? ` · V5 ${k.daily_v5>0?k.daily_v5:'∞'}/日` : ''}<br>
-          <span class="muted">Anlas ${k.allow_anlas ? `${k.daily_anlas>0?k.daily_anlas:'∞'}/日 · ${k.monthly_anlas>0?k.monthly_anlas:'∞'}/月` : '未开'} · 文本 ${fmt(k.daily_text_tokens)}/日</span>`}
-        </td>
-        <td>${k.rpm}</td>
-        <td>${k.last_used_at ? new Date(k.last_used_at*1000).toLocaleString() : '从未使用'}</td>
-        <td>${exp}</td>
-        <td><div class="row-actions">
-          <button class="btn mini" onclick="openEdit(${k.id})">编辑</button>
-          <button class="btn mini" onclick="toggleKey(${k.id},${k.enabled?0:1})">${k.enabled?'禁用':'启用'}</button>
-          <button class="btn mini" onclick="regenerateKey(${k.id},this)">重新生成 Key</button>
-          <button class="btn mini" onclick="resetDailyImageQuota(${k.id})">重置今日额度</button>
-          <button class="btn mini danger" onclick="delKey(${k.id})">删除</button>
-        </div></td>
-      </tr>`;
-    }).join('') || '<tr><td colspan="9" class="muted">还没有 Key，点右上角「新建 Key」</td></tr>';
-    $('#logFilter').innerHTML = '<option value="">全部 Key</option>' +
-      d.keys.map(k=>`<option value="${k.id}">${esc(k.name)}</option>`).join('');
-  }catch(e){ toast(e.message); }
-}
-function mask(t){ return t.slice(0,8) + '····' + t.slice(-4); }
-function copyKey(btn){
-  const t = btn.closest('td').querySelector('[data-tok]').dataset.tok;
-  if(!navigator.clipboard?.writeText){
-    prompt('请手动复制：', t); return;
-  }
-  navigator.clipboard.writeText(t).then(()=>toast('已复制'), ()=>{
-    prompt('请手动复制：', t);
-  });
-}
-function openCreate(){
-  editingId = null;
-  $('#modalTitle').textContent = '新建 Key';
-  $('#modalSave').textContent = '创建';
-  $('#f_name').value=''; $('#f_daily_anlas').value=100;
-  $('#f_image_model_scope').value='legacy';
-  $('#f_daily_images').value=100; $('#f_daily_v5').value=50; $('#f_monthly_anlas').value=2500;
-  $('#f_daily_text').value=150000; $('#f_rpm').value=10; $('#f_expires').value=30;
-  $('#f_expires').placeholder='';
-  $('#f_allow_anlas').checked=false; $('#f_allow_img2img').checked=false;
-  $('#f_exclude_global_v5').checked=false;
-  $('#modalErr').textContent=''; $('#modal').style.display='flex';
-}
-function openEdit(id){
-  const k = keysCache.find(x=>x.id===id); if(!k) return;
-  editingId = id;
-  $('#modalTitle').textContent = '编辑：' + k.name;
-  $('#modalSave').textContent = '保存';
-  $('#f_name').value = k.name;
-  $('#f_image_model_scope').value = k.image_model_scope || 'legacy';
-  $('#f_daily_anlas').value = k.daily_anlas;
-  $('#f_daily_images').value = k.daily_images;
-  $('#f_daily_v5').value = k.daily_v5;
-  $('#f_monthly_anlas').value = k.monthly_anlas;
-  $('#f_daily_text').value = k.daily_text_tokens;
-  $('#f_rpm').value = k.rpm;
-  $('#f_expires').value = '';
-  $('#f_expires').placeholder = '留空保持原有效期';
-  $('#f_allow_anlas').checked = k.allow_anlas;
-  $('#f_allow_img2img').checked = k.allow_img2img;
-  $('#f_exclude_global_v5').checked = k.exclude_global_v5;
-  $('#modalErr').textContent=''; $('#modal').style.display='flex';
-}
-function closeModal(){ $('#modal').style.display='none'; }
-async function saveKey(){
-  const body = {
-    name: $('#f_name').value,
-    image_model_scope: $('#f_image_model_scope').value,
-    daily_anlas: +$('#f_daily_anlas').value,
-    daily_images: +$('#f_daily_images').value,
-    daily_v5: +$('#f_daily_v5').value,
-    monthly_anlas: +$('#f_monthly_anlas').value,
-    daily_text_tokens: +$('#f_daily_text').value,
-    rpm: +$('#f_rpm').value,
-    allow_anlas: $('#f_allow_anlas').checked,
-    allow_img2img: $('#f_allow_img2img').checked,
-    exclude_global_v5: $('#f_exclude_global_v5').checked,
-  };
-  try{
-    if(editingId){
-      if($('#f_expires').value.trim() !== '') body.expires_days = +$('#f_expires').value;
-      await api('/admin/api/keys/'+editingId, {method:'PATCH', body: JSON.stringify(body)});
-      toast('已保存');
-    }else{
-      body.expires_days = +$('#f_expires').value;
-      const d = await api('/admin/api/keys', {method:'POST', body: JSON.stringify(body)});
-      await loadKeys(); closeModal();
-      prompt('请立即复制新 Key（发给用户）：', d.key.token);
-      return;
-    }
-    closeModal(); loadKeys();
-  }catch(e){ $('#modalErr').textContent = e.message; }
-}
-async function toggleKey(id, enabled){
-  await api('/admin/api/keys/'+id, {method:'PATCH', body: JSON.stringify({enabled})}).catch(e=>toast(e.message));
-  loadKeys();
-}
-const regeneratingKeys = new Set();
-async function regenerateKey(id, button){
-  const key = keysCache.find(k=>k.id===id);
-  if(!key || regeneratingKeys.has(id)) return;
-  if(!confirm(`确定重新生成「${key.name}」的 Key？\n旧 Key 将立即失效，需在客户端替换。\n配额、权限、有效期和历史用量保留，已受理任务继续完成。`)) return;
-  regeneratingKeys.add(id); button.disabled = true;
-  try{
-    const data = await api('/admin/api/keys/'+id+'/regenerate', {method:'POST'});
-    key.token = data.token;
-    prompt('旧 Key 已失效，请复制新 Key 并更新客户端：', data.token);
-    toast('Key 已重新生成，配额和历史用量已保留');
-  }catch(e){ toast(e.message); }
-  finally{
-    await loadKeys();
-    regeneratingKeys.delete(id); button.disabled = false;
-  }
-}
-async function resetDailyImageQuota(id){
-  const key = keysCache.find(k=>k.id===id); if(!key) return;
-  const name = key.name;
-  if(!confirm(`确定重置「${name}」今日的 V5 和 Anlas 用量吗？\n图片、文本、请求数及用量日志不会删除。`)) return;
-  try{
-    await api('/admin/api/keys/'+id+'/reset-daily-image-quota', {method:'POST'});
-    toast('已重置「'+name+'」今日的 V5 和 Anlas 用量');
-    loadKeys();
-  }catch(e){ toast(e.message); }
-}
-async function delKey(id){
-  const key = keysCache.find(k=>k.id===id); if(!key) return;
-  const name = key.name;
-  if(!confirm(`确定删除 Key「${name}」？该操作不可恢复。`)) return;
-  await api('/admin/api/keys/'+id, {method:'DELETE'}).catch(e=>toast(e.message));
-  loadKeys();
-}
-
-/* ---------- logs ---------- */
-async function loadLogs(){
-  try{
-    const kf = $('#logFilter').value;
-    const d = await api('/admin/api/logs?' + (kf?`key_id=${kf}&`:'') + `page=${logPage}`);
-    logPage = d.page;
-    $('#logBody').innerHTML = d.logs.map(l=>`
-      <tr>
-        <td class="mono">${new Date(l.ts*1000).toLocaleString()}</td>
-        <td>${esc(l.key_name)}</td>
-        <td>${esc(l.kind)}</td>
-        <td class="mono">${esc(l.model)}</td>
-        <td>${l.status==='ok'?'<span class="tag on">ok</span>':l.status==='rejected'?'<span class="tag warn">拒绝</span>':'<span class="tag off">错误</span>'}</td>
-        <td>${l.images||''}</td><td>${l.anlas||''}</td>
-        <td>${l.unconfirmed_anlas>0?`<span class="tag warn">≈ ${l.unconfirmed_anlas}</span>`:'—'}</td><td>${l.tokens||''}</td>
-        <td class="muted">${esc(l.detail)}</td>
-      </tr>`).join('') || '<tr><td colspan="10" class="muted">暂无记录</td></tr>';
-    $('#logPager').innerHTML = `
-      <span class="muted">共 ${d.total} 条，第 ${d.page} / ${d.pages} 页（每页 ${d.per_page} 条）</span>
-      <button class="btn mini" onclick="changeLogPage(-1)" ${d.page<=1?'disabled':''}>上一页</button>
-      <button class="btn mini" onclick="changeLogPage(1)" ${d.page>=d.pages?'disabled':''}>下一页</button>`;
-  }catch(e){ toast(e.message); }
-}
-function changeLogPage(delta){ logPage=Math.max(1,logPage+delta); loadLogs(); }
-
-/* ---------- settings ---------- */
-async function loadSettings(){
-  try{
-    const [a, s, o, r] = await Promise.all([
-      api('/admin/api/announcement'), api('/admin/api/settings'),
-      api('/admin/api/overview'), api('/admin/api/runtime-limits')]);
-    $('#announce').value = a.html || '';
-    $('#s_budget').value = s.global_monthly_anlas;
-    $('#s_v5').value = s.global_daily_v5;
-    $('#s_v5_alert').value = s.v5_alert_threshold;
-    $('#s_auto_medium').checked = s.v5_auto_medium;
-    $('#s_medium_threshold').value = s.v5_medium_threshold;
-    $('#s_medium_multiplier').value = s.v5_medium_multiplier;
-    for(const name of ['queue_timeout','key_image_min_interval','image_min_interval','image_429_cooldown_seconds']){
-      $('#r_'+name).value = r[name];
-    }
-    $('#cfgInfo').innerHTML =
-      `上游令牌池：${o.pool_configured ? o.pool.map(p=>esc(p.token)).join(', ') : '未配置（设置 NAI_TOKENS）'}<br>` +
-      `本月 Anlas：${o.month.anlas} / 预算 ${o.anlas_budget>0?o.anlas_budget:'∞'}<br>` +
-      `今日请求：${o.today.requests} ｜ 图片 ${o.today.images} ｜ Anlas ${o.today.anlas}<br>` +
-      `敏感配置仍在 .env；更多说明见项目 README`;
-  }catch(e){ toast(e.message); }
-}
-async function saveBudget(){
-  const d = await api('/admin/api/settings', {method:'PUT', body: JSON.stringify({
-    global_monthly_anlas: +$('#s_budget').value,
-    global_daily_v5: +$('#s_v5').value,
-    v5_alert_threshold: +$('#s_v5_alert').value,
-    v5_auto_medium: $('#s_auto_medium').checked,
-    v5_medium_threshold: +$('#s_medium_threshold').value,
-    v5_medium_multiplier: +$('#s_medium_multiplier').value,
-  })});
-  toast('已保存：月预算 ' + d.global_monthly_anlas + 'A / V5 日限 ' + d.global_daily_v5);
-  loadAllowance();
-}
-async function saveRuntimeLimits(){
-  const body = {};
-  const bounds = {queue_timeout:[15,300],key_image_min_interval:[15,120],
-    image_min_interval:[15,120],image_429_cooldown_seconds:[60,3600]};
-  for(const [name,[min,max]] of Object.entries(bounds)){
-    const value = Number($('#r_'+name).value);
-    if(!Number.isInteger(value) || value<min || value>max){
-      toast(`${name} 必须是 ${min}～${max} 的整数`); return;
-    }
-    body[name] = value;
-  }
-  try{
-    await api('/admin/api/runtime-limits', {method:'PUT',body:JSON.stringify(body)});
-    toast('运行限制已保存并生效');
-  }catch(e){ toast(e.message); }
-}
-async function saveAnnounce(){
-  await api('/admin/api/announcement', {method:'PUT', body: JSON.stringify({html: $('#announce').value})});
-  toast('公告已保存');
-}
-
-document.addEventListener('visibilitychange', ()=>{ if(!document.hidden && allowanceTimer) loadAllowance(); });
-boot();
-</script>
+<dialog id="modal" class="gate-dialog" onclick="if(event.target===this)closeModal()">
+  <form id="keyForm" class="modal-card" onsubmit="event.preventDefault();saveModal()">
+    <header><h2 id="modalTitle">新建 Key</h2><button class="icon-button" type="button" aria-label="关闭编辑窗口" onclick="closeModal()"><i data-icon="close"></i></button></header>
+    <label for="f_name">名称 / 备注</label><input id="f_name" placeholder="例如：工作台自用" maxlength="60" required>
+    <label for="f_image_model_scope">图片模型范围</label><select id="f_image_model_scope"><option value="legacy">V4.5 及更低</option><option value="all">全部当前模型（含 V5）</option></select>
+    <div class="grid2">
+      <div><label for="f_daily_images">每日免费图片</label><input id="f_daily_images" type="number" min="0" max="1000000" step="1" required></div>
+      <div><label for="f_daily_v5">每日 V5 额度</label><input id="f_daily_v5" type="number" min="0" max="100000" step="1" required></div>
+      <div><label for="f_daily_anlas">每日 Anlas</label><input id="f_daily_anlas" type="number" min="0" max="100000" step="any" required></div>
+      <div><label for="f_monthly_anlas">每月 Anlas</label><input id="f_monthly_anlas" type="number" min="0" max="100000" step="any" required></div>
+      <div><label for="f_daily_text">每日文本 Token</label><input id="f_daily_text" type="number" min="0" max="100000000" step="1" required></div>
+      <div><label for="f_rpm">每分钟请求数</label><input id="f_rpm" type="number" min="1" max="600" step="1" required></div>
+      <div><label for="f_expires" id="expiryLabel">有效天数 · 0 为长期</label><input id="f_expires" type="number" min="0" max="3650" step="1"></div>
+    </div>
+    <label class="check"><input id="f_allow_anlas" type="checkbox"><span>允许消耗 Anlas</span></label>
+    <label class="check"><input id="f_allow_img2img" type="checkbox"><span>允许图生图 / 局部重绘<small>需同时允许消耗 Anlas</small></span></label>
+    <label class="check"><input id="f_exclude_global_v5" type="checkbox"><span>独立 V5 额度</span></label>
+    <div id="keyUsageDetail" class="settings-note" hidden></div>
+    <div id="keyOperations" class="key-operations" hidden></div>
+    <div class="err" id="modalErr" role="alert"></div>
+    <footer class="modal-foot"><button class="btn" type="button" onclick="closeModal()">取消</button><button class="btn btn-primary" type="submit" id="modalSave">创建</button></footer>
+  </form>
+</dialog>
+<dialog id="upstreamDialog" class="upstream-dialog gate-dialog">
+  <form id="upstreamCredentialForm" onsubmit="saveUpstreamCredential(event)">
+    <h3 id="upstreamDialogTitle">添加上游账号</h3>
+    <label for="upstreamCredential">NovelAI Token</label><input id="upstreamCredential" type="password" autocomplete="new-password" spellcheck="false" required>
+    <div id="upstreamAddOptions">
+      <div class="setting-row"><label for="upstreamNewV5">免费 V5 每日上限<small>0 = 不限</small></label><input id="upstreamNewV5" type="number" min="0" max="100000" step="1" value="0" required></div>
+      <div class="setting-row"><label for="upstreamNewConcurrency">图片并发</label><select id="upstreamNewConcurrency"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
+      <div class="setting-row"><label for="upstreamNewAnlas">允许消耗 Anlas</label><div class="setting-check"><input id="upstreamNewAnlas" type="checkbox" checked></div></div>
+      <div class="setting-row"><label for="upstreamNewEnabled">启用账号</label><div class="setting-check"><input id="upstreamNewEnabled" type="checkbox" checked></div></div>
+    </div>
+    <div id="upstreamCredentialError" class="err" role="alert"></div>
+    <div class="modal-foot"><button class="btn" type="button" onclick="closeUpstreamDialog()">取消</button><button class="btn btn-primary" type="submit" id="upstreamCredentialSave">保存</button></div>
+  </form>
+</dialog>
+<dialog id="confirmDialog" class="gate-dialog gate-confirm-dialog" aria-labelledby="confirmTitle">
+  <header><h2 id="confirmTitle">确认操作</h2></header>
+  <p id="confirmMessage" class="gate-dialog-note"></p>
+  <footer class="modal-foot"><button class="btn" type="button" id="confirmCancel">取消</button><button class="btn btn-primary" type="button" id="confirmAccept">确认</button></footer>
+</dialog>
+<dialog id="keyTokenDialog" class="gate-dialog" aria-labelledby="keyTokenTitle">
+  <header><h2 id="keyTokenTitle">Key</h2><button class="icon-button" type="button" id="closeKeyToken" aria-label="关闭 Key 窗口"><i data-icon="close"></i></button></header>
+  <label for="keyTokenValue">Key</label><input id="keyTokenValue" class="gate-token-value" readonly autocomplete="off" spellcheck="false">
+  <p id="keyTokenStatus" class="gate-dialog-note" role="status"></p>
+  <footer class="modal-foot"><button class="btn btn-primary" type="button" id="copyKeyToken">复制 Key</button></footer>
+</dialog>
+<div class="toast" id="toast" role="status"></div>
 </body>
 </html>
