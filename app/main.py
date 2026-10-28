@@ -19,6 +19,7 @@ import anyio
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import admin, registration_routes
@@ -155,6 +156,8 @@ if SETTINGS.cors_origins:
                        allow_methods=["*"], allow_headers=["*"], allow_credentials=False)
 app.include_router(admin.router)
 app.include_router(registration_routes.router)
+app.mount("/admin/assets", StaticFiles(directory=Path(__file__).parent / "static" / "assets"),
+          name="admin-assets")
 
 
 @app.exception_handler(GateError)
