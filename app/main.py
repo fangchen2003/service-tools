@@ -31,6 +31,8 @@ from .config import load_settings
 from .client_views import subscription_payload
 from .image_events import ImageEventTracker, ImageStreamProtocolError, STREAM_MEDIA_TYPES
 from .image_streaming import ImageStreamResponse
+from .image_events import encode_image_event
+from .image_receipts import RECEIPT_HEADER, image_receipt, receipt_headers
 from .image_tools import dimensions, prepare_tool, validate_result, MAX_RESPONSE_BYTES
 from .image_payload import read_image_body
 from .nai import NaiClient, UpstreamError, _wait_cleanup
@@ -534,7 +536,8 @@ async def image_tool(request: Request, operation: str):
                 raise err(502, "图片工具连接失败或返回无效结果，未记费；请勿自动重试") from None
             await settle_record(key, operation, model, "ok", images=count, anlas=cost,
                                 detail=f"图片工具 {cost} Anlas；返回 {count} 张")
-            return Response(resp.content, media_type=media, headers={"Cache-Control": "no-store"})
+            return Response(resp.content, media_type=media, headers={"Cache-Control": "no-store",
+                            **receipt_headers(request, image_receipt(payload, operation, count, estimate))})
 
         async with reserve_image_budget(key, estimate):
             return await complete_image_operation(perform())
@@ -594,7 +597,8 @@ async def encode_vibe(request: Request):
         await settle_record(key, "vibe_encode", model, "ok", anlas=VIBE_ENCODING_ANLAS,
                             detail=f"Vibe 编码 {VIBE_ENCODING_ANLAS} Anlas")
         return Response(resp.content, media_type="application/octet-stream",
-                        headers={"Cache-Control": "no-store"})
+                        headers={"Cache-Control": "no-store",
+                                 **receipt_headers(request, image_receipt(payload, "encode-vibe", 0, estimate))})
 
     await wait_for_user_image_slot(key)
     async with acquire_concurrency(key, image=True):
@@ -919,7 +923,9 @@ async def _generate_image(request: Request, *, streaming: bool):
                             v5=est["v5"], legacy_free_images=legacy_free_images,
                             detail=detail)
         return Response(resp.content, status_code=200,
-                        media_type=resp.headers.get("content-type", "application/octet-stream"))
+                        media_type=resp.headers.get("content-type", "application/octet-stream"),
+                        headers=receipt_headers(request, image_receipt(body, body.get("action", "generate"),
+                                                                      image_count, est, legacy_free_images)))
 
     if streaming:
         # Existing panels default to SSE; Launcher explicitly requests MessagePack.
@@ -935,6 +941,8 @@ async def _generate_image(request: Request, *, streaming: bool):
 
         async def perform_stream(response):
             tracker = ImageEventTracker(image_count, wire_format)
+            wants_receipt = request.headers.get(RECEIPT_HEADER) == "1"
+            pending_final = []
             failure = None
             billing_uncertain = False
             try:
@@ -969,7 +977,10 @@ async def _generate_image(request: Request, *, streaming: bool):
                                 # has been identified, even across network chunks.
                                 for frame in tracker.frames(chunk):
                                     handle.completed_images = tracker.completed_images
-                                    await response.chunk(frame)
+                                    if wants_receipt and tracker.completed_images == image_count:
+                                        pending_final.append(frame)
+                                    else:
+                                        await response.chunk(frame)
                                 if tracker.failed:
                                     raise UpstreamError(502, "上游流式生成失败")
                                 if tracker.completed_images == image_count:
@@ -1003,6 +1014,12 @@ async def _generate_image(request: Request, *, streaming: bool):
                         legacy_free_images=legacy_free_images,
                         detail=detail + (f"; 完成 {completed}/{image_count}" if completed < image_count else ""),
                     )
+                if completed and wants_receipt:
+                    receipt = image_receipt(body, body.get("action", "generate"), completed,
+                                            settled, legacy_free_images)
+                    await response.chunk(encode_image_event({"event_type": "gate_receipt", "receipt": receipt}, wire_format))
+                    for frame in pending_final:
+                        await response.chunk(frame)
                 if failure or not completed:
                     # 未结算部分单独记为待核对费用。
                     await record(key, "image_stream", model, "error",
