@@ -110,7 +110,9 @@ async def lifespan(app: FastAPI):
     install_access_log_filter()
     STATE = GateState(SETTINGS)
     await STATE.db.connect()
+    await STATE.load_configuration()
     await STATE.load_runtime_limits()
+    await STATE.nai.load_managed_tokens(SETTINGS.data_dir / "upstream_tokens.json")
     await STATE.db.migrate_upstream_token_ids([token.token_id for token in STATE.nai.pool])
     await STATE.nai.load_saved_limits()
     await STATE.load_image_cooldown()
@@ -130,8 +132,8 @@ async def lifespan(app: FastAPI):
             print(f"[seed] 演示 Key: {row['token']}")
     if not SETTINGS.admin_password:
         print("[warn] 未设置 ADMIN_PASSWORD，/admin 管理端将无法登录！")
-    if not SETTINGS.nai_tokens:
-        print("[warn] 未设置 NAI_TOKENS，所有生成请求将返回 503")
+    if not STATE.nai.configured:
+        print("[warn] 尚未配置上游账号，所有生成请求将返回 503")
     app.state.gate = STATE
     registration_http = httpx.AsyncClient()
     app.state.registrar = configured_service(STATE.db, registration_http)
@@ -569,6 +571,12 @@ async def encode_vibe(request: Request):
             return await complete_image_operation(perform_encoding())
 
 
+def image_step_limit(key, model_tier):
+    if key["is_admin"] or key["allow_anlas"]:
+        return None
+    return min(23 if model_tier == "v5" else 28, max(1, STATE.settings.max_steps))
+
+
 async def generate_image(request: Request):
     return await _generate_image(request, streaming=False)
 
@@ -600,7 +608,7 @@ async def _generate_image(request: Request, *, streaming: bool):
     p0 = body.get("parameters", {}) or {}
     if not isinstance(p0, dict):
         raise err(400, "parameters 必须是 JSON 对象")
-    # The ordinary-user step limit also covers paid keys and SAFE_CLAMP=0.
+    # Free-key step limits are independent of SAFE_CLAMP; paid keys keep their steps.
     step_notes = []
     if not key["is_admin"]:
         value = p0.get("steps", 23)
@@ -612,10 +620,10 @@ async def _generate_image(request: Request, *, streaming: bool):
                 raise ValueError
         except (TypeError, ValueError, OverflowError):
             raise err(400, "steps 必须是正整数") from None
-        limit = min(23, max(1, STATE.settings.max_steps))
-        p0["steps"] = min(steps, limit)
+        limit = image_step_limit(key, model_tier)
+        p0["steps"] = min(steps, limit) if limit is not None else steps
         body["parameters"] = p0
-        if steps > limit:
+        if limit is not None and steps > limit:
             step_notes.append(f"步数已钳制为 {limit}")
     if (p0.get("image") or p0.get("mask")) and not key["is_admin"]:
         if not (key["allow_img2img"] and STATE.settings.allow_img2img):
@@ -681,7 +689,7 @@ async def _generate_image(request: Request, *, streaming: bool):
         nonlocal body, p, detail, model
         config = await effort_settings(STATE.db)
         auto = False
-        if (config["v5_auto_medium"] and not key["is_admin"]
+        if (config["v5_auto_medium"] and not key["is_admin"] and not key["allow_anlas"]
                 and body.get("model") == "nai-diffusion-5-full"
                 and body.get("action", "generate") == "generate"
                 and not (p.get("image") or p.get("mask"))):
@@ -1073,7 +1081,10 @@ async def v1_me(request: Request):
         "is_admin": bool(key["is_admin"]),
         "generated_images_total": generated_images.get(key["id"], 0),
         "image_policy": {
-            "max_steps": None if key["is_admin"] else min(23, STATE.settings.max_steps),
+            "max_steps": image_step_limit(key, "legacy"),
+            "max_steps_by_tier": {
+                tier: image_step_limit(key, tier) for tier in ("legacy", "v5")
+            },
             "v5_quota_unit": "High 等效用量",
             **await effort_settings(STATE.db),
             "medium_settings": {"steps": 14, "sampler": "k_euler_ancestral",
