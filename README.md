@@ -85,17 +85,21 @@ curl 'https://你的域名/ai/generate-image' \
 
 ### 只读图片报价
 
-`POST /v1/image/quote` 使用与生成接口相同的 Bearer Key。请求包含 `operation`（`generate-image`、`upscale`、`augment-image` 或 `encode-vibe`）与对应接口的原始 `payload`。例如：
+`POST /v1/image/quote` 使用与生成接口相同的 Bearer Key。请求最多 4 KiB，顶层只接受 `operation`、`model`、`parameters`。报价只接收计价元数据，不接受图片、蒙版、Vibe 编码、提示词或旧的 `payload` 格式。例如：
 
 ```json
-{"operation":"generate-image","payload":{"model":"nai-diffusion-5-full","action":"generate","parameters":{"width":832,"height":1216,"steps":28,"n_samples":1}}}
+{"operation":"generate-image","model":"nai-diffusion-5-full","parameters":{"mode":"generate","width":832,"height":1216,"steps":28,"n_samples":1}}
 ```
 
-响应包含 `anlas`、`v5`、`generation_anlas`、`encoding_anlas`、`effective_model`、`effective_parameters`、`notes` 及 `cost_limit`。报价与生成共用步数/尺寸调整、Medium 路由、参考附加费和工具计费代码。需要编码的 V4/V4.5 参考图可放在原始参考数组中，并通过 `pending_vibe_indices` 指定索引；相同原图及信息提取值只计一次编码费，生成附加费仍按参考条目数计算。
+`generate-image` 必填整数 `width`、`height`（64–8192）和正整数 `steps`；`mode` 为 `generate`（默认）、`img2img` 或 `inpaint`。可选字段：`n_samples`（正整数，默认 1），`strength`、`inpaint_strength`（0–1，默认 1），`sm`、`sm_dyn`、`upscaled_enhance`、`has_controlnet`（布尔，默认 `false`），`vibe_count`、`precise_count`、`pending_vibe_encoding_count`（0–16 的整数，默认 0）。模型 ID 使用实际生成请求的 ID，包括重绘后缀。Max 增强的宽高为规范化后的源图尺寸，其余生成使用目标尺寸。
 
-`GET /v1/image/quote` 只验证 Key 并返回用户名，供适配服务在解析大图片前鉴权。两种报价请求都不更新 Key 使用时间、不创建计数或日志、不预留额度、不排队生图，也不请求官方账号。并行报价数量受限，繁忙时返回 429。
+`upscale` 只接收源图 `width`、`height`，模型固定为 `nai-diffusion-5-curated`。`augment-image` 接收源图 `width`、`height` 和 `req_type`。`encode-vibe` 的 `parameters` 为 `{}`，模型限 V4/V4.5。工具仍遵循至少 64 像素、最多 3,145,728 像素的源尺寸限制。
 
-`cost_limit` 是本次生成的 `{ "anlas": 0, "v5": 0.6 }` 形式上限；Vibe 编码使用单独返回的 `encoding_cost_limit`。客户端确认费用后，将相应上限放到实际生成/图片工具/编码请求的顶层。Gate 会在派发前复核，包括排队后的 V5 状态变化；超出任一上限返回 409，不发送该次生成。未携带上限的已有客户端沿用原有行为。上游 V5 可用额度仍由真实生成在派发前核验，报价中的 `upstream_allowance_verified` 为 `false`。
+响应包含 `anlas`、`v5`、`generation_anlas`、`encoding_anlas`、`effective_model`、`effective_parameters`、`notes` 及 `cost_limit`。报价与生成共用步数/尺寸调整、Medium 路由、参考附加费和工具计费代码。V4/V4.5 的 `pending_vibe_encoding_count` 是客户端按原图、模型和信息提取值去重后的待编码数量，不能超过 `vibe_count`；生成附加费仍按参考条目数计算。Vibe 与精准参考不能混用。
+
+`GET /v1/image/quote` 只验证 Key 并返回用户名。两种报价请求都不更新 Key 使用时间、不创建计数或日志、不预留额度、不排队生图，也不请求官方账号。报价没有单独的并发槽位限制。
+
+`cost_limit` 是本次生成的 `{ "anlas": 0, "v5": 0.6 }` 形式上限；Vibe 编码使用单独返回的 `encoding_cost_limit`。客户端确认费用后，将相应上限放到实际生成/图片工具/编码请求的顶层。真实请求仍发送完整图片和参数，Gate 验证图片及参考数据并从真实请求重新计算费用，不信任其中附带的报价元数据字段。派发前会复核费用上限，包括排队后的 V5 状态变化；超出任一上限返回 409，不发送该次生成。未携带上限的已有客户端沿用原有行为。上游 V5 可用额度仍由真实生成在派发前核验，报价中的 `upstream_allowance_verified` 为 `false`。
 
 Medium 的 Anlas 基础公式在取整前对步数项应用官网的 `1 / 1.06521739` 系数；它与站内 V5 额度的 0.60 倍率独立。相同 1408×2176、14 步、强度 0.5 的图生图，High 预计 26 Anlas、Medium 预计 25 Anlas。
 

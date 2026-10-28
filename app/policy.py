@@ -117,6 +117,19 @@ def _unit_value(value: Any) -> bool:
             and 0 <= value <= 1 and math.isfinite(value))
 
 
+def validate_reference_counts(model: str, vibe_count: int, precise_count: int) -> Optional[str]:
+    model = model.strip().lower()
+    if vibe_count > REFERENCE_LIMIT or precise_count > REFERENCE_LIMIT:
+        return "每次最多使用 16 张参考图"
+    if vibe_count and precise_count:
+        return "精确参考与 Vibe 不能同时使用"
+    if vibe_count and model not in VIBE_RAW_MODELS | VIBE_ENCODED_MODELS:
+        return "当前模型不支持 Vibe；请使用 V3、V4 或 V4.5"
+    if precise_count and model not in PRECISE_REFERENCE_MODELS:
+        return "精确参考仅支持 V4.5"
+    return None
+
+
 def validate_vibe_encoding(body: dict) -> Optional[str]:
     if not isinstance(body.get("model"), str) or body["model"] not in VIBE_ENCODED_MODELS:
         return "Vibe 预编码仅支持 V4 / V4.5；V3 使用原图，V5 暂不支持 Vibe"
@@ -150,14 +163,9 @@ def validate_image_references(payload: dict) -> Optional[str]:
         return "Vibe 原始数组与缓存数组不能同时提交"
     vibe_count = len(vibes or cached_vibes)
     precise_count = len(precise)
-    if vibe_count > REFERENCE_LIMIT or precise_count > REFERENCE_LIMIT:
-        return "每次最多使用 16 张参考图"
-    if vibe_count and precise_count:
-        return "精确参考与 Vibe 不能同时使用"
-    if vibe_count and model not in VIBE_RAW_MODELS | VIBE_ENCODED_MODELS:
-        return "当前模型不支持 Vibe；请使用 V3、V4 或 V4.5"
-    if precise_count and model not in PRECISE_REFERENCE_MODELS:
-        return "精确参考仅支持 V4.5"
+    problem = validate_reference_counts(model, vibe_count, precise_count)
+    if problem:
+        return problem
 
     for name in ("reference_information_extracted_multiple", "reference_strength_multiple"):
         # V4/V4.5 encodings already contain the extraction amount. V3 raw images
@@ -211,7 +219,41 @@ def reference_surcharge(payload: dict) -> int:
     precise = len(p.get("director_reference_images_cached") or [])
     vibes = len(p.get("reference_image_multiple") or p.get("reference_image_multiple_cached") or [])
     model = str(payload.get("model", "")).strip().lower()
-    return precise * 5 + (max(0, vibes - 4) * 2 if model in VIBE_ENCODED_MODELS else 0)
+    return reference_count_surcharge(model, vibes, precise)
+
+
+def reference_count_surcharge(model: str, vibe_count: int, precise_count: int) -> int:
+    model = model.strip().lower()
+    return precise_count * 5 + (max(0, vibe_count - 4) * 2 if model in VIBE_ENCODED_MODELS else 0)
+
+
+def image_pricing_parameters(payload: dict) -> dict:
+    """Project a validated execution request into content-free pricing inputs."""
+    p = payload.get("parameters", payload)
+    result = {name: p[name] for name in ("width", "height", "steps", "n_samples", "sm", "sm_dyn",
+                                        "strength", "upscaled_enhance") if name in p}
+    result.update(mode="inpaint" if p.get("mask") else "img2img" if p.get("image") else "generate",
+                  has_controlnet=bool(p.get("controlnet_model") or p.get("controlnet_condition")),
+                  has_character_references=bool(p.get("characterReferences")),
+                  vibe_count=len(p.get("reference_image_multiple") or p.get("reference_image_multiple_cached") or []),
+                  precise_count=len(p.get("director_reference_images_cached") or []))
+    if p.get("mask"):
+        inpaint = p.get("img2img") or {}
+        if not isinstance(inpaint, dict):
+            raise ValueError("img2img 必须是 JSON 对象")
+        result["inpaint_strength"] = inpaint.get("strength", 1.0)
+    return result
+
+
+def pricing_image_size(model: str, p: dict, width: int, height: int) -> tuple[int, int]:
+    flag = p.get("upscaled_enhance", False)
+    if type(flag) is not bool:
+        raise ValueError("upscaled_enhance 必须为布尔值")
+    if flag:
+        if model not in MAX_ENHANCE_MODELS or p.get("mode", "generate") != "img2img" or p.get("n_samples", 1) != 1:
+            raise ValueError("Max 增强仅支持 V5 单张图生图，不能与重绘或放大叠加")
+        return max_enhance_sizes(width, height)[0]
+    return width, height
 
 
 # ---------------------------------------------------------------- tokens ----
@@ -254,28 +296,22 @@ def _per_image_cost(width: int, height: int, steps: int,
     return math.ceil(base) * smea_factor
 
 
-def _has_paid_extras(params: dict) -> bool:
-    p = params.get("parameters", params)
-    if p.get("controlnet_model") or p.get("controlnet_condition"):
-        return True
-    # V4/V5 角色参考 / 精确参考按张额外收费
-    if p.get("characterReferences"):
-        return True
-    if reference_surcharge(params):
-        return True
-    return False
-
-
 def opus_free_eligible(params: dict) -> bool:
     """首张是否符合免费条件；批次内其余图片仍按张计费。"""
     p = params.get("parameters", params)
-    if _has_paid_extras(params):
+    image_cost_size(params, int(p.get("width", 0) or 0), int(p.get("height", 0) or 0))
+    return pricing_free_eligible(str(params.get("model", "")), image_pricing_parameters(params))
+
+
+def pricing_free_eligible(model: str, p: dict, *, include_references: bool = True) -> bool:
+    if (p.get("has_controlnet") or p.get("has_character_references") or
+            (include_references and reference_count_surcharge(model, p.get("vibe_count", 0), p.get("precise_count", 0)))):
         return False
     if int(p.get("steps", 28) or 0) > 28:
         return False
     w = int(p.get("width", 0) or 0)
     h = int(p.get("height", 0) or 0)
-    w, h = image_cost_size(params, w, h)
+    w, h = pricing_image_size(model, p, w, h)
     if w <= 0 or h <= 0 or w * h > 1024 * 1024:
         return False
     return True
@@ -318,53 +354,53 @@ def estimate_image_cost(params: dict, is_opus: bool = True, *,
     if problem:
         raise ValueError(problem)
     p = params.get("parameters", params)
+    image_cost_size(params, int(p.get("width", 832) or 832), int(p.get("height", 1216) or 1216))
+    return estimate_image_price(str(params.get("model", "")), image_pricing_parameters(params),
+                                is_opus=is_opus, v5_allowance_available=v5_allowance_available,
+                                medium_multiplier=medium_multiplier)
+
+
+def estimate_image_price(model: str, p: dict, is_opus: bool = True, *,
+                         v5_allowance_available: bool = True, medium_multiplier: float = 0.60) -> dict[str, float]:
+    """The shared numeric formula; image and reference bytes are never needed here."""
     w = int(p.get("width", 832) or 832)
     h = int(p.get("height", 1216) or 1216)
-    w, h = image_cost_size(params, w, h)
+    w, h = pricing_image_size(model, p, w, h)
     steps = int(p.get("steps", 28) or 28)
     smea = bool(p.get("sm"))
     smea_dyn = bool(p.get("sm_dyn"))
     n = max(1, int(p.get("n_samples", 1) or 1))
 
     # Official Medium pricing discounts only the step term, before rounding.
-    step_multiplier = 1 / 1.06521739 if params.get("model") in MEDIUM_MODELS else 1
+    step_multiplier = 1 / 1.06521739 if model in MEDIUM_MODELS else 1
     per = _per_image_cost(w, h, steps, smea, smea_dyn, step_multiplier=step_multiplier)
-    is_v5 = is_v5_model(str(params.get("model", "")))
+    is_v5 = is_v5_model(model)
     if is_v5:
         per *= V5_COST_MULTIPLIER
-    if p.get("mask"):
+    if p.get("mode") == "inpaint":
         # 局部重绘使用 img2img.strength。
-        inpaint = p.get("img2img") or {}
-        if not isinstance(inpaint, dict):
-            raise ValueError("img2img 必须是 JSON 对象")
-        strength = inpaint.get("strength", 1.0)
+        strength = p.get("inpaint_strength", 1.0)
         if not _unit_value(strength):
             raise ValueError("img2img.strength 必须是 0 到 1 的有限数值")
         # V4 按强度折算；2026-09-24 实测 V5 Full 重绘使用完整基础价。
-        if str(params.get("model", "")).lower().startswith("nai-diffusion-4"):
+        if model.lower().startswith("nai-diffusion-4"):
             per *= strength
-    elif p.get("image"):
+    elif p.get("mode") == "img2img":
         strength = float(p.get("strength", 1.0))
         per *= strength
     per = max(2, math.ceil(per))
 
     # 先排除参考附加费，判断基础生成是否满足 Opus 首张减免条件。
-    base_params = dict(params)
-    base_p = {name: value for name, value in p.items() if name not in REFERENCE_FIELDS}
-    if "parameters" in params:
-        base_params["parameters"] = base_p
-    else:
-        base_params = base_p
-    shaped = legacy_normal_free_eligible(base_params)
+    shaped = pricing_free_eligible(model, p, include_references=False)
 
     if is_v5:
-        free_first = bool(is_opus and v5_allowance_available and v5_allowance_eligible(params))
+        free_first = bool(is_opus and v5_allowance_available and pricing_free_eligible(model, p))
         return {"anlas": per * (n - int(free_first)), "v5":
-                (medium_multiplier if params.get("model") in MEDIUM_MODELS else 1) if free_first else 0}
+                (medium_multiplier if model in MEDIUM_MODELS else 1) if free_first else 0}
 
     paid_outputs = n - int(is_opus and shaped)
     # 官方余额实测：符合条件的多图首张参考费减免，单张照收。
-    reference_cost = reference_surcharge(params) * max(1, paid_outputs)
+    reference_cost = reference_count_surcharge(model, p.get("vibe_count", 0), p.get("precise_count", 0)) * max(1, paid_outputs)
     return {"anlas": per * paid_outputs + reference_cost, "v5": 0}
 
 
@@ -400,20 +436,35 @@ def clamp_image_params(payload: dict, *, max_pixels: int, max_steps: int,
     错误非 None 表示该请求被拒绝（例如 img2img 未开放）。
     对 V5：钳制后可走周额度（不烧 Anlas）；对老模型：钳制后直接免费。
     """
-    notes: list[str] = []
     out = copy.deepcopy(payload)
     p = out.get("parameters")
     if not isinstance(p, dict):
         p = {}
         out["parameters"] = p
+    values, notes, problem = clamp_image_pricing(str(out.get("model", "")), image_pricing_parameters(out),
+                                                max_pixels=max_pixels, max_steps=max_steps,
+                                                allow_img2img=allow_img2img)
+    for name in ("width", "height", "steps", "n_samples", "sm", "sm_dyn"):
+        if name in values:
+            p[name] = values[name]
+    if not values.get("has_character_references"):
+        p.pop("characterReferences", None)
+    return out, notes, problem
+
+
+def clamp_image_pricing(model: str, values: dict, *, max_pixels: int, max_steps: int,
+                         allow_img2img: bool) -> Tuple[dict, list[str], Optional[str]]:
+    """Apply the same free-key numeric limits to quotations and execution."""
+    p = dict(values)
+    notes: list[str] = []
 
     # img2img / inpaint 审查
-    is_img2img = bool(p.get("image") or p.get("mask"))
+    is_img2img = p.get("mode", "generate") != "generate"
     if is_img2img and not allow_img2img:
-        return out, notes, "本站未开放 img2img / 局部重绘"
+        return p, notes, "本站未开放 img2img / 局部重绘"
 
     if max_pixels < 64 * 64:
-        return out, notes, "MAX_PIXELS 不能小于 4096（最小尺寸 64x64）"
+        return p, notes, "MAX_PIXELS 不能小于 4096（最小尺寸 64x64）"
 
     # 批量张数 -> 1
     if int(p.get("n_samples", 1) or 1) != 1:
@@ -429,7 +480,7 @@ def clamp_image_params(payload: dict, *, max_pixels: int, max_steps: int,
     w = int(p.get("width", 0) or 0)
     h = int(p.get("height", 0) or 0)
     if w > 0 and h > 0:
-        if is_v5_model(str(out.get("model", ""))):
+        if is_v5_model(model):
             eligible = any(w <= pw and h <= ph for pw, ph in V5_NORMAL_PRESETS)
         else:
             eligible = w * h <= 1024 * 1024
@@ -447,13 +498,13 @@ def clamp_image_params(payload: dict, *, max_pixels: int, max_steps: int,
         notes.append("SMEA 已按安全钳制规则关闭")
 
     # ControlNet / 角色参考（额外计费）
-    if p.get("controlnet_model") or p.get("controlnet_condition"):
-        return out, notes, "本站未开放 ControlNet（该功能会消耗 Anlas）"
-    if p.get("characterReferences"):
-        p.pop("characterReferences", None)
+    if p.get("has_controlnet"):
+        return p, notes, "本站未开放 ControlNet（该功能会消耗 Anlas）"
+    if p.get("has_character_references"):
+        p["has_character_references"] = False
         notes.append("已移除角色参考（精确参考会消耗 Anlas）")
 
-    return out, notes, None
+    return p, notes, None
 
 
 # ------------------------------------------------------------ 文本钳制 ----
