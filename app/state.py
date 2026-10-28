@@ -55,6 +55,7 @@ class GateState:
         self._image_blocked_until = 0.0
         # Protect only quota reservation mutations; never hold this across HTTP.
         self.image_budget_lock = asyncio.Lock()
+        self.image_quote_slots = asyncio.Semaphore(2)
         self.image_reservations: dict[int, object] = {}
         self.image_budget_idle = asyncio.Event()
         self.image_budget_idle.set()

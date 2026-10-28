@@ -83,6 +83,26 @@ curl 'https://你的域名/ai/generate-image' \
 
 `/v1/me` 的 `image_policy.max_steps_by_tier` 分别返回 `legacy` 和 `v5` 的步数上限；兼容字段 `max_steps` 返回两类中的最大上限。付费 Key 和管理员 Key 的这些值均为 `null`。
 
+### 只读图片报价
+
+`POST /v1/image/quote` 使用与生成接口相同的 Bearer Key。请求包含 `operation`（`generate-image`、`upscale`、`augment-image` 或 `encode-vibe`）与对应接口的原始 `payload`。例如：
+
+```json
+{"operation":"generate-image","payload":{"model":"nai-diffusion-5-full","action":"generate","parameters":{"width":832,"height":1216,"steps":28,"n_samples":1}}}
+```
+
+响应包含 `anlas`、`v5`、`generation_anlas`、`encoding_anlas`、`effective_model`、`effective_parameters`、`notes` 及 `cost_limit`。报价与生成共用步数/尺寸调整、Medium 路由、参考附加费和工具计费代码。需要编码的 V4/V4.5 参考图可放在原始参考数组中，并通过 `pending_vibe_indices` 指定索引；相同原图及信息提取值只计一次编码费，生成附加费仍按参考条目数计算。
+
+`GET /v1/image/quote` 只验证 Key 并返回用户名，供适配服务在解析大图片前鉴权。两种报价请求都不更新 Key 使用时间、不创建计数或日志、不预留额度、不排队生图，也不请求官方账号。并行报价数量受限，繁忙时返回 429。
+
+`cost_limit` 是本次生成的 `{ "anlas": 0, "v5": 0.6 }` 形式上限；Vibe 编码使用单独返回的 `encoding_cost_limit`。客户端确认费用后，将相应上限放到实际生成/图片工具/编码请求的顶层。Gate 会在派发前复核，包括排队后的 V5 状态变化；超出任一上限返回 409，不发送该次生成。未携带上限的已有客户端沿用原有行为。上游 V5 可用额度仍由真实生成在派发前核验，报价中的 `upstream_allowance_verified` 为 `false`。
+
+Medium 的 Anlas 基础公式在取整前对步数项应用官网的 `1 / 1.06521739` 系数；它与站内 V5 额度的 0.60 倍率独立。相同 1408×2176、14 步、强度 0.5 的图生图，High 预计 26 Anlas、Medium 预计 25 Anlas。
+
+### Max Enhance
+
+V5 Full、Curated 与 Full Medium 的单张图生图可使用 `parameters.upscaled_enhance=true`。请求的宽高必须保留原图实际尺寸；不能与 mask、嵌套 img2img 或另一种放大叠加。Gate 校验源图，并按照最高 2 倍、3,145,728 像素和官网对齐规则分别计算计费尺寸与预期输出尺寸；报价分别返回 `billing_size`、`output_size`。免费资格也按增强后的计费尺寸判断。例如 832×1216、28 步、强度 0.5：计费尺寸 1440×2144，预期输出 1467×2144，预计 45 Anlas。此处为参数报价，真实生成结果仍由上游返回。
+
 图片任务在同一用户 Key 与同一上游 Token 上默认各至少间隔 15 秒，等待时会自动排队；每个排队阶段默认最多等待 90 秒。每把上游 Token 的图片并发默认 1，可在面板单独调整；提高并发会增加上游限流风险。上游图片请求触发 429 后，全站图片生成默认至少冷却 60 秒；若上游要求更长时间，则以更长者为准。以上时间可在面板调整并持久保存。免费图与付费图分开计数；流式部分成功按已完成张数结算。完整规则见[用户限制说明.md](用户限制说明.md)。
 
 ## 配置与数据
