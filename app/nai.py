@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from pathlib import Path
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
+from uuid import uuid4
 
 import anyio
 import httpx
@@ -17,6 +19,7 @@ from .allowance import AllowanceCache, AllowanceUnavailable
 from .concurrency import AdjustableLimiter
 from .image_tools import validate_result
 from .v5_effort import SCALE, units
+from .upstream_store import UpstreamManagementError, credential, policy, read_tokens, write_tokens
 
 
 class UpstreamError(Exception):
@@ -36,7 +39,7 @@ class ImageStreamHandle:
 class TokenState:
     __slots__ = (
         "token", "token_id", "position", "v5_daily_limit", "allow_anlas", "pending_v5_units",
-        "admin_enabled",
+        "admin_enabled", "text_streams",
         "dispatch_lock", "image_slots",
         "fails", "blocked_until", "disabled", "last_ok", "image_next_at",
     )
@@ -44,12 +47,13 @@ class TokenState:
     def __init__(self, token: str, index: int, v5_daily_limit: int,
                  allow_anlas: bool):
         self.token = token
-        # 永不把原始上游 Token 写入数据库；只存不可逆的短哈希标识。
+        # 凭据不写入数据库；管理面板换 Token 时保留账号 ID 和历史额度。
         self.token_id = "token-" + hashlib.sha256(token.encode()).hexdigest()[:16]
         self.position = index + 1
         self.v5_daily_limit = max(0, v5_daily_limit)
         self.allow_anlas = allow_anlas
         self.admin_enabled = True
+        self.text_streams = 0
         self.dispatch_lock = asyncio.Lock()
         self.image_slots = AdjustableLimiter(1)
         self.pending_v5_units = 0
@@ -66,6 +70,39 @@ class TokenState:
     @property
     def pending_v5(self) -> float:
         return self.pending_v5_units / SCALE
+
+    @property
+    def credential_id(self) -> str:
+        return "token-" + hashlib.sha256(self.token.encode()).hexdigest()[:16]
+
+    @property
+    def busy(self) -> bool:
+        return bool(self.dispatch_lock.locked() or self.image_slots.active
+                    or self.pending_v5_units or self.text_streams)
+
+
+class _AccountTextStream(httpx.AsyncByteStream):
+    """Keep credential replacement blocked until the text response is closed."""
+
+    def __init__(self, stream: httpx.AsyncByteStream, token: TokenState):
+        self.stream, self.token = stream, token
+        self._close_task: Optional[asyncio.Task] = None
+        token.text_streams += 1
+
+    async def __aiter__(self):
+        async for chunk in self.stream:
+            yield chunk
+
+    async def _close_stream(self) -> None:
+        try:
+            await self.stream.aclose()
+        finally:
+            self.token.text_streams -= 1
+
+    async def aclose(self) -> None:
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._close_stream())
+        await _wait_cleanup(self._close_task)
 
 
 async def _wait_cleanup(task: asyncio.Task) -> Any:
@@ -108,6 +145,8 @@ class NaiClient:
         self._rr = 0
         self._client: Optional[httpx.AsyncClient] = None
         self._lock = asyncio.Lock()
+        self._managed_path: Optional[Path] = None
+        self._managed_tokens = False
         self.allowance = AllowanceCache(db)
 
     async def start(self) -> None:
@@ -123,6 +162,105 @@ class NaiClient:
             await self._client.aclose()
 
     # ---------------- token pool ----------------
+    @property
+    def upstream_source(self) -> str:
+        return "panel" if self._managed_tokens else "environment"
+
+    async def load_managed_tokens(self, path: Path) -> None:
+        self._managed_path = Path(path)
+        rows = read_tokens(self._managed_path)
+        if rows is None:
+            return
+        pool = []
+        for index, row in enumerate(rows):
+            token = TokenState(row["token"], index, row["v5_daily_limit"], row["allow_anlas"])
+            token.token_id = row["token_id"]
+            token.admin_enabled = row["enabled"]
+            token.image_slots.resize(row["image_concurrency"])
+            pool.append(token)
+        self.pool = pool
+        self._managed_tokens = True
+
+    def _save_managed_tokens(self, pool: list[TokenState], *, allow_anlas=None) -> None:
+        if self._managed_path is None:
+            raise UpstreamManagementError(503, "上游账号存储尚未初始化")
+        rows = [{
+            "token_id": t.token_id, "token": t.token,
+            "v5_daily_limit": t.v5_daily_limit,
+            "image_concurrency": t.image_slots.limit,
+            "allow_anlas": allow_anlas[1] if allow_anlas and t.token_id == allow_anlas[0] else t.allow_anlas,
+            "enabled": t.admin_enabled,
+        } for t in pool]
+        write_tokens(self._managed_path, rows)
+        self._managed_tokens = True
+
+    def _managed_token(self, token_id: str) -> TokenState:
+        token = next((t for t in self.pool if t.token_id == token_id), None)
+        if token is None:
+            raise UpstreamManagementError(404, "上游账号不存在")
+        return token
+
+    @staticmethod
+    def _require_idle_disabled(token: TokenState) -> None:
+        if token.admin_enabled:
+            raise UpstreamManagementError(409, "请先停用该账号，再更换或移除 Token")
+        if token.busy:
+            raise UpstreamManagementError(409, "该账号仍有任务或额度预留，请等待结束后重试")
+
+    async def add_token(self, value: str, *, v5_daily_limit: int = 0,
+                        image_concurrency: int = 1, allow_anlas: bool = True,
+                        enabled: bool = True) -> str:
+        value = credential(value)
+        policy(v5_daily_limit, image_concurrency, allow_anlas, enabled)
+        async with self._lock:
+            if any(t.token == value for t in self.pool):
+                raise UpstreamManagementError(409, "该 Token 已在账号列表中")
+            token = TokenState(value, len(self.pool), v5_daily_limit, allow_anlas)
+            token.token_id = "token-" + uuid4().hex
+            token.image_slots.resize(image_concurrency)
+            token.admin_enabled = enabled
+            self._save_managed_tokens([*self.pool, token])
+            self.pool.append(token)
+            return token.token_id
+
+    async def replace_token(self, token_id: str, value: str) -> str:
+        value = credential(value)
+        async with self._lock:
+            old = self._managed_token(token_id)
+            self._require_idle_disabled(old)
+            if any(t.token == value for t in self.pool):
+                raise UpstreamManagementError(409, "该 Token 已在账号列表中")
+            token = TokenState(value, old.position - 1, old.v5_daily_limit, old.allow_anlas)
+            token.token_id = old.token_id
+            token.admin_enabled = False
+            token.image_slots.resize(old.image_slots.limit)
+            pool = [token if item is old else item for item in self.pool]
+            self._save_managed_tokens(pool)
+            self.pool = pool
+            self.allowance._rows.pop(token_id, None)
+            return token_id
+
+    async def remove_token(self, token_id: str) -> bool:
+        async with self._lock:
+            token = self._managed_token(token_id)
+            self._require_idle_disabled(token)
+            pool = [item for item in self.pool if item is not token]
+            self._save_managed_tokens(pool)
+            self.pool = pool
+            for position, item in enumerate(pool, 1):
+                item.position = position
+            self.allowance._rows.pop(token_id, None)
+            return True
+
+    async def set_allow_anlas(self, token_id: str, allowed: bool) -> bool:
+        if type(allowed) is not bool:
+            raise UpstreamManagementError(422, "Anlas 开关必须是布尔值")
+        async with self._lock:
+            token = self._managed_token(token_id)
+            self._save_managed_tokens(self.pool, allow_anlas=(token_id, allowed))
+            token.allow_anlas = allowed
+            return True
+
     async def load_saved_limits(self) -> None:
         saved = await self._db.get_upstream_token_limits()
         enabled = await self._db.get_upstream_token_enabled()
@@ -289,6 +427,8 @@ class NaiClient:
                 "v5_daily_limit": t.v5_daily_limit,
                 "v5_used": counter["v5"],
                 "images_today": counter["images"],
+                "pending_v5": t.pending_v5,
+                "busy": t.busy,
             })
         return result
 
@@ -370,7 +510,7 @@ class NaiClient:
                         await self.adjust_v5_reservation(ts, v5_usage, updated_usage)
                         v5_usage = updated_usage
                 async with self._dispatch_guard(ts, image_lane):
-                    if not ts.admin_enabled:
+                    if not ts.admin_enabled or (requires_anlas and not ts.allow_anlas):
                         continue
                     if before_dispatch is not None:
                         before_dispatch()
@@ -518,6 +658,7 @@ class NaiClient:
                 if exhausted:
                     await self.finish_v5_reservation(ts, succeeded=False, v5_free=True, v5_usage=v5_usage)
                     v5_free = False
+                    requires_anlas = True
                 elif updated_usage is not None:
                     await self.adjust_v5_reservation(ts, v5_usage, updated_usage)
                     v5_usage = updated_usage
@@ -530,6 +671,8 @@ class NaiClient:
             async with self._dispatch_guard(ts, True):
                 if not ts.admin_enabled:
                     raise UpstreamError(503, "上游令牌已停用，未发送生图")
+                if requires_anlas and not ts.allow_anlas:
+                    raise UpstreamError(503, "该上游账号未允许使用 Anlas，未发送生图")
                 if before_dispatch is not None:
                     before_dispatch()
                 if on_dispatch is not None:
@@ -579,6 +722,8 @@ class NaiClient:
             if not ts.admin_enabled:
                 raise UpstreamError(503, "上游令牌已停用，未发送请求")
             resp = await self._client.send(req, stream=True)
+            if not resp.is_closed:
+                resp.stream = _AccountTextStream(resp.stream, ts)
         if resp.status_code not in (200, 201):
             if resp.status_code == 401:
                 self.mark_unauthorized(ts)

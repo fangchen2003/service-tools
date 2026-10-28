@@ -14,6 +14,42 @@ from typing import Any, Optional, Tuple
 from .v5_effort import MEDIUM_MODELS
 
 V5_COST_MULTIPLIER = 1.5
+MAX_ENHANCE_MODELS = {
+    "nai-diffusion-5-full", "nai-diffusion-5-curated", "nai-diffusion-5-full-medium",
+}
+
+
+def max_enhance_sizes(width: int, height: int) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Return billing and expected output sizes; source dimensions stay on the wire."""
+    area = 3_145_728
+    if (type(width) is not int or type(height) is not int
+            or min(width, height) < 64 or max(width, height) > 8192
+            or width * height >= area * .8):
+        raise ValueError("原图尺寸不支持 Max 增强")
+    doubled = (width // 16 * 32, height // 16 * 32)
+    scale = min(1, math.sqrt(area / (doubled[0] * doubled[1])))
+    billing = tuple(math.floor(side * scale / 32 + .5) * 32 for side in doubled)
+    if billing[0] * billing[1] > area:
+        billing = tuple(math.floor(side * scale / 32) * 32 for side in doubled)
+    if min(billing) < 32:
+        raise ValueError("原图长宽比不支持 Max 增强")
+    scale = min(2, math.sqrt(area / (width * height)))
+    output = (math.floor(width * scale), math.floor(height * scale))
+    return billing, output
+
+
+def image_cost_size(params: dict, width: int, height: int) -> tuple[int, int]:
+    p = params.get("parameters", params)
+    flag = p.get("upscaled_enhance", False)
+    if type(flag) is not bool:
+        raise ValueError("upscaled_enhance 必须为布尔值")
+    if flag:
+        if (params.get("model") not in MAX_ENHANCE_MODELS or params.get("action") != "img2img"
+                or not p.get("image") or p.get("mask") or p.get("upscale")
+                or p.get("img2img") or p.get("n_samples", 1) != 1):
+            raise ValueError("Max 增强仅支持 V5 单张图生图，不能与重绘或放大叠加")
+        return max_enhance_sizes(width, height)[0]
+    return width, height
 
 # 仅允许明确认识的图片模型族。不能把未知模型当作旧模型，否则上游新增模型时
 # 可能绕过 V5/Anlas 的保护逻辑。
@@ -209,11 +245,11 @@ def image_model_tier(model: str) -> Optional[str]:
 # ------------------------------------------------------------ 图片计费 ----
 
 def _per_image_cost(width: int, height: int, steps: int,
-                    smea: bool, smea_dyn: bool) -> float:
+                    smea: bool, smea_dyn: bool, *, step_multiplier: float = 1) -> float:
     """V3+ 通用单张价格（Anlas）。1024x1024/28steps -> 20A。"""
     r = width * height
     smea_factor = 1.4 if (smea and smea_dyn) else (1.2 if smea else 1.0)
-    base = 2.951823174884865e-6 * r + 5.753298233447344e-7 * r * steps
+    base = 2.951823174884865e-6 * r + 5.753298233447344e-7 * r * steps * step_multiplier
     # 模型倍率、SMEA 和强度之后才做最终取整，避免多次取整累积误差。
     return math.ceil(base) * smea_factor
 
@@ -239,6 +275,7 @@ def opus_free_eligible(params: dict) -> bool:
         return False
     w = int(p.get("width", 0) or 0)
     h = int(p.get("height", 0) or 0)
+    w, h = image_cost_size(params, w, h)
     if w <= 0 or h <= 0 or w * h > 1024 * 1024:
         return False
     return True
@@ -283,12 +320,15 @@ def estimate_image_cost(params: dict, is_opus: bool = True, *,
     p = params.get("parameters", params)
     w = int(p.get("width", 832) or 832)
     h = int(p.get("height", 1216) or 1216)
+    w, h = image_cost_size(params, w, h)
     steps = int(p.get("steps", 28) or 28)
     smea = bool(p.get("sm"))
     smea_dyn = bool(p.get("sm_dyn"))
     n = max(1, int(p.get("n_samples", 1) or 1))
 
-    per = _per_image_cost(w, h, steps, smea, smea_dyn)
+    # Official Medium pricing discounts only the step term, before rounding.
+    step_multiplier = 1 / 1.06521739 if params.get("model") in MEDIUM_MODELS else 1
+    per = _per_image_cost(w, h, steps, smea, smea_dyn, step_multiplier=step_multiplier)
     is_v5 = is_v5_model(str(params.get("model", "")))
     if is_v5:
         per *= V5_COST_MULTIPLIER

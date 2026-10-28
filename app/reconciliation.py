@@ -80,7 +80,7 @@ class ManualReconciliation:
 
     def accounts(self):
         # Include disabled accounts whose usage is still in the ledger.
-        return {token.token_id: token for token in self.nai.pool}
+        return {token.credential_id: token for token in self.nai.pool}
 
     async def query(self, token):
         response = None

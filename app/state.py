@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections import deque
 from datetime import datetime
@@ -10,6 +11,8 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from .config import Settings
+from .configuration import CONFIGURATION_FIELDS, initial_sources, validate_configuration
+from .concurrency import AdjustableLimiter
 from .database import Database
 from .nai import NaiClient
 from .reconciliation import ManualReconciliation
@@ -39,8 +42,8 @@ class GateState:
             allow_anlas=settings.nai_token_allow_anlas,
             image_min_interval=settings.image_min_interval,
         )
-        self._global_sem = asyncio.Semaphore(max(1, settings.global_concurrency))
-        self._key_sems: dict[int, asyncio.Semaphore] = {}
+        self._global_sem = AdjustableLimiter(settings.global_concurrency)
+        self._key_sems: dict[int, AdjustableLimiter] = {}
         self._key_image_next_at: dict[int, float] = {}
         self._rpm: dict[int, deque[float]] = {}
         self._tag_active: set[int] = set()
@@ -52,6 +55,7 @@ class GateState:
         self._image_blocked_until = 0.0
         # Protect only quota reservation mutations; never hold this across HTTP.
         self.image_budget_lock = asyncio.Lock()
+        self.image_quote_slots = asyncio.Semaphore(2)
         self.image_reservations: dict[int, object] = {}
         self.image_budget_idle = asyncio.Event()
         self.image_budget_idle.set()
@@ -62,6 +66,68 @@ class GateState:
         self.global_active = 0
         self._image_pacing_waiting = 0
         self._runtime_limits_lock = asyncio.Lock()
+        self._configuration_lock = asyncio.Lock()
+        self._configuration_sources = initial_sources()
+
+    def configuration_snapshot(self) -> dict:
+        return {
+            "values": {name: getattr(self.settings, name) for name in CONFIGURATION_FIELDS},
+            "sources": dict(self._configuration_sources),
+            "image_policy": {
+                "free_max_steps_by_tier": {
+                    "v5": min(23, self.settings.max_steps),
+                    "legacy": self.settings.max_steps,
+                },
+                "paid_max_steps": None,
+                "admin_max_steps": None,
+                "max_pixels": self.settings.max_pixels,
+                "safe_clamp": self.settings.safe_clamp,
+                "allow_img2img": self.settings.allow_img2img,
+            },
+        }
+
+    async def load_configuration(self) -> None:
+        values = {}
+        for name in CONFIGURATION_FIELDS:
+            raw = await self.db.get_setting("configuration_" + name, None)
+            if raw is not None:
+                try:
+                    values.update(validate_configuration({name: json.loads(raw)}))
+                except (ValueError, TypeError) as exc:
+                    raise ValueError(f"已保存的服务配置 {name} 无效") from exc
+        async with self._configuration_lock:
+            await self._apply_configuration(values)
+
+    async def update_configuration(self, values: dict) -> dict:
+        values = validate_configuration(values)
+        async with self._configuration_lock:
+            await self.db.set_settings_bulk({
+                "configuration_" + name: json.dumps(value) for name, value in values.items()
+            })
+            await self._apply_configuration(values)
+            return self.configuration_snapshot()
+
+    async def _apply_configuration(self, values: dict) -> None:
+        for name, value in values.items():
+            setattr(self.settings, name, value)
+        if "global_concurrency" in values:
+            self._global_sem.resize(values["global_concurrency"])
+        if "key_concurrency" in values:
+            for limiter in self._key_sems.values():
+                limiter.resize(values["key_concurrency"])
+        self._configuration_sources.update({name: "panel" for name in values})
+        if "global_concurrency" in values:
+            async with self._tag_condition:
+                self._tag_condition.notify_all()
+
+    async def key_cleanup_preview(self, days: int) -> dict:
+        validate_configuration({"key_inactivity_delete_days": days})
+        async with self._configuration_lock:
+            key_ids = set(await self.db.inactive_key_ids(time.time() - days * 86400)) if days else set()
+            rows = await self.db.list_keys() if key_ids else []
+            keys = [{field: row[field] for field in ("id", "name", "last_used_at", "created_at")}
+                    for row in rows if row["id"] in key_ids]
+            return {"days": days, "count": len(keys), "keys": keys}
 
     def runtime_limits_snapshot(self) -> dict[str, int]:
         return {name: int(getattr(self.settings, name)) for name in RUNTIME_LIMIT_BOUNDS}
@@ -115,15 +181,15 @@ class GateState:
         return [self.day(base - 86400 * i) for i in range(n - 1, -1, -1)]
 
     # ---------- concurrency ----------
-    def key_sem(self, key_id: int, concurrency: int) -> asyncio.Semaphore:
+    def key_sem(self, key_id: int, concurrency: int) -> AdjustableLimiter:
         sem = self._key_sems.get(key_id)
         if sem is None:
-            sem = asyncio.Semaphore(max(1, concurrency))
+            sem = AdjustableLimiter(concurrency)
             self._key_sems[key_id] = sem
         return sem
 
     @property
-    def global_sem(self) -> asyncio.Semaphore:
+    def global_sem(self) -> AdjustableLimiter:
         return self._global_sem
 
     async def wait_for_key_image_slot(self, key_id: int) -> None:
@@ -220,13 +286,14 @@ class GateState:
 
     async def delete_inactive_keys(self) -> int:
         """永久回收长期未使用的虚拟 Key；0 天表示关闭。"""
-        days = max(0, self.settings.key_inactivity_delete_days)
-        if not days:
-            return 0
-        key_ids = await self.db.inactive_key_ids(time.time() - days * 86400)
-        for key_id in key_ids:
-            await self.db.delete_key(key_id)
-        return len(key_ids)
+        async with self._configuration_lock:
+            days = max(0, self.settings.key_inactivity_delete_days)
+            if not days:
+                return 0
+            key_ids = await self.db.inactive_key_ids(time.time() - days * 86400)
+            for key_id in key_ids:
+                await self.db.delete_key(key_id)
+            return len(key_ids)
 
     # ---------- upstream image cooldown ----------
     async def load_image_cooldown(self) -> None:

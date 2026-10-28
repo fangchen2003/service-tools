@@ -1,4 +1,4 @@
-"""全局配置：全部通过环境变量读取，均有安全默认值。"""
+"""全局配置初始值；可管理项在启动后加载后台保存的覆盖值。"""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ class Settings:
     # ---- 图片安全钳制（默认强制贴合 Opus 免费档）----
     safe_clamp: bool = _bool("SAFE_CLAMP", True)
     max_pixels: int = _int("MAX_PIXELS", 1024 * 1024)
-    max_steps: int = min(23, max(1, _int("MAX_STEPS", 23)))
+    max_steps: int = min(28, max(1, _int("MAX_STEPS", 28)))
     allow_img2img: bool = _bool("ALLOW_IMG2IMG", False)  # 独立功能权限；费用由图片参数决定
 
     # ---- 全站月度 Anlas 预算（所有 Key 共享的总闸，后台可改）----
@@ -84,6 +84,12 @@ class Settings:
     default_daily_text_tokens: int = _int("DEFAULT_DAILY_TEXT_TOKENS", 150000)
     default_rpm: int = _int("DEFAULT_RPM", 10)
     default_expires_days: int = _int("DEFAULT_KEY_EXPIRES_DAYS", 30)
+    default_image_model_scope: str = (
+        "all" if os.environ.get("DEFAULT_IMAGE_MODEL_SCOPE") == "all" else "legacy"
+    )
+    default_allow_anlas: bool = _bool("DEFAULT_ALLOW_ANLAS", False)
+    default_allow_img2img: bool = _bool("DEFAULT_ALLOW_IMG2IMG", False)
+    default_exclude_global_v5: bool = _bool("DEFAULT_EXCLUDE_GLOBAL_V5", False)
 
     # ---- 文本 ----
     max_text_output_tokens: int = _int("MAX_TEXT_OUTPUT_TOKENS", 300)

@@ -17,6 +17,7 @@ from .allowance import SETTING, read_alert_threshold
 from .v5_effort import settings as effort_settings
 from .reconciliation import ReconciliationError
 from .state import RUNTIME_LIMIT_BOUNDS
+from .upstream_store import UpstreamManagementError
 
 router = APIRouter(prefix="/admin/api")
 
@@ -211,7 +212,8 @@ async def create_key(request: Request):
     rpm = _int_field("rpm", st.settings.default_rpm, 1, 600)
     expires_days = _int_field("expires_days", st.settings.default_expires_days, 0, 3650)
     expires_at = (time.time() + expires_days * 86400) if expires_days > 0 else None
-    image_model_scope = "all" if body.get("image_model_scope") == "all" else "legacy"
+    image_model_scope = "all" if body.get(
+        "image_model_scope", st.settings.default_image_model_scope) == "all" else "legacy"
 
     row = await st.db.create_key({
         "name": str(body.get("name", "") or "").strip()[:60] or "未命名",
@@ -222,9 +224,9 @@ async def create_key(request: Request):
         "monthly_anlas": monthly_anlas,
         "daily_text_tokens": daily_text,
         "rpm": rpm,
-        "allow_anlas": bool(body.get("allow_anlas", False)),
-        "allow_img2img": bool(body.get("allow_img2img", False)),
-        "exclude_global_v5": bool(body.get("exclude_global_v5", False)),
+        "allow_anlas": bool(body.get("allow_anlas", st.settings.default_allow_anlas)),
+        "allow_img2img": bool(body.get("allow_img2img", st.settings.default_allow_img2img)),
+        "exclude_global_v5": bool(body.get("exclude_global_v5", st.settings.default_exclude_global_v5)),
         "image_model_scope": image_model_scope,
         "expires_at": expires_at,
     })
@@ -366,6 +368,116 @@ async def put_runtime_limits(request: Request):
         if type(value) is not int or not minimum <= value <= maximum:
             raise HTTPException(422, f"{name} 必须是 {minimum}～{maximum} 的整数")
     return await request.app.state.gate.update_runtime_limits(body)
+
+
+def _configuration_csrf(request: Request) -> str:
+    return _sign(_secret(request), "configuration:" + request.cookies[COOKIE])
+
+
+def _require_configuration_write(request: Request) -> None:
+    require_admin(request)
+    csrf = request.headers.get("x-nai-admin-csrf", "")
+    if not hmac.compare_digest(csrf.encode(), _configuration_csrf(request).encode()):
+        raise HTTPException(403, "会话校验失败，请刷新后台后重试")
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(415, "请使用 JSON 请求")
+
+
+@router.get("/configuration")
+async def get_configuration(request: Request, response: Response):
+    require_admin(request)
+    response.headers["Cache-Control"] = "no-store"
+    return {**request.app.state.gate.configuration_snapshot(),
+            "csrf_token": _configuration_csrf(request)}
+
+
+@router.put("/configuration")
+async def put_configuration(request: Request, response: Response):
+    _require_configuration_write(request)
+    body = await read_json_body(request, limit=8192)
+    try:
+        result = await request.app.state.gate.update_configuration(body)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    response.headers["Cache-Control"] = "no-store"
+    return {**result, "csrf_token": _configuration_csrf(request)}
+
+
+@router.get("/key-cleanup-preview")
+async def key_cleanup_preview(request: Request, response: Response, days: Optional[int] = None):
+    require_admin(request)
+    if days is None:
+        days = request.app.state.gate.settings.key_inactivity_delete_days
+    try:
+        result = await request.app.state.gate.key_cleanup_preview(days)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.get("/upstream-tokens")
+async def get_upstream_tokens(request: Request, response: Response):
+    require_admin(request)
+    response.headers["Cache-Control"] = "no-store"
+    nai = request.app.state.gate.nai
+    return {"accounts": await nai.status(), "source": nai.upstream_source}
+
+
+@router.post("/upstream-tokens")
+async def add_upstream_token(request: Request, response: Response):
+    _require_configuration_write(request)
+    body = await read_json_body(request, limit=8192)
+    allowed = {"token", "v5_daily_limit", "image_concurrency", "allow_anlas", "enabled"}
+    if "token" not in body or set(body) - allowed:
+        raise HTTPException(422, "请输入 Token 和支持的账号设置")
+    try:
+        await request.app.state.gate.nai.add_token(
+            body["token"], **{name: value for name, value in body.items() if name != "token"})
+    except UpstreamManagementError as exc:
+        raise HTTPException(exc.status, str(exc)) from None
+    response.headers["Cache-Control"] = "no-store"
+    return {"accounts": await request.app.state.gate.nai.status()}
+
+
+@router.put("/upstream-tokens/{token_id}/credential")
+async def replace_upstream_token(request: Request, response: Response, token_id: str):
+    _require_configuration_write(request)
+    body = await read_json_body(request, limit=8192)
+    if set(body) != {"token"}:
+        raise HTTPException(422, "请只提交新的 Token")
+    try:
+        await request.app.state.gate.nai.replace_token(token_id, body["token"])
+    except UpstreamManagementError as exc:
+        raise HTTPException(exc.status, str(exc)) from None
+    response.headers["Cache-Control"] = "no-store"
+    return {"accounts": await request.app.state.gate.nai.status()}
+
+
+@router.delete("/upstream-tokens/{token_id}")
+async def remove_upstream_token(request: Request, response: Response, token_id: str):
+    _require_configuration_write(request)
+    if await read_json_body(request, limit=1024):
+        raise HTTPException(422, "移除账号不接受额外设置")
+    try:
+        await request.app.state.gate.nai.remove_token(token_id)
+    except UpstreamManagementError as exc:
+        raise HTTPException(exc.status, str(exc)) from None
+    response.headers["Cache-Control"] = "no-store"
+    return {"accounts": await request.app.state.gate.nai.status()}
+
+
+@router.put("/upstream-tokens/{token_id}/allow-anlas")
+async def set_upstream_allow_anlas(request: Request, token_id: str):
+    _require_configuration_write(request)
+    body = await read_json_body(request, limit=1024)
+    if set(body) != {"allow_anlas"} or type(body["allow_anlas"]) is not bool:
+        raise HTTPException(422, "allow_anlas 必须是布尔值")
+    try:
+        await request.app.state.gate.nai.set_allow_anlas(token_id, body["allow_anlas"])
+    except UpstreamManagementError as exc:
+        raise HTTPException(exc.status, str(exc)) from None
+    return {"ok": True, "allow_anlas": body["allow_anlas"]}
 
 
 @router.get("/allowance")
