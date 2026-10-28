@@ -726,7 +726,6 @@ function applyRuntimeLimits(values){
 function syncBudgetFields(){
   const enabled=$('#s_auto_medium').checked;
   $('#s_medium_threshold').disabled=!enabled;
-  $('#s_medium_multiplier').disabled=!enabled;
 }
 async function saveAnnounce(){
   try{
