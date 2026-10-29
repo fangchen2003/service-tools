@@ -305,10 +305,11 @@ async def test_disconnect_while_queued_never_dispatches(state):
     await state.key_sem(1, 1).acquire()
     task, disconnected, _ = await start_asgi(state)
     await asyncio.sleep(0.01)
-    assert state.global_waiting == 1
+    assert state.image_queue.snapshot()["queued"] == 1
     disconnected.set()
     await task
     assert not state.nai.calls and state.global_waiting == 0
+    assert state.image_queue.snapshot()["total"] == 0
     assert state.semaphores[1]._value == 0
     state.semaphores[1].release()
 

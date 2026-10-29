@@ -36,6 +36,7 @@ from .image_events import encode_image_event
 from .image_receipts import RECEIPT_HEADER, image_receipt, receipt_headers
 from .image_tools import dimensions, prepare_tool, tool_price, validate_result, MAX_RESPONSE_BYTES
 from .image_quotes import parse_quote_metadata
+from .image_queue import ImageAdmission, QueueError, check_disconnected
 from .image_payload import read_image_body
 from .nai import NaiClient, UpstreamError, _wait_cleanup
 from .policy import (
@@ -180,6 +181,12 @@ async def gate_error_handler(request: Request, exc: GateError):
                         status_code=exc.status)
 
 
+@app.exception_handler(QueueError)
+async def queue_error_handler(request: Request, exc: QueueError):
+    return JSONResponse({"error": {"message": exc.message, "status": exc.status, "code": exc.code},
+                         "code": exc.code}, status_code=exc.status)
+
+
 @app.exception_handler(Exception)
 async def fallback_handler(request: Request, exc: Exception):
     return JSONResponse({"error": {"message": "服务器内部错误，请联系站长", "status": 500}},
@@ -198,8 +205,10 @@ async def authenticate(request: Request, *, touch: bool = True):
     if not row:
         raise err(401, "无效的 API Key")
     if not row["enabled"]:
+        STATE.image_queue.cancel_key(row["id"])
         raise err(403, "该 Key 已被禁用")
     if row["expires_at"] and row["expires_at"] < time.time():
+        STATE.image_queue.cancel_key(row["id"])
         raise err(403, "该 Key 已过期，请联系站长续期")
     # 只要 Key 实际通过鉴权即视为使用，避免 Launcher 登录/上游暂时失败时被误删。
     if touch:
@@ -498,13 +507,36 @@ async def wait_for_user_image_slot(key) -> None:
         raise err(429, "图片任务排队超时，请稍后再试") from None
 
 
+def image_admission(request, key, operation):
+    return ImageAdmission(STATE.image_queue, key, operation, request.headers, STATE.settings.queue_timeout)
+
+
+async def read_admitted_image_body(request, admission):
+    if admission.ticket is None:
+        return await read_image_payload(request)
+    try:
+        async with asyncio.timeout(30):
+            return await read_image_payload(request)
+    except TimeoutError:
+        raise QueueError(408, "queue_upload_timeout", "读取已放行的图片请求超时，请重新提交") from None
+
+
 async def image_tool(request: Request, operation: str):
     key = await authenticate(request)
+    admission = image_admission(request, key, operation)
+    try:
+        return await _image_tool(request, operation, key, admission)
+    finally:
+        admission.close()
+
+
+async def _image_tool(request, operation, key, admission):
     check_image_cooldown()
     await check_rpm(key)
     check_image_tool_permission(key)
-    body = await read_image_payload(request)
+    body = await read_admitted_image_body(request, admission)
     cost_limit = take_cost_limit(body)
+    await admission.wait(disconnected=request.is_disconnected)
     await wait_for_user_image_slot(key)
     async with acquire_concurrency(key, image=True):
         check_image_cooldown()
@@ -561,9 +593,17 @@ async def augment_image(request: Request):
 async def encode_vibe(request: Request):
     """Encode a V4/V4.5 reference; only a successful binary result costs 2 Anlas."""
     key = await authenticate(request)
+    admission = image_admission(request, key, "encode-vibe")
+    try:
+        return await _encode_vibe(request, key, admission)
+    finally:
+        admission.close()
+
+
+async def _encode_vibe(request, key, admission):
     check_image_cooldown()
     await check_rpm(key)
-    body = await read_image_payload(request)
+    body = await read_admitted_image_body(request, admission)
     cost_limit = take_cost_limit(body)
     payload = prepare_vibe_encoding(body)
     model = payload["model"]
@@ -608,6 +648,7 @@ async def encode_vibe(request: Request):
                         headers={"Cache-Control": "no-store",
                                  **receipt_headers(request, image_receipt(payload, "encode-vibe", 0, estimate))})
 
+    await admission.wait(disconnected=request.is_disconnected)
     await wait_for_user_image_slot(key)
     async with acquire_concurrency(key, image=True):
         check_image_cooldown()
@@ -787,6 +828,38 @@ async def quote_identity(request: Request):
     return {"source": "gate", "username": key["name"]}
 
 
+@app.post("/v1/image/queue")
+async def create_image_queue_ticket(request: Request):
+    key = await authenticate(request, touch=False)
+    try:
+        body = await read_json(request, limit_mb=4 / 1024)
+    except GateError as exc:
+        raise QueueError(exc.status, "queue_invalid_request", exc.message) from None
+    if not {"request_id", "operation"} <= set(body) or set(body) - {"request_id", "operation", "requires_anlas"}:
+        raise QueueError(400, "queue_invalid_request", "排队仅接受请求 UUID、操作类型和付费标记")
+    ticket = STATE.image_queue.create(key["id"], body["request_id"], body["operation"],
+                                      is_admin=key["is_admin"], requires_anlas=body.get("requires_anlas", False))
+    return STATE.image_queue.view(ticket.ticket_id, key["id"])
+
+
+@app.get("/v1/image/queue/{ticket_id}")
+async def get_image_queue_ticket(ticket_id: str, request: Request):
+    key = await authenticate(request, touch=False)
+    return STATE.image_queue.view(ticket_id, key["id"])
+
+
+@app.post("/v1/image/queue/{ticket_id}/heartbeat")
+async def heartbeat_image_queue_ticket(ticket_id: str, request: Request):
+    key = await authenticate(request, touch=False)
+    return STATE.image_queue.heartbeat(ticket_id, key["id"])
+
+
+@app.delete("/v1/image/queue/{ticket_id}")
+async def cancel_image_queue_ticket(ticket_id: str, request: Request):
+    key = await authenticate(request, touch=False)
+    return STATE.image_queue.cancel(ticket_id, key["id"])
+
+
 @app.post("/v1/image/quote")
 async def quote_image(request: Request):
     """Price at most 4 KiB of metadata without image content or upstream calls."""
@@ -853,9 +926,23 @@ async def generate_image_stream(request: Request):
 
 async def _generate_image(request: Request, *, streaming: bool):
     key = await authenticate(request)
+    admission = image_admission(request, key, "generate-image")
+    deferred = False
+    try:
+        response = await _generate_image_admitted(request, key, admission, streaming=streaming)
+        if isinstance(response, ImageStreamResponse):
+            response.on_close = admission.close
+            deferred = True
+        return response
+    finally:
+        if not deferred:
+            admission.close()
+
+
+async def _generate_image_admitted(request, key, admission, *, streaming: bool):
     check_image_cooldown()
     await check_rpm(key)
-    body = await read_image_payload(request)
+    body = await read_admitted_image_body(request, admission)
     cost_limit = take_cost_limit(body)
     body, model_tier, notes, image_count = await prepare_image_generation(body, key, log_rejections=True)
     model, p = body["model"], body["parameters"]
@@ -1036,6 +1123,7 @@ async def _generate_image(request: Request, *, streaming: bool):
 
         async def run_stream(response):
             try:
+                await admission.wait(requires_anlas=est["anlas"] > 0)
                 await wait_for_user_image_slot(key)
                 async with acquire_concurrency(key, image=True):
                     check_image_cooldown()
@@ -1046,9 +1134,12 @@ async def _generate_image(request: Request, *, streaming: bool):
                         await complete_image_operation(perform_stream(response), can_cancel=lambda: not dispatched)
             except GateError as exc:
                 await response.error(exc.status, exc.message)
+            except QueueError as exc:
+                await response.error(exc.status, exc.message, code=exc.code)
 
         return ImageStreamResponse(run_stream, wire_format)
 
+    await admission.wait(disconnected=request.is_disconnected, requires_anlas=est["anlas"] > 0)
     await wait_for_user_image_slot(key)
     async with acquire_concurrency(key, image=True):
         # Recheck both cooldown and quota after any queue/budget wait.
@@ -1063,8 +1154,8 @@ async def suggest_tags(request: Request):
     check_image_cooldown()
     admitted = False
     try:
-        # Bound body reads, semaphore waiting and the optional upstream lookup.
-        async with asyncio.timeout(STATE.settings.queue_timeout):
+        # Match disconnect-probe cancellation so the request deadline stays effective.
+        with anyio.fail_after(STATE.settings.queue_timeout):
             admitted = await STATE.wait_for_tag_request(key["id"])
             if not admitted:
                 raise err(429, "补全查询排队人数过多，请稍后再试")
@@ -1086,6 +1177,15 @@ async def _suggest_tags(request: Request, key):
     else:
         body = await read_json(request)
 
+    ticket = STATE.image_queue.try_tag(key["id"], is_admin=key["is_admin"])
+    try:
+        return await _run_tag_request(request, key, body)
+    finally:
+        STATE.image_queue.finish(ticket)
+
+
+async def _run_tag_request(request, key, body):
+
     async def record_tag_429(retry_after: float) -> None:
         cooldown = await STATE.block_image_generation(max(
             STATE.settings.image_429_cooldown_seconds, retry_after
@@ -1097,7 +1197,7 @@ async def _suggest_tags(request: Request, key):
         )
 
     async with acquire_concurrency(key):
-        if await request.is_disconnected():
+        if await check_disconnected(request.is_disconnected):
             raise err(499, "补全查询已取消")
         check_image_cooldown()
         query = urlencode({

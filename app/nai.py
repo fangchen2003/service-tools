@@ -307,7 +307,8 @@ class NaiClient:
             return True
 
     async def pick_token(self, *, requires_anlas: bool = False,
-                         v5_free: bool = False, v5_usage: float = 1) -> Optional[TokenState]:
+                         v5_free: bool = False, v5_usage: float = 1,
+                         image_lane: bool = False) -> Optional[TokenState]:
         """选取符合该图片费用策略的令牌；V5 限额在这里原子预留。"""
         async with self._lock:
             usable = [t for t in self.pool if t.usable and
@@ -317,9 +318,17 @@ class NaiClient:
 
             # 保持轮询，同时跳过当日 V5 已用完的特定上游 Token。
             start = (self._rr + 1) % len(usable)
+            candidates = usable[start:] + usable[:start]
+            if image_lane:
+                now = time.monotonic()
+                candidates.sort(key=lambda token: (
+                    token.image_slots.active >= token.image_slots.limit,
+                    max(0.0, token.image_next_at - now),
+                    token.allow_anlas if not requires_anlas else False,
+                    token.image_slots.active / token.image_slots.limit,
+                ))
             chosen: Optional[TokenState] = None
-            for offset in range(len(usable)):
-                candidate = usable[(start + offset) % len(usable)]
+            for candidate in candidates:
                 if v5_free and candidate.v5_daily_limit:
                     used = await self._db.get_upstream_v5_counter(
                         candidate.token_id, self._day_fn()
@@ -481,7 +490,8 @@ class NaiClient:
         attempts = 0
         while attempts < 2:
             attempts += 1
-            ts = await self.pick_token(requires_anlas=requires_anlas, v5_free=v5_free, v5_usage=v5_usage)
+            ts = await self.pick_token(requires_anlas=requires_anlas, v5_free=v5_free,
+                                       v5_usage=v5_usage, image_lane=image_lane)
             if ts is None:
                 raise self._unavailable(requires_anlas, v5_free)
             succeeded = False
@@ -620,7 +630,8 @@ class NaiClient:
         """图片流不重试；调用方只在确认完整最终图片后增加 completed_images。"""
         if self._client is None:
             raise RuntimeError("client not started")
-        ts = await self.pick_token(requires_anlas=requires_anlas, v5_free=v5_free, v5_usage=v5_usage)
+        ts = await self.pick_token(requires_anlas=requires_anlas, v5_free=v5_free,
+                                   v5_usage=v5_usage, image_lane=True)
         if ts is None:
             raise self._unavailable(requires_anlas, v5_free)
         resp: Optional[httpx.Response] = None

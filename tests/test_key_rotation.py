@@ -43,8 +43,48 @@ async def login(client):
     assert (await client.post('/admin/api/login', json={'password': 'fixture'})).status_code == 200
 
 
+@pytest.mark.asyncio
+async def test_admin_disabling_key_releases_unclaimed_image_tickets(env):
+    import uuid
+    from app.image_queue import ImageQueue
+
+    state, client, key = env
+    queue = state.image_queue = ImageQueue(lambda: 2, lambda: 2, lambda _: False)
+    active = queue.create(key['id'], str(uuid.uuid4()), 'generate-image')
+    queue.claim(active.ticket_id, key['id'], active.request_id, active.operation)
+    ready = queue.create(key['id'], str(uuid.uuid4()), 'generate-image')
+    other = queue.create(key['id'] + 1, str(uuid.uuid4()), 'generate-image')
+    assert ready.state == 'ready' and other.state == 'queued'
+    await login(client)
+    response = await client.patch(f"/admin/api/keys/{key['id']}", json={'enabled': False})
+    assert response.status_code == 200
+    assert active.state == 'active' and ready.state == 'cancelled'
+    assert queue.view(other.ticket_id, other.key_id)['state'] == 'ready'
+
+
 def auth(token):
     return {'Authorization': 'Bearer '+token}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('action', ['regenerate', 'delete'])
+async def test_key_removal_or_rotation_releases_only_unclaimed_tickets(env, action):
+    import uuid
+    from app.image_queue import ImageQueue
+
+    state, client, key = env
+    queue = state.image_queue = ImageQueue(lambda: 2, lambda: 2, lambda _: False)
+    active = queue.create(key['id'], str(uuid.uuid4()), 'generate-image')
+    queue.claim(active.ticket_id, key['id'], active.request_id, active.operation)
+    ready = queue.create(key['id'], str(uuid.uuid4()), 'generate-image')
+    other = queue.create(key['id'] + 1, str(uuid.uuid4()), 'generate-image')
+    await login(client)
+    path = f"/admin/api/keys/{key['id']}" + ('/regenerate' if action == 'regenerate' else '')
+    response = await client.request('POST' if action == 'regenerate' else 'DELETE', path)
+    assert response.status_code == 200
+    assert active.state == 'active' and ready.state == 'cancelled'
+    assert queue.view(other.ticket_id, other.key_id)['state'] == 'ready'
+    assert (await client.get('/user/information', headers=auth(key['token']))).status_code == 401
 
 
 async def snapshot(db):

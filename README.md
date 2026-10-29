@@ -103,6 +103,20 @@ curl 'https://你的域名/ai/generate-image' \
 
 Medium 的 Anlas 基础公式在取整前对步数项应用官网的 `1 / 1.06521739` 系数；它与站内 V5 额度的 0.60 倍率独立。相同 1408×2176、14 步、强度 0.5 的图生图，High 预计 26 Anlas、Medium 预计 25 Anlas。
 
+### 图片提交队列
+
+`POST /v1/image/queue` 使用 Bearer Key，最多接收 4 KiB 的 `{ "request_id": "UUID", "operation": "generate-image" }`，可另带布尔值 `requires_anlas`。操作还可为 `upscale`、`augment-image`、`encode-vibe`。付费标记用于匹配允许 Anlas 的上游容量，放大和编码始终按付费操作准入；实际计费仍由完整请求独立核验。队列只保存身份、请求 UUID、操作、付费标记和状态时间，不接收图片、提示词或费用。相同 Key 和 UUID 返回同一票据；更换操作或付费标记返回 409。每个 Key 最多有 50 个未完成票据，终态不占此上限；重复请求仍可取得已有票据。
+
+响应包含 `ticket_id`、`request_id`、`operation`、`state`、`position`、`expires_in`、`poll_after`。状态依次为 `queued`、`ready`、`active`、`finished`，未提交的票据也可能变为 `cancelled` 或 `expired`。`queued` 的 `position` 是从 1 开始的未完成请求顺位，包含前面的已放行和正在执行请求；其他状态为 0。同 Key 或付费上游暂无容量时可先放行其他合格请求，这个顺位不承诺上游实际开始时间。派发时优先选择仍有空位、间隔等待较短的合格上游；条件相同时，免费任务先使用禁付费上游，其余沿用轮询。
+
+`GET /v1/image/queue/{ticket_id}` 读取本人票据；`POST /v1/image/queue/{ticket_id}/heartbeat` 续租等待中的票据并返回状态；`DELETE /v1/image/queue/{ticket_id}` 取消尚未提交的票据。建议每 3 秒通过心跳获取状态。等待租期 120 秒，领取窗口最多 120 秒且不超过已有心跳租期，ready 后的心跳不会延长该窗口。终态保留 15 分钟用于去重；服务重启后内存队列不恢复。
+
+轮到 `ready` 后，向原图片 API 上传完整任务，同时发送 `X-NAI-Gate-Queue-Ticket` 与 `X-NAI-Gate-Queue-Request`。Gate 在读取图片前原子领取票据，核对 Key、操作和请求 UUID；领取后的上传最多等待 30 秒。`active` 表示请求已开始提交，取消接口返回 409，不保证能撤回上游操作。执行仍验证真实图片、费用上限、额度、Key 并发及上游并发与间隔，直到结果及记账清理完成才释放准入名额；票据本身不预留或扣除费用。
+
+未带票据的旧图片客户端继续可用，但也按同一队列准入，等待上限沿用 `queue_timeout`。旧非流式请求只在完整读取请求体后观察断线，尚未放行的断线请求会退出队列。Key 被禁用、删除、更换凭据或在鉴权时发现已禁用、过期，会取消其未领取票据；已领取任务仍由执行清理流程结束。Vibe 编码先单独排队完成，再排主生图；标签补全仅使用没有生图等待时的空闲准入。`GET /queue-status` 另外返回 `image_queue` 的 `queued`、`ready`、`active`、`total`、`capacity` 汇总。
+
+队列错误同时提供顶层 `code` 和 `error.code`。`queue_ticket_not_ready` 可继续等待原票据；`queue_ticket_used` 表示已经领取，不能自动重复执行。`queue_ticket_expired`、`queue_ticket_cancelled`、`queue_ticket_not_found` 需要重新确认任务状态；未知结果不能自动重发。`queue_ticket_mismatch`、`queue_request_conflict`、`queue_invalid_request` 表示请求不匹配；`queue_full` 表示该 Key 达到 50 个未完成票据上限；`queue_timeout` 为旧客户端排队超时，`queue_request_disconnected` 为旧客户端在等待期间断线，`queue_upload_timeout` 为领取后上传超时，`queue_unavailable` 为标签暂无空闲名额。
+
 ### Max Enhance
 
 V5 Full、Curated 与 Full Medium 的单张图生图可使用 `parameters.upscaled_enhance=true`。请求的宽高必须保留原图实际尺寸；不能与 mask、嵌套 img2img 或另一种放大叠加。Gate 校验源图，并按照最高 2 倍、3,145,728 像素和官网对齐规则分别计算计费尺寸与预期输出尺寸；报价分别返回 `billing_size`、`output_size`。免费资格也按增强后的计费尺寸判断。例如 832×1216、28 步、强度 0.5：计费尺寸 1440×2144，预期输出 1467×2144，预计 45 Anlas。此处为参数报价，真实生成结果仍由上游返回。

@@ -101,6 +101,48 @@ async def test_every_exit_releases_tag_admission(state, failure):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize("failure", ["timeout", "cancel"])
+async def test_timeout_or_cancel_during_disconnect_probe_stops_before_upstream_and_releases_slots(state, method, failure):
+    state.settings.queue_timeout = .03 if failure == "timeout" else .5
+    state.nai.release = asyncio.Event()
+    incoming = request({}, method=method)
+    receive_body = incoming._receive
+    body_read = False
+
+    async def receive():
+        nonlocal body_read
+        if method == "POST" and not body_read:
+            body_read = True
+            return await receive_body()
+        # Deliver the deadline or caller cancellation alongside the probe's cancellation.
+        if failure == "timeout":
+            time.sleep(.04)
+        else:
+            asyncio.get_running_loop().call_soon(asyncio.current_task().cancel)
+        await asyncio.Event().wait()
+
+    incoming._receive = receive
+    task = asyncio.create_task(main.suggest_tags(incoming))
+    try:
+        done, _ = await asyncio.wait({task}, timeout=.3)
+        assert task in done, "Tag cancellation was lost during the disconnect probe"
+        with pytest.raises(asyncio.CancelledError if failure == "cancel" else main.GateError) as caught:
+            await task
+        if failure == "timeout":
+            assert caught.value.status == 429
+        assert not state.nai.calls and not state.db.charges
+        assert not state._tag_active and state._tag_waiting == 0
+        assert state.global_active == state.global_waiting == 0
+        assert state.image_queue.snapshot()["total"] == 0
+    finally:
+        state.nai.release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_admission_happens_before_post_body_read(state):
     state._tag_next_at[1] = time.monotonic() + 60
     state.settings.queue_timeout = .03

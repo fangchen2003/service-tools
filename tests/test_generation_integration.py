@@ -14,6 +14,7 @@ from starlette.requests import Request
 from app import main
 from app.nai import UpstreamError
 from app.state import GateState
+from app.image_queue import ImageQueue
 from test_nai_integration import PNG as PNG_BYTES
 
 
@@ -97,6 +98,8 @@ class FakeNai:
 
     def __init__(self):
         self.calls = []
+        self.pool = [SimpleNamespace(usable=True, allow_anlas=True,
+                                     image_slots=SimpleNamespace(limit=3), image_next_at=0.0)]
         self.status = 200
         self.content = PNG_BYTES
         self.content_type = "application/octet-stream"
@@ -140,6 +143,8 @@ class FakeState:
         self._tag_next_at = {}
         self._tag_condition = asyncio.Condition()
         self._tag_waiting = 0
+        self.image_queue = ImageQueue(lambda: 3, lambda: self.settings.key_concurrency,
+                                      lambda key_id: key_id in self.semaphores and self.semaphores[key_id].locked())
 
     def key_sem(self, key_id, capacity):
         return self.semaphores.setdefault(key_id, asyncio.Semaphore(capacity))

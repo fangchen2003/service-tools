@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from .config import Settings
 from .configuration import CONFIGURATION_FIELDS, initial_sources, validate_configuration
 from .concurrency import AdjustableLimiter
+from .image_queue import ImageQueue
 from .database import Database
 from .nai import NaiClient
 from .reconciliation import ManualReconciliation
@@ -67,6 +68,22 @@ class GateState:
         self._runtime_limits_lock = asyncio.Lock()
         self._configuration_lock = asyncio.Lock()
         self._configuration_sources = initial_sources()
+        self.image_queue = ImageQueue(self.image_queue_capacity,
+                                      lambda: self.settings.key_concurrency, self.image_key_busy,
+                                      paid_capacity=self.image_queue_paid_capacity)
+
+    def image_queue_capacity(self) -> int:
+        if self.image_cooldown_remaining():
+            return 0
+        return sum(token.image_slots.limit for token in self.nai.pool if token.usable)
+
+    def image_key_busy(self, key_id: int) -> bool:
+        limiter = self._key_sems.get(key_id)
+        return limiter is not None and limiter.active >= limiter.limit
+
+    def image_queue_paid_capacity(self) -> int:
+        return sum(token.image_slots.limit for token in self.nai.pool
+                   if token.usable and token.allow_anlas)
 
     def configuration_snapshot(self) -> dict:
         return {
@@ -223,6 +240,7 @@ class GateState:
             "image_cooldown_remaining": self.image_cooldown_remaining(),
             "queue_timeout": self.settings.queue_timeout,
             "image_min_interval": self.settings.image_min_interval,
+            "image_queue": self.image_queue.snapshot(),
         }
 
     async def wait_for_tag_request(self, key_id: int) -> bool:
@@ -292,6 +310,7 @@ class GateState:
             key_ids = await self.db.inactive_key_ids(time.time() - days * 86400)
             for key_id in key_ids:
                 await self.db.delete_key(key_id)
+                self.image_queue.cancel_key(key_id)
             return len(key_ids)
 
     # ---------- upstream image cooldown ----------
