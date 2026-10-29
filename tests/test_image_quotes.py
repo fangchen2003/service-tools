@@ -7,7 +7,7 @@ import httpx
 import pytest
 from PIL import Image
 
-from app import main
+from app import main, policy
 from app.v5_effort import MEDIUM_MODEL
 from test_generation_integration import image_body, post
 from test_v5_effort import effort_env
@@ -19,9 +19,30 @@ def picture(width=64, height=64):
     return base64.b64encode(data.getvalue()).decode()
 
 
+def metadata(body, operation='generate-image', pending=None):
+    p = body.get('parameters', body)
+    if operation == 'generate-image':
+        values = {name: p[name] for name in ('width', 'height', 'steps', 'n_samples', 'sm', 'sm_dyn',
+                                            'strength', 'upscaled_enhance') if name in p}
+        values.update(mode='inpaint' if p.get('mask') else 'img2img' if p.get('image') else 'generate',
+                      inpaint_strength=(p.get('img2img') or {}).get('strength', 1),
+                      has_controlnet=bool(p.get('controlnet_model') or p.get('controlnet_condition')),
+                      vibe_count=len(p.get('reference_image_multiple') or p.get('reference_image_multiple_cached') or []),
+                      precise_count=len(p.get('director_reference_images_cached') or []))
+        refs = p.get('reference_image_multiple', [])
+        extracted = p.get('reference_information_extracted_multiple', [])
+        values['pending_vibe_encoding_count'] = len({(refs[i], extracted[i]) for i in pending or []})
+    elif operation == 'encode-vibe':
+        values = {}
+    else:
+        values = dict(width=p.get('width', 64), height=p.get('height', 64))
+        if operation == 'augment-image':
+            values['req_type'] = p['req_type']
+    return dict(operation=operation, model=body['model'], parameters=values)
+
+
 async def quote(body, operation='generate-image', pending=None):
-    return await post('/v1/image/quote', {'operation': operation, 'payload': body,
-                                        'pending_vibe_indices': pending or []})
+    return await post('/v1/image/quote', metadata(body, operation, pending))
 
 
 @pytest.mark.asyncio
@@ -94,8 +115,7 @@ async def test_max_quotes_target_size_and_forwards_original_pixels(effort_env, s
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('patch', [
-    {'upscaled_enhance': 'true'}, {'width': 512}, {'n_samples': 2},
-    {'mask': 'mask'}, {'upscale': True}, {'img2img': {'strength': .5}},
+    {'upscaled_enhance': 'true'}, {'n_samples': 2}, {'mask': 'mask'},
 ])
 async def test_invalid_max_is_rejected_by_quote_and_execution(effort_env, patch):
     await effort_env.state.db.update_key(1, {'allow_anlas': True})
@@ -108,6 +128,18 @@ async def test_invalid_max_is_rejected_by_quote_and_execution(effort_env, patch)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('patch', [{'width': 512}, {'upscale': True}, {'img2img': {'strength': .5}}, {'image': 'invalid'}])
+async def test_max_execution_still_validates_actual_source_and_protocol(effort_env, patch):
+    await effort_env.state.db.update_key(1, {'allow_anlas': True})
+    params = dict(width=1024, height=1024, image=picture(1024, 1024), upscaled_enhance=True)
+    params.update(patch)
+    body = {**image_body(**params), 'model': 'nai-diffusion-5-full', 'action': 'img2img'}
+    assert (await quote(body)).status_code == 200
+    assert (await post('/ai/generate-image', body)).status_code == 400
+    assert effort_env.calls == []
+
+
+@pytest.mark.asyncio
 async def test_max_does_not_open_legacy_models_or_text_generation(effort_env):
     await effort_env.state.db.update_key(1, {'allow_anlas': True})
     body = image_body(width=256, height=256, image=picture(256, 256), upscaled_enhance=True)
@@ -115,7 +147,10 @@ async def test_max_does_not_open_legacy_models_or_text_generation(effort_env):
     assert (await quote(body)).status_code == 400
     body['model'] = 'nai-diffusion-5-full'
     body['action'] = 'generate'
-    assert (await quote(body)).status_code == 400
+    query = metadata(body)
+    query['parameters']['mode'] = 'generate'
+    assert (await post('/v1/image/quote', query)).status_code == 400
+    assert (await post('/ai/generate-image', body)).status_code == 400
 
 
 @pytest.mark.asyncio
@@ -207,3 +242,117 @@ async def test_max_medium_uses_its_own_step_price_factor(effort_env):
     assert value['effective_parameters']['steps'] == 14
     assert value['billing_size'] == [1440, 2144]
     assert value['cost_limit'] == {'anlas': 25, 'v5': 0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('field,value', [
+    ('image', 'base64'), ('mask', 'base64'), ('prompt', 'text'), ('sampler', 'k_euler'),
+    ('width', True), ('height', 63), ('steps', '28'), ('n_samples', 0),
+    ('strength', 10 ** 500), ('inpaint_strength', -1), ('sm', 1),
+    ('vibe_count', -1), ('precise_count', 17), ('pending_vibe_encoding_count', 1),
+])
+async def test_quote_rejects_content_and_invalid_metadata(effort_env, field, value):
+    query = metadata(image_body())
+    query['parameters'][field] = value
+    assert (await post('/v1/image/quote', query)).status_code == 400
+    assert effort_env.calls == []
+
+
+@pytest.mark.asyncio
+async def test_quote_rejects_old_payload_and_limits_body_to_four_kib(effort_env):
+    assert (await post('/v1/image/quote', {'operation': 'generate-image', 'payload': image_body()})).status_code == 400
+    query = metadata(image_body())
+    query['parameters']['image'] = 'x' * 4096
+    assert (await post('/v1/image/quote', query)).status_code == 413
+    assert effort_env.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('operation,model,parameters', [
+    ('generate-image', 'nai-diffusion-4-5-full', dict(width=1024, height=1024, steps=28, precise_count=1)),
+    ('generate-image', 'nai-diffusion-4-5-full', dict(width=1024, height=1024, steps=28, vibe_count=5,
+                                                  pending_vibe_encoding_count=1)),
+    ('generate-image', 'nai-diffusion-5-full', dict(mode='img2img', width=832, height=1216, steps=28,
+                                                strength=.5, upscaled_enhance=True)),
+    ('upscale', 'nai-diffusion-5-curated', dict(width=1024, height=1024)),
+    ('augment-image', 'nai-diffusion-5-curated', dict(width=64, height=64, req_type='bg-removal')),
+    ('encode-vibe', 'nai-diffusion-4-5-full', {}),
+])
+async def test_all_quote_operations_skip_image_processing_and_writes(effort_env, monkeypatch, operation, model, parameters):
+    st = effort_env.state
+    await st.db.update_key(1, {'allow_anlas': True})
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Metadata quotation attempted image processing or an upstream call')
+    for name in ('prepare_image_generation', 'prepare_tool', 'dimensions'):
+        monkeypatch.setattr(main, name, forbidden)
+    monkeypatch.setattr(policy, '_base64_data', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    await st.nai._client.aclose()
+    st.nai._client = httpx.AsyncClient(transport=httpx.MockTransport(forbidden))
+    before = st.db._db.total_changes
+    response = await post('/v1/image/quote', dict(operation=operation, model=model, parameters=parameters))
+    assert response.status_code == 200, response.text
+    assert st.db._db.total_changes == before
+    assert not st.image_reservations and not st._rpm
+    assert st.global_active == st.global_waiting == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['size', 'reference', 'mode', 'max', 'upscale'])
+async def test_underreported_metadata_cannot_lower_execution_cost(effort_env, kind):
+    st = effort_env.state
+    await st.db.update_key(1, {'allow_anlas': True})
+    body = image_body(width=1408, height=2176, steps=28)
+    operation = 'generate-image'
+    if kind == 'reference':
+        body = image_body(precise=1, precise_count=0, vibe_count=0, has_controlnet=False)
+    elif kind == 'mode':
+        body = image_body(width=1408, height=2176, image=picture(), strength=1, mode='generate')
+        body['action'] = 'img2img'
+    elif kind == 'max':
+        body = {**image_body(width=832, height=1216, steps=28, image=picture(832, 1216),
+                            strength=.5, upscaled_enhance=True), 'model': 'nai-diffusion-5-full', 'action': 'img2img'}
+    elif kind == 'upscale':
+        operation = 'upscale'
+        body = dict(model='nai-diffusion-5-curated', image=picture(1536, 1024), width=1536, height=1024)
+    query = metadata(body, operation)
+    if kind == 'reference':
+        query['parameters']['precise_count'] = 0
+    elif kind == 'mode':
+        query['parameters']['strength'] = .1
+    else:
+        query['parameters'].update(width=512, height=512)
+    response = await post('/v1/image/quote', query)
+    assert response.status_code == 200, response.text
+    path = '/ai/upscale' if kind == 'upscale' else '/ai/generate-image'
+    response = await post(path, {**body, 'cost_limit': response.json()['cost_limit']})
+    assert response.status_code == 409, response.text
+    assert effort_env.calls == [] and not st.image_reservations
+    counter = await st.db.get_counter(1, st.day())
+    assert counter['anlas'] == counter['v5'] == counter['images'] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('model,parameters,expected', [
+    ('nai-diffusion-3', dict(width=512, height=512, steps=29, sm=True), {'anlas': 8, 'v5': 0}),
+    ('nai-diffusion-3', dict(width=512, height=512, steps=29, sm=True, sm_dyn=True), {'anlas': 9, 'v5': 0}),
+    ('nai-diffusion-4-5-full', dict(precise=1), {'anlas': 5, 'v5': 0}),
+    ('nai-diffusion-4-5-full', dict(reference_image_multiple=['ZW5jb2RlZA=='] * 5,
+                                  reference_strength_multiple=[.6] * 5,
+                                  reference_information_extracted_multiple=[1] * 5), {'anlas': 2, 'v5': 0}),
+    ('nai-diffusion-4-5-full-inpainting', dict(steps=29, image='source', mask='mask', img2img={'strength': .5}),
+     {'anlas': 11, 'v5': 0}),
+    ('nai-diffusion-5-full-inpainting', dict(steps=29, image='source', mask='mask', img2img={'strength': .5}),
+     {'anlas': 32, 'v5': 0}),
+])
+async def test_metadata_quotes_match_execution_prices(effort_env, model, parameters, expected):
+    st = effort_env.state
+    await st.db.update_key(1, {'allow_anlas': True})
+    body = {**image_body(**parameters), 'model': model}
+    value = (await quote(body)).json()
+    assert value['cost_limit'] == expected
+    assert policy.estimate_image_cost(body) == expected
+    response = await post('/ai/generate-image', {**body, 'cost_limit': value['cost_limit']})
+    assert response.status_code == 200, response.text
+    counter = await st.db.get_counter(1, st.day())
+    assert (counter['anlas'], counter['v5']) == (expected['anlas'], expected['v5'])

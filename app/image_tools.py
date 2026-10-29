@@ -38,6 +38,30 @@ def dimensions(raw: bytes, *, output: bool = False) -> tuple[int, int]:
         raise ValueError("图片损坏或不是有效的 PNG、JPEG、WebP 静态图片") from exc
 
 
+def tool_price(operation: str, width: int, height: int, req_type: str | None = None) -> tuple[int, int, int]:
+    """Return processing dimensions and price without decoding or resizing pixels."""
+    if (type(width) is not int or type(height) is not int or min(width, height) < 64
+            or max(width, height) > 8192 or width * height > MAX_PIXELS):
+        raise ValueError("图片尺寸超出限制（至少 64 像素，最多 3145728 像素）")
+    if operation == "upscale":
+        cost = next(cost for pixels, cost in (
+            (1048576, 1), (1747627, 2), (2446678, 3), (MAX_PIXELS, 4)
+        ) if width * height <= pixels)
+        return width, height, cost
+    if operation != "augment-image" or req_type not in DIRECTOR_TOOLS:
+        raise ValueError("不支持的导演工具")
+    if width * height < 1_011_712:
+        ratio = math.sqrt(1_048_576 / (width * height))
+        width, height = math.floor(width * ratio), math.floor(height * ratio)
+        if max(width, height) > 8192:
+            raise ValueError("图片长宽比过大")
+    base = max(2, math.ceil((2.951823174884865e-6 + 5.753298233447344e-7 * 28)
+                           * width * height))
+    cost = 3 * base + 5 if req_type == "bg-removal" else (
+        0 if width * height <= 1048576 else base)
+    return width, height, cost
+
+
 def prepare_tool(body: dict, operation: str) -> tuple[dict, int]:
     image = body.get("image")
     if not isinstance(image, str) or not image or len(image) > 24 * 1024 * 1024:
@@ -58,9 +82,7 @@ def prepare_tool(body: dict, operation: str) -> tuple[dict, int]:
                 or type(body.get("declared_blur_sigma", 0)) not in (int, float)
                 or body.get("declared_blur_sigma", 0) != 0):
             raise ValueError("放大仅支持官方当前模型、2 倍尺寸和默认模糊参数")
-        cost = next(cost for pixels, cost in (
-            (1048576, 1), (1747627, 2), (2446678, 3), (MAX_PIXELS, 4)
-        ) if width * height <= pixels)
+        _, _, cost = tool_price(operation, width, height)
         return {"image": image, "model": UPSCALE_MODEL, "declared_blur_sigma": 0}, cost
     tool = body.get("req_type")
     if not isinstance(tool, str) or tool not in DIRECTOR_TOOLS:
@@ -76,21 +98,15 @@ def prepare_tool(body: dict, operation: str) -> tuple[dict, int]:
         payload.update(prompt=prompt, defry=defry)
     # As on the official page, small sources are expanded to Normal before
     # Director processing. This also gives Remove BG its 65-Anlas minimum.
-    if width * height < 1_011_712:
-        ratio = math.sqrt(1_048_576 / (width * height))
-        width, height = math.floor(width * ratio), math.floor(height * ratio)
-        if max(width, height) > 8192:
-            raise ValueError("图片长宽比过大")
+    target_width, target_height, cost = tool_price(operation, width, height, tool)
+    if (target_width, target_height) != (width, height):
+        width, height = target_width, target_height
         with Image.open(io.BytesIO(raw)) as img:
             resized = img.resize((width, height), Image.Resampling.LANCZOS)
             with io.BytesIO() as buffer:
                 resized.save(buffer, format="PNG")
                 payload["image"] = base64.b64encode(buffer.getvalue()).decode("ascii")
         payload.update(width=width, height=height)
-    base = max(2, math.ceil((2.951823174884865e-6 + 5.753298233447344e-7 * 28)
-                           * width * height))
-    cost = 3 * base + 5 if tool == "bg-removal" else (
-        0 if width * height <= 1048576 else base)
     return payload, cost
 
 

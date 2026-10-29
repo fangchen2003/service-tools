@@ -34,13 +34,18 @@ from .image_events import ImageEventTracker, ImageStreamProtocolError, STREAM_ME
 from .image_streaming import ImageStreamResponse
 from .image_events import encode_image_event
 from .image_receipts import RECEIPT_HEADER, image_receipt, receipt_headers
-from .image_tools import dimensions, prepare_tool, validate_result, MAX_RESPONSE_BYTES
+from .image_tools import dimensions, prepare_tool, tool_price, validate_result, MAX_RESPONSE_BYTES
+from .image_quotes import parse_quote_metadata
 from .image_payload import read_image_body
 from .nai import NaiClient, UpstreamError, _wait_cleanup
 from .policy import (
-    clamp_image_params,
     clamp_text_params,
     estimate_image_cost,
+    estimate_image_price,
+    image_pricing_parameters,
+    pricing_free_eligible,
+    pricing_image_size,
+    clamp_image_pricing,
     image_cost_size,
     max_enhance_sizes,
     image_model_tier,
@@ -53,7 +58,7 @@ from .policy import (
     text_model_host,
 )
 from .state import GateState
-from .v5_effort import MEDIUM_MODEL, MEDIUM_MODELS, normalize_medium, settings as effort_settings, units
+from .v5_effort import MEDIUM_MODEL, MEDIUM_MODELS, normalize_medium, normalize_medium_pricing, settings as effort_settings, units
 from .upstream_errors import upstream_error_message, text_stream_events
 from .sse import encode_sse
 
@@ -616,10 +621,9 @@ def image_step_limit(key, model_tier):
     return min(23 if model_tier == "v5" else 28, max(1, STATE.settings.max_steps))
 
 
-async def prepare_image_generation(body: dict, key, *, log_rejections: bool = False):
-    """Shared request preparation; quotation must not write rejection logs."""
-    body = copy.deepcopy(body)
-    model = str(body.get("model", "?"))
+def prepare_image_pricing(model: str, parameters: dict, key, *, log_rejections: bool = False):
+    """Apply account and numeric policy equally to quotes and real requests."""
+    p0 = dict(parameters)
     model_tier = image_model_tier(model)
     if model_tier is None:
         if log_rejections:
@@ -630,16 +634,6 @@ async def prepare_image_generation(body: dict, key, *, log_rejections: bool = Fa
             record(key, "image", model, "rejected", detail="模型权限：仅允许 V4.5 及更低")
         raise err(403, "该 Key 仅允许 V4.5 及更低图片模型")
 
-    # 图生图功能权限与费用分开判断；免费规格也沿用 Anlas 权限要求。
-    if body.get("image") or body.get("mask"):
-        raise err(400, "生图请求的 image 和 mask 请放在 parameters 中")
-    problem = validate_image_references(body)
-    if problem:
-        raise err(400, problem)
-    p0 = body.get("parameters", {}) or {}
-    if not isinstance(p0, dict):
-        raise err(400, "parameters 必须是 JSON 对象")
-    body["parameters"] = p0
     # Free-key step limits are independent of SAFE_CLAMP; paid keys keep their steps.
     step_notes = []
     if not key["is_admin"]:
@@ -654,10 +648,9 @@ async def prepare_image_generation(body: dict, key, *, log_rejections: bool = Fa
             raise err(400, "steps 必须是正整数") from None
         limit = image_step_limit(key, model_tier)
         p0["steps"] = min(steps, limit) if limit is not None else steps
-        body["parameters"] = p0
         if limit is not None and steps > limit:
             step_notes.append(f"步数已钳制为 {limit}")
-    if (p0.get("image") or p0.get("mask")) and not key["is_admin"]:
+    if p0.get("mode", "generate") != "generate" and not key["is_admin"]:
         if not (key["allow_img2img"] and STATE.settings.allow_img2img):
             if log_rejections:
                 record(key, "image", model, "rejected", detail="img2img 未开放")
@@ -670,8 +663,8 @@ async def prepare_image_generation(body: dict, key, *, log_rejections: bool = Fa
     # 免费档钳制：只对未开通 Anlas 的 Key 生效；开通 Anlas 的 Key 靠配额约束
     if STATE.settings.safe_clamp and not key["is_admin"] and not key["allow_anlas"]:
         try:
-            body, notes, problem = clamp_image_params(
-                body,
+            p0, notes, problem = clamp_image_pricing(
+                model, p0,
                 max_pixels=STATE.settings.max_pixels,
                 max_steps=STATE.settings.max_steps,
                 allow_img2img=True,  # 权限已在上面预检
@@ -686,19 +679,44 @@ async def prepare_image_generation(body: dict, key, *, log_rejections: bool = Fa
         notes = []
 
     notes = step_notes + notes
+    if model in MEDIUM_MODELS:
+        normalize_medium_pricing(p0)
+
+    try:
+        image_count = int(p0.get("n_samples", 1) or 1)
+    except (TypeError, ValueError):
+        raise err(400, "n_samples 必须是正整数")
+    if image_count < 1:
+        raise err(400, "n_samples 必须是正整数")
+    return p0, model_tier, notes, image_count
+
+
+async def prepare_image_generation(body: dict, key, *, log_rejections: bool = False):
+    """Validate real image/reference data before applying the shared pricing policy."""
+    body = copy.deepcopy(body)
+    if body.get("image") or body.get("mask"):
+        raise err(400, "生图请求的 image 和 mask 请放在 parameters 中")
+    problem = validate_image_references(body)
+    if problem:
+        raise err(400, problem)
+    p = body.get("parameters", {}) or {}
+    if not isinstance(p, dict):
+        raise err(400, "parameters 必须是 JSON 对象")
+    body["parameters"] = p
+    try:
+        pricing = image_pricing_parameters(body)
+    except ValueError as exc:
+        raise err(400, str(exc)) from None
+    pricing, model_tier, notes, image_count = prepare_image_pricing(
+        str(body.get("model", "?")), pricing, key, log_rejections=log_rejections)
+    for name in ("width", "height", "steps", "n_samples", "sm", "sm_dyn"):
+        if name in pricing:
+            p[name] = pricing[name]
     if body.get("model") in MEDIUM_MODELS:
         try:
             body = normalize_medium(body)
         except (ValueError, TypeError, AttributeError) as exc:
             raise err(400, "Medium 图片参数格式无效") from exc
-
-    p = body.get("parameters", {})
-    try:
-        image_count = int(p.get("n_samples", 1) or 1)
-    except (TypeError, ValueError):
-        raise err(400, "n_samples 必须是正整数")
-    if image_count < 1:
-        raise err(400, "n_samples 必须是正整数")
 
     p = body["parameters"]
     try:
@@ -716,36 +734,50 @@ async def prepare_image_generation(body: dict, key, *, log_rejections: bool = Fa
 
 async def resolve_v5_price(body: dict, key, *, exhausted: bool = False, reservation=None):
     p = body["parameters"]
-    config = await effort_settings(STATE.db)
-    auto = False
-    if (config["v5_auto_medium"] and not key["is_admin"] and not key["allow_anlas"]
-            and body.get("model") == "nai-diffusion-5-full"
-            and body.get("action", "generate") == "generate"
-            and not (p.get("image") or p.get("mask"))):
-        cap = units(await STATE.db.get_setting("global_daily_v5", STATE.settings.global_daily_v5) or 0)
-        used = units(await STATE.db.day_v5_total(STATE.day()))
-        pending = sum(units(r.v5) for r in STATE.image_reservations.values()
-                      if r is not reservation and not r.exclude_global_v5)
-        auto = cap > 0 and (cap - used - pending) * 100 <= cap * config["v5_medium_threshold"]
-    if auto:
-        body["model"] = MEDIUM_MODEL
-    if body.get("model") in MEDIUM_MODELS:
+    problem = validate_image_references(body)
+    if problem:
+        raise ValueError(problem)
+    image_cost_size(body, int(p.get("width", 832) or 832), int(p.get("height", 1216) or 1216))
+    model, est, changes = await resolve_v5_pricing(
+        str(body.get("model", "")), image_pricing_parameters(body), key,
+        pure_generation=body.get("action", "generate") == "generate" and not (p.get("image") or p.get("mask")),
+        exhausted=exhausted, reservation=reservation)
+    body["model"] = model
+    if model in MEDIUM_MODELS:
         try:
             updated_body = normalize_medium(body)
         except (ValueError, TypeError, AttributeError) as exc:
             raise err(400, "Medium 图片参数格式无效") from exc
         body.clear()
         body.update(updated_body)
-    est = estimate_image_cost(body, is_opus=True, v5_allowance_available=not exhausted,
-                              medium_multiplier=config["v5_medium_multiplier"])
+    return est, changes
+
+
+async def resolve_v5_pricing(model: str, p: dict, key, *, pure_generation: bool,
+                            exhausted: bool = False, reservation=None):
+    config = await effort_settings(STATE.db)
+    auto = False
+    if (config["v5_auto_medium"] and not key["is_admin"] and not key["allow_anlas"]
+            and model == "nai-diffusion-5-full" and pure_generation):
+        cap = units(await STATE.db.get_setting("global_daily_v5", STATE.settings.global_daily_v5) or 0)
+        used = units(await STATE.db.day_v5_total(STATE.day()))
+        pending = sum(units(r.v5) for r in STATE.image_reservations.values()
+                      if r is not reservation and not r.exclude_global_v5)
+        auto = cap > 0 and (cap - used - pending) * 100 <= cap * config["v5_medium_threshold"]
+    if auto:
+        model = MEDIUM_MODEL
+    if model in MEDIUM_MODELS:
+        normalize_medium_pricing(p)
+    est = estimate_image_price(model, p, is_opus=True, v5_allowance_available=not exhausted,
+                               medium_multiplier=config["v5_medium_multiplier"])
     changes = []
-    if body.get("model") in MEDIUM_MODELS:
+    if model in MEDIUM_MODELS:
         changes.append("Medium：14步/Euler Ancestral/固定Heavy负面预设；自定义负面词和Rescale未生效")
     if auto:
         changes.append("全站余量低，自动切换Medium")
     if exhausted:
         changes.append("官方确认 V5 额度不可用，按 Anlas 估算记账")
-    return est, changes
+    return model, est, changes
 
 
 @app.get("/v1/image/quote")
@@ -757,86 +789,58 @@ async def quote_identity(request: Request):
 
 @app.post("/v1/image/quote")
 async def quote_image(request: Request):
-    """Read local policy without touching usage, queues, logs or upstream accounts."""
+    """Price at most 4 KiB of metadata without image content or upstream calls."""
     key = await authenticate(request, touch=False)
-    if STATE.image_quote_slots.locked():
-        raise err(429, "报价处理繁忙，请稍后再试")
-    async with STATE.image_quote_slots:
-        query = await read_json(request)
-        if set(query) - {"operation", "payload", "pending_vibe_indices"}:
-            raise err(400, "报价请求包含未知字段")
-        operation, body = query.get("operation"), query.get("payload")
-        if (not isinstance(operation, str)
-                or operation not in {"generate-image", "upscale", "augment-image", "encode-vibe"}
-                or not isinstance(body, dict)):
-            raise err(400, "报价需要有效的 operation 和 payload")
-        body = copy.deepcopy(body)
-        take_cost_limit(body)
-        pending = query.get("pending_vibe_indices", [])
-        if (not isinstance(pending, list) or len(pending) > 16
-                or any(type(index) is not int for index in pending) or len(set(pending)) != len(pending)
-                or (pending and operation != "generate-image")):
-            raise err(400, "Vibe 待编码索引无效")
-        encoding_count = 0
-        if pending:
-            p = body.get("parameters")
-            refs = p.get("reference_image_multiple") if isinstance(p, dict) else None
-            extracted = p.get("reference_information_extracted_multiple") if isinstance(p, dict) else None
-            if (not isinstance(refs, list) or not isinstance(extracted, list)
-                    or any(not 0 <= index < min(len(refs), len(extracted)) for index in pending)):
-                raise err(400, "Vibe 待编码索引与参考图不匹配")
-            encodings = set()
-            for index in pending:
-                payload = prepare_vibe_encoding({"model": body.get("model"), "image": refs[index],
-                                                 "informationExtracted": extracted[index]})
-                encodings.add((payload["image"], payload["information_extracted"]))
-                # Only the quote copy uses this placeholder; no request is dispatched.
-                refs[index] = "cGVuZGluZy12aWJl"
-            encoding_count = len(encodings)
-        notes = []
-        legacy = 0
-        output_size = None
-        billing_size = None
-        if operation == "generate-image":
-            body, tier, notes, _ = await prepare_image_generation(body, key)
-            async with STATE.image_budget_lock:
-                try:
-                    if tier == "v5":
-                        price, changes = await resolve_v5_price(body, key)
-                        notes.extend(changes)
-                    else:
-                        price = estimate_image_cost(body)
-                except (TypeError, ValueError, OverflowError):
-                    raise err(400, "图片参数无效，无法报价") from None
-                legacy = int(tier == "legacy" and legacy_normal_free_eligible(body))
-                await quota_image_check(key, {**price, "anlas": price["anlas"] + encoding_count * VIBE_ENCODING_ANLAS},
-                                        legacy_free_images=legacy)
-            p = body["parameters"]
-            billing_size = image_cost_size(body, int(p.get("width", 832)), int(p.get("height", 1216)))
-            output_size = max_enhance_sizes(p["width"], p["height"])[1] if p.get("upscaled_enhance") else billing_size
-        elif operation == "encode-vibe":
-            body = prepare_vibe_encoding(body)
-            price = {"anlas": VIBE_ENCODING_ANLAS, "v5": 0}
-        else:
-            check_image_tool_permission(key)
+    query = await read_json(request, limit_mb=4 / 1024)
+    try:
+        operation, model, p = parse_quote_metadata(query)
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise err(400, str(exc)) from None
+    encoding_count = p.get("pending_vibe_encoding_count", 0)
+    notes = []
+    legacy = 0
+    output_size = None
+    billing_size = None
+    if operation == "generate-image":
+        p, tier, notes, _ = prepare_image_pricing(model, p, key)
+        async with STATE.image_budget_lock:
             try:
-                body, cost = await anyio.to_thread.run_sync(prepare_tool, body, operation)
-            except ValueError as exc:
-                raise err(400, str(exc)) from None
-            price = {"anlas": cost, "v5": 0}
-        if operation != "generate-image":
-            async with STATE.image_budget_lock:
-                await quota_image_check(key, price)
-        encoding_cost = encoding_count * VIBE_ENCODING_ANLAS
-        p = body.get("parameters", {})
-        return {"source": "gate", "anlas": price["anlas"] + encoding_cost, "v5": price["v5"],
-                "generation_anlas": price["anlas"], "encoding_anlas": encoding_cost,
-                "encoding_count": encoding_count, "legacy_free_images": legacy,
-                "cost_limit": price, "encoding_cost_limit": {"anlas": VIBE_ENCODING_ANLAS, "v5": 0},
-                "effective_model": body.get("model"),
-                "effective_parameters": {name: p[name] for name in ("width", "height", "steps", "sampler", "upscaled_enhance") if name in p},
-                "billing_size": billing_size, "output_size": output_size, "notes": notes,
-                "upstream_allowance_verified": False}
+                if tier == "v5":
+                    model, price, changes = await resolve_v5_pricing(
+                        model, p, key, pure_generation=p["mode"] == "generate")
+                    notes.extend(changes)
+                else:
+                    price = estimate_image_price(model, p)
+                legacy = int(tier == "legacy" and pricing_free_eligible(model, p))
+            except (TypeError, ValueError, OverflowError):
+                raise err(400, "图片参数无效，无法报价") from None
+            await quota_image_check(key, {**price, "anlas": price["anlas"] + encoding_count * VIBE_ENCODING_ANLAS},
+                                    legacy_free_images=legacy)
+        billing_size = pricing_image_size(model, p, p["width"], p["height"])
+        output_size = max_enhance_sizes(p["width"], p["height"])[1] if p.get("upscaled_enhance") else billing_size
+    elif operation == "encode-vibe":
+        price = {"anlas": VIBE_ENCODING_ANLAS, "v5": 0}
+    else:
+        check_image_tool_permission(key)
+        try:
+            _, _, cost = tool_price(operation, p["width"], p["height"], p.get("req_type"))
+        except ValueError as exc:
+            raise err(400, str(exc)) from None
+        price = {"anlas": cost, "v5": 0}
+    if operation != "generate-image":
+        async with STATE.image_budget_lock:
+            await quota_image_check(key, price)
+    encoding_cost = encoding_count * VIBE_ENCODING_ANLAS
+    effective = {name: p[name] for name in ("width", "height", "steps", "upscaled_enhance") if name in p}
+    if model in MEDIUM_MODELS:
+        effective["sampler"] = "k_euler_ancestral"
+    return {"source": "gate", "anlas": price["anlas"] + encoding_cost, "v5": price["v5"],
+            "generation_anlas": price["anlas"], "encoding_anlas": encoding_cost,
+            "encoding_count": encoding_count, "legacy_free_images": legacy,
+            "cost_limit": price, "encoding_cost_limit": {"anlas": VIBE_ENCODING_ANLAS, "v5": 0},
+            "effective_model": model, "effective_parameters": effective,
+            "billing_size": billing_size, "output_size": output_size, "notes": notes,
+            "upstream_allowance_verified": False}
 
 
 async def generate_image(request: Request):

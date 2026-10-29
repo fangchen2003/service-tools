@@ -31,11 +31,18 @@ async def settings(db):
     return result
 
 
+def normalize_medium_pricing(parameters):
+    parameters["steps"] = 14
+    parameters.pop("sm", None)
+    parameters.pop("sm_dyn", None)
+
+
 def normalize_medium(payload):
     """Match the official Medium model's fixed settings; never rewrite prompt text."""
     out = copy.deepcopy(payload)
     p = out.setdefault("parameters", {})
-    p.update(steps=14, sampler="k_euler_ancestral", noise_schedule="karras",
+    normalize_medium_pricing(p)
+    p.update(sampler="k_euler_ancestral", noise_schedule="karras",
              negative_prompt=HEAVY_UC)
     if "v4_negative_prompt" in p:
         negative = p["v4_negative_prompt"]
@@ -52,7 +59,7 @@ def normalize_medium(payload):
     # Browser-only aliases must not reach an upstream that does not support them.
     for name in ("rescale", "cfg_rescale", "uc", "uc_preset", "ucPreset", "ucPresetId",
                  "negativePrompt", "effort", "extra_passthrough_testing",
-                 "skip_cfg_above_sigma", "dynamic_thresholding", "sm", "sm_dyn"):
+                 "skip_cfg_above_sigma", "dynamic_thresholding"):
         p.pop(name, None)
     for character in p.get("characterPrompts", []):
         if not isinstance(character, dict):
