@@ -64,23 +64,22 @@ class Settings:
     login_window_seconds: int = _int("LOGIN_WINDOW_SECONDS", 300)
     key_inactivity_delete_days: int = _int("KEY_INACTIVITY_DELETE_DAYS", 3)
 
-    # ---- 图片安全钳制（默认强制贴合 Opus 免费档）----
+    # ---- 普通用户始终强制免费档，safe_clamp 仅保留旧配置兼容 ----
     safe_clamp: bool = _bool("SAFE_CLAMP", True)
     max_pixels: int = _int("MAX_PIXELS", 1024 * 1024)
     max_steps: int = min(28, max(1, _int("MAX_STEPS", 28)))
-    allow_img2img: bool = _bool("ALLOW_IMG2IMG", False)  # 独立功能权限；费用由图片参数决定
+    allow_img2img: bool = _bool("ALLOW_IMG2IMG", False)  # img2img/局部重绘会消耗 Anlas
 
-    # ---- 全站月度 Anlas 预算（所有 Key 共享的总闸，后台可改）----
-    # Opus Anlas 每月账单日回满到 10000（不叠加），预算建议留 20~30% 余量
+    # 旧 Anlas 数值预算仅保留配置兼容，不参与请求准入；用量审计仍保留。
     global_monthly_anlas: float = _float("GLOBAL_MONTHLY_ANLAS", 10000)
     # 全站每日 V5 张数（镜像 NovelAI 服务端 V5 周额度 ~190 张/天的恢复速率）
     global_daily_v5: int = _int("GLOBAL_DAILY_V5", 150)
 
     # ---- 新 key 的默认配额（管理员可在后台逐 key 修改）----
     default_daily_images: int = _int("DEFAULT_DAILY_IMAGES", 100)  # 每 Key 免费旧模型日限；0=不限
-    default_daily_anlas: float = _float("DEFAULT_DAILY_ANLAS", 100)
+    default_daily_anlas: float = _float("DEFAULT_DAILY_ANLAS", 100)  # 旧兼容字段，不执行限额
     default_daily_v5: int = _int("DEFAULT_DAILY_V5", 50)
-    default_monthly_anlas: float = _float("DEFAULT_MONTHLY_ANLAS", 2500)
+    default_monthly_anlas: float = _float("DEFAULT_MONTHLY_ANLAS", 2500)  # 旧兼容字段，不执行限额
     default_daily_text_tokens: int = _int("DEFAULT_DAILY_TEXT_TOKENS", 150000)
     default_rpm: int = _int("DEFAULT_RPM", 10)
     default_expires_days: int = _int("DEFAULT_KEY_EXPIRES_DAYS", 30)

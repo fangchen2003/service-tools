@@ -10,12 +10,14 @@ from .v5_effort import SCALE, units
 async def subscription_payload(state, key, *, now: float | None = None) -> dict:
     now = time.time() if now is None else now
     key = dict(key)
-    day, month = state.day(now), state.month(now)
+    day = state.day(now)
     admin = bool(key.get("is_admin"))
-    paid = admin or bool(key["allow_anlas"])
-    monthly_limit = 0.0 if admin else float(key["monthly_anlas"] or 0)
-    monthly_used = await state.db.month_anlas(key["id"], month)
-    anlas_left = max(0, int(monthly_limit - monthly_used)) if paid and monthly_limit > 0 else 0
+    # Ordinary image generation has no paid balance. Vibe encoding has its own
+    # daily entitlement and must not masquerade as arbitrary Anlas credit.
+    paid = admin
+    monthly_limit = 0
+    anlas_left = 0
+    vibe_remaining = None if admin else await state.db.get_vibe_remaining(key["id"])
 
     limits: list[int] = []
     remaining: list[int] = []
@@ -50,6 +52,10 @@ async def subscription_payload(state, key, *, now: float | None = None) -> dict:
         "naiGate": {
             "imageModelScope": "all" if admin else key["image_model_scope"],
             "anlasEnabled": paid,
+            "freeOnly": not admin,
+            "anlasQuotaEnabled": False,
+            "vibeRemainingToday": vibe_remaining,
+            "vibeDailyLimit": None if admin else 3,
             "anlasLeft": anlas_left,
             "anlasMonthlyLimit": int(monthly_limit),
             "v5LeftToday": v5_left,

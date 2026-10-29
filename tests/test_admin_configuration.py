@@ -149,3 +149,35 @@ async def test_upstream_api_rejects_bad_inputs_without_credentials_in_errors(pan
         assert response.status_code == 422
         if body.get("token"):
             assert body["token"] not in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allow_anlas", [False, True])
+async def test_free_only_ui_partial_saves_preserve_legacy_fields(panel, allow_anlas):
+    """Removed editors must omit fields, not silently reset stored compatibility values."""
+    state, client = panel
+    headers = await sign_in(client)
+    old_defaults = {"default_daily_anlas": 73, "default_monthly_anlas": 2345,
+                    "default_allow_anlas": allow_anlas}
+    assert (await client.put("/admin/api/configuration", headers=headers,
+                             json=old_defaults)).status_code == 200
+    key = (await client.post("/admin/api/keys", json={"name": "fixture"})).json()["key"]
+    assert (await client.patch(f"/admin/api/keys/{key['id']}", json={
+        "name": "renamed", "daily_v5": 27, "allow_img2img": True,
+        "exclude_global_v5": True,
+    })).status_code == 200
+    stored = await state.db.get_key(key["id"])
+    assert stored["daily_anlas"] == 73 and stored["monthly_anlas"] == 2345
+    assert bool(stored["allow_anlas"]) is allow_anlas
+    assert stored["allow_img2img"] and stored["exclude_global_v5"]
+    response = await client.put("/admin/api/configuration", headers=headers,
+                                json={"default_rpm": 11})
+    assert response.status_code == 200
+    for name, value in old_defaults.items():
+        assert response.json()["values"][name] == value
+    assert (await client.put("/admin/api/settings", json={"global_monthly_anlas": 9876})).status_code == 200
+    response = await client.put("/admin/api/settings", json={"global_daily_v5": 125,
+                               "v5_auto_medium": False, "v5_medium_multiplier": 0.45})
+    assert response.status_code == 200
+    assert response.json()["global_monthly_anlas"] == 9876
+    assert response.json()["v5_medium_multiplier"] == 0.45

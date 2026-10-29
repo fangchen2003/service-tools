@@ -380,7 +380,7 @@ class NaiClient:
         await self.wait_for_available_token_image_slot(ts)
 
     async def wait_for_available_token_image_slot(self, ts: TokenState) -> None:
-        """补全查询等到当前空档才占位，取消等待不会挤占后续生图。"""
+        """Wait for image pacing without reserving a future slot on cancellation."""
         while True:
             async with self._lock:
                 now = time.monotonic()
@@ -504,10 +504,9 @@ class NaiClient:
                         async with asyncio.timeout(queue_timeout):
                             await ts.image_slots.acquire()
                             slot_acquired = True
+                            # Tags share capacity/429 protection, not image pacing.
                             if wait_for_image_slot:
                                 await self.wait_for_token_image_slot(ts)
-                            else:
-                                await self.wait_for_available_token_image_slot(ts)
                     except TimeoutError:
                         raise UpstreamError(429, "上游图片任务排队超时，请稍后再试") from None
                 if v5_free and resolve_v5_cost is not None:

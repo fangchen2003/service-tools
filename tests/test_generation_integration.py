@@ -53,6 +53,37 @@ class FakeDB:
         self.logs = []
         self.accounting_entered = asyncio.Event()
         self.accounting_release = None
+        self.vibe_remaining = {}
+        self.vibe_reservations = {}
+
+    async def get_vibe_remaining(self, key_id, day=None):
+        return self.vibe_remaining.get(key_id, 0)
+
+    async def reserve_vibe_encoding(self, key_id, day=None):
+        if not self.vibe_remaining.get(key_id, 0):
+            return None
+        self.vibe_remaining[key_id] -= 1
+        token = str(len(self.vibe_reservations) + 1)
+        self.vibe_reservations[token] = (key_id, "reserved")
+        return token
+
+    async def release_vibe_encoding(self, token):
+        key_id, status = self.vibe_reservations[token]
+        if status != "reserved":
+            return False
+        self.vibe_remaining[key_id] += 1
+        self.vibe_reservations[token] = (key_id, "released")
+        return True
+
+    async def settle_vibe_encoding(self, token, model):
+        key_id, status = self.vibe_reservations[token]
+        if status != "reserved":
+            return False
+        await self.add_log(key_id, "fixture", "vibe_encode", model, "ok", anlas=2, unconfirmed_anlas=0)
+        await self.bump_counters(key_id, "2026-09-22", images=0, anlas=2,
+                                 text_tokens=0, requests=1, v5=0, legacy_free_images=0)
+        self.vibe_reservations[token] = (key_id, "settled")
+        return True
 
     async def get_key_by_token(self, token):
         return self.keys.get(token)
@@ -173,6 +204,8 @@ class FakeState:
 @pytest.fixture
 def state(monkeypatch):
     value = FakeState()
+    # Existing encoding fixtures represent users who have already claimed /vibe.
+    value.db.vibe_remaining = {1: 3, 2: 3}
     monkeypatch.setattr(main, "STATE", value)
     return value
 
@@ -194,18 +227,21 @@ async def post(path, body, token="fixture-1"):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("count,anlas", [(1, 0), (5, 2)])
-async def test_baibai_vibe_uuid_is_forwarded_with_data_and_billed(state, count, anlas):
+@pytest.mark.parametrize("count,status", [(1, 200), (5, 400)])
+async def test_baibai_vibe_uuid_free_only_or_excess_refused(state, count, status):
     cached = [{"cache_secret_key": "1e6714a5-571c-4ec2-b34a-27f263bef0e2",
                "data": base64.b64encode(b"mock-vibe-vector").decode()} for _ in range(count)]
     body = image_body(reference_image_multiple_cached=cached, reference_strength_multiple=[0.6] * count)
     response = await post("/ai/generate-image", body)
-    assert response.status_code == 200
+    assert response.status_code == status
+    if status != 200:
+        assert not state.nai.calls and not state.db.charges
+        return
     assert len(state.nai.calls) == 1
     sent = state.nai.calls[0][2]["parameters"]
     assert sent["reference_image_multiple_cached"] == cached
     assert "reference_information_extracted_multiple" not in sent
-    assert state.db.charges[-1][1]["anlas"] == anlas
+    assert state.db.charges[-1][1]["anlas"] == 0
 
 
 @pytest.mark.asyncio
@@ -241,15 +277,16 @@ async def test_free_legacy_daily_quota_is_per_key_and_counts_success_only(state)
 
 
 @pytest.mark.asyncio
-async def test_paid_legacy_does_not_use_free_daily_quota(state):
+async def test_paid_legacy_is_refused_without_bypassing_free_daily_quota(state):
     key = state.db.keys["fixture-1"]
     key["daily_images"] = 1
     first = await post("/ai/generate-image", image_body())
     assert first.status_code == 200
     paid = await post("/ai/generate-image", image_body(precise=1))
-    assert paid.status_code == 200
-    assert state.db.charges[-1][1]["anlas"] > 0
-    assert state.db.charges[-1][1]["legacy_free_images"] == 0
+    assert paid.status_code == 400
+    assert len(state.nai.calls) == len(state.db.charges) == 1
+    assert state.db.charges[-1][1]["anlas"] == 0
+    assert state.db.charges[-1][1]["legacy_free_images"] == 1
 
 
 @pytest.mark.asyncio
@@ -267,6 +304,7 @@ async def test_failed_legacy_generation_does_not_use_free_daily_quota(state):
 
 @pytest.mark.asyncio
 async def test_disconnect_during_unknown_result_records_pending_once(state):
+    state.db.keys["fixture-1"]["is_admin"] = True  # Paid-path fixture, never an ordinary entitlement.
     state.nai.release = asyncio.Event()
     state.nai.error = UpstreamError(502, '上游响应中断', billing_uncertain=True)
     task = asyncio.create_task(post('/ai/generate-image', image_body(width=256, height=256, steps=23, controlnet_model='fixture')))
@@ -284,29 +322,21 @@ async def test_disconnect_during_unknown_result_records_pending_once(state):
 
 
 @pytest.mark.asyncio
-async def test_img2img_batch_counts_only_one_free_image_against_daily_limit(state):
+async def test_img2img_batch_cannot_bypass_ordinary_daily_limit(state):
     state.db.keys['fixture-1']['daily_images'] = 1
     batch = image_body(width=512, height=512, steps=20, image='fixture', strength=1, n_samples=3)
-    assert (await post('/ai/generate-image', batch)).status_code == 200
-    charge, = state.db.charges
-    assert (charge[1]['anlas'], charge[1]['images'], charge[1]['legacy_free_images']) == (8, 3, 1)
-    assert (await post('/ai/generate-image', batch)).status_code == 429
-    assert len(state.nai.calls) == 1
-
+    assert (await post('/ai/generate-image', batch)).status_code == 400
+    assert not state.nai.calls and not state.db.charges
 
 @pytest.mark.asyncio
-async def test_reference_batch_budget_matches_discounted_charge(state):
+async def test_reference_batch_is_refused_despite_numeric_budget(state):
     key = state.db.keys['fixture-1']
     body = image_body(precise=1, width=512, height=512, steps=20,
                       image='fixture', strength=1, n_samples=2)
-    key['daily_anlas'] = 8
-    assert (await post('/ai/generate-image', body)).status_code == 402
-    assert not state.nai.calls
-    key['daily_anlas'] = 9
-    assert (await post('/ai/generate-image', body)).status_code == 200
-    charge, = state.db.charges
-    assert (charge[1]['anlas'], charge[1]['legacy_free_images']) == (9, 0)
-
+    for budget in (8, 9, 100000):
+        key['daily_anlas'] = budget
+        assert (await post('/ai/generate-image', body)).status_code == 400
+    assert not state.nai.calls and not state.db.charges
 
 @pytest.mark.asyncio
 async def test_free_img2img_requires_both_key_permissions(state):
@@ -322,9 +352,8 @@ async def test_free_img2img_requires_both_key_permissions(state):
     assert 'Anlas 权限' in denied.json()['error']['message']
     assert not state.nai.calls and not state.db.charges
     key['allow_anlas'] = True
-    assert (await post('/ai/generate-image', body)).status_code == 200
-    assert state.db.charges[-1][1]['anlas'] == 0
-    assert not state.nai.calls[-1][3]['requires_anlas']
+    assert (await post('/ai/generate-image', body)).status_code == 400
+    assert not state.nai.calls and not state.db.charges
 
 
 @pytest.mark.asyncio
@@ -353,9 +382,9 @@ async def test_img2img_admin_bypass_preserved(state, admin):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("allow_anlas,admin,clamp,expected", [
     (False, False, True, 512),
-    (True, False, True, 1024),
+    (True, False, True, 512),
     (False, True, True, 1024),
-    (False, False, False, 1024),
+    (False, False, False, 512),
 ])
 async def test_custom_pixel_limit_only_applies_to_free_key_clamp(
         state, allow_anlas, admin, clamp, expected):
@@ -399,6 +428,7 @@ async def test_invalid_free_clamp_parameters_rejected_before_dispatch(state, str
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", [200, 201])
 async def test_precise_generation_settles_and_uses_paid_token_policy(state, status):
+    state.db.keys["fixture-1"]["is_admin"] = True
     state.nai.status = status
     body = image_body(precise=2)
     response = await post("/ai/generate-image", body)
@@ -430,8 +460,8 @@ async def test_encoding_binary_response_and_own_two_anlas_fee(state, path, statu
     options = state.nai.calls[0][3]
     assert options["requires_anlas"] and options["image_lane"]
     assert options["image_count"] == 0 and not options["v5_free"]
-    assert state.nai.calls[0][2]["information_extracted"] == 0.7
-    assert "informationExtracted" not in state.nai.calls[0][2]
+    assert state.nai.calls[0][2]["informationExtracted"] == 0.7
+    assert "information_extracted" not in state.nai.calls[0][2]
 
 
 @pytest.mark.asyncio
@@ -451,9 +481,9 @@ async def test_encoding_failures_do_not_charge_or_echo_binary_input(state, statu
 @pytest.mark.asyncio
 async def test_encoding_and_reference_permission_reject_before_upstream(state):
     state.db.keys["fixture-1"]["allow_anlas"] = False
-    assert (await post("/ai/encode-vibe", encoding_body())).status_code == 402
-    assert (await post("/ai/generate-image", image_body(precise=1))).status_code == 402
-    assert not state.nai.calls
+    assert (await post("/ai/encode-vibe", encoding_body())).status_code == 200
+    assert (await post("/ai/generate-image", image_body(precise=1))).status_code == 400
+    assert len(state.nai.calls) == 1
     assert (await post("/ai/encode-vibe", encoding_body(), "unknown")).status_code == 401
 
 
@@ -490,25 +520,29 @@ async def test_encoding_rate_limit_keeps_upstream_global_cooldown_minimum(state)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("shared_budget", [False, True])
-async def test_parallel_requests_recheck_ledger_inside_global_budget_lock(state, shared_budget):
+async def test_parallel_encodings_ignore_anlas_budget_and_reserve_daily_quota(state, shared_budget):
     if shared_budget:
         state.settings.global_monthly_anlas = 2
     else:
         state.db.keys["fixture-1"]["daily_anlas"] = 2
+    state.db.vibe_remaining[1] = 1
     state.nai.release = asyncio.Event()
     first = asyncio.create_task(post("/ai/encode-vibe", encoding_body()))
     await state.nai.entered.wait()
     second = asyncio.create_task(post("/ai/encode-vibe", encoding_body(), "fixture-2" if shared_budget else "fixture-1"))
-    for _ in range(100):
-        if state.global_waiting == 1:
-            break
-        await asyncio.sleep(0)
-    assert state.global_active == 1 and len(state.nai.calls) == 1
-    assert second.done() and (await second).status_code == 402
+    if shared_budget:
+        for _ in range(100):
+            if len(state.nai.calls) == 2:
+                break
+            await asyncio.sleep(0)
+        assert len(state.nai.calls) == 2
+    else:
+        assert (await second).status_code == 429
+        assert len(state.nai.calls) == 1
     state.nai.release.set()
     responses = await asyncio.gather(first, second)
-    assert [item.status_code for item in responses] == [200, 402]
-    assert len(state.nai.calls) == 1 and len(state.db.charges) == 1
+    assert [item.status_code for item in responses] == [200, 200 if shared_budget else 429]
+    assert len(state.nai.calls) == len(state.db.charges) == (2 if shared_budget else 1)
     assert state.global_active == 0 and not state.image_budget_lock.locked()
 
 
@@ -529,7 +563,8 @@ async def test_cancellation_during_success_ledger_keeps_locks_until_accounted(st
     else:
         scope.cancel()
     await asyncio.sleep(0)
-    assert len(state.image_reservations) == 1 and state.global_active == 1
+    assert sum(status == "reserved" for _, status in state.db.vibe_reservations.values()) == 1
+    assert state.global_active == 1
     assert not state.db.charges
     state.db.accounting_release.set()
     if cancel_kind == "asyncio":
@@ -580,7 +615,7 @@ async def test_cancel_after_dispatch_finishes_response_and_user_charge(state, ki
         with scope:
             if kind == "encode":
                 return await main.encode_vibe(request(encoding_body()))
-            return await main.generate_image(request(image_body(precise=1)))
+            return await main.generate_image(request(image_body()))
 
     task = asyncio.create_task(run())
     await state.nai.entered.wait()
@@ -589,7 +624,11 @@ async def test_cancel_after_dispatch_finishes_response_and_user_charge(state, ki
     else:
         scope.cancel()
     await asyncio.sleep(0)
-    assert len(state.image_reservations) == 1 and state.global_active == 1
+    if kind == "encode":
+        assert sum(status == "reserved" for _, status in state.db.vibe_reservations.values()) == 1
+    else:
+        assert len(state.image_reservations) == 1
+    assert state.global_active == 1
     assert not task.done() and not state.db.charges
     state.nai.release.set()
     if cancel_kind == "asyncio":
@@ -597,7 +636,7 @@ async def test_cancel_after_dispatch_finishes_response_and_user_charge(state, ki
             await task
     else:
         await task
-    assert state.db.charges[0][1]["anlas"] == (2 if kind == "encode" else 5)
+    assert state.db.charges[0][1]["anlas"] == (2 if kind == "encode" else 0)
     assert state.global_active == 0 and not state.image_budget_lock.locked()
 
 

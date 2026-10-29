@@ -350,8 +350,10 @@ async def test_disconnected_legacy_nonstream_waiter_never_claims_or_dispatches(s
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_probe", [1, 2])
-async def test_legacy_cancel_during_disconnect_probe_never_claims_or_dispatches(state, cancel_probe):
-    raw = json.dumps(image_body(precise=1)).encode()
+@pytest.mark.parametrize("paid", [False, True])
+async def test_legacy_cancel_during_disconnect_probe_never_claims_or_dispatches(state, cancel_probe, paid):
+    state.db.keys["fixture-1"]["is_admin"] = paid
+    raw = json.dumps(image_body(precise=int(paid))).encode()
     body_read, probes = False, 0
 
     async def receive():
@@ -421,6 +423,7 @@ async def test_claimed_upload_timeout_releases_admission(state, monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["/ai/generate-image", "/ai/generate-image-stream"])
 async def test_queue_ticket_does_not_bypass_existing_cost_limit(state, path):
+    state.db.keys["fixture-1"]["is_admin"] = True
     ticket = new(state.image_queue)
     body = {**image_body(precise=1), "cost_limit": {"anlas": 0, "v5": 0}}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://test") as client:
@@ -439,6 +442,8 @@ async def test_queue_ticket_does_not_bypass_existing_cost_limit(state, path):
     ("encode-vibe", "/ai/encode-vibe", {**tool_body(), "model": "nai-diffusion-4-5-full", "informationExtracted": 1}),
 ])
 async def test_ticket_execution_finishes_once_without_own_deadlock(state, operation, path, body):
+    if operation == "upscale":
+        state.db.keys["fixture-1"]["is_admin"] = True
     state.image_queue = ImageQueue(lambda: 1, lambda: 1, lambda _: False)
     ticket = new(state.image_queue, operation=operation)
     state.nai.content = zipped() if operation in {"upscale", "augment-image"} else state.nai.content

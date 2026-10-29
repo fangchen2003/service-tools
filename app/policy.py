@@ -433,7 +433,8 @@ def clamp_image_params(payload: dict, *, max_pixels: int, max_steps: int,
     """把请求改写进「V5 额度条件 / 老模型免费档」的形状。
 
     返回 (新payload, 变更说明列表, 错误)。
-    错误非 None 表示该请求被拒绝（例如 img2img 未开放）。
+    错误非 None 表示该请求无法安全转换为免费功能。
+    allow_img2img 保留调用兼容，但不会给付费生成放行。
     对 V5：钳制后可走周额度（不烧 Anlas）；对老模型：钳制后直接免费。
     """
     out = copy.deepcopy(payload)
@@ -460,16 +461,32 @@ def clamp_image_pricing(model: str, values: dict, *, max_pixels: int, max_steps:
 
     # img2img / inpaint 审查
     is_img2img = p.get("mode", "generate") != "generate"
-    if is_img2img and not allow_img2img:
-        return p, notes, "本站未开放 img2img / 局部重绘"
+    if is_img2img:
+        return p, notes, "普通用户仅支持免费文生图；img2img / 局部重绘会消耗 Anlas，不能安全转换"
+    if p.get("precise_count", 0) or p.get("has_character_references"):
+        return p, notes, "普通用户仅支持免费参考；精确参考会消耗 Anlas，不能安全转换"
+    if model.strip().lower() in VIBE_ENCODED_MODELS and p.get("vibe_count", 0) > 4:
+        return p, notes, "普通用户一次最多使用 4 个已编码 Vibe；更多参考会消耗 Anlas，请减少参考后重试"
+
+    # Canonical defaults must match the forwarded body, not just its estimator.
+    for name, default in (("width", 832), ("height", 1216), ("steps", 28), ("n_samples", 1)):
+        value = p.get(name, default)
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            raise ValueError(f"{name} 必须是正整数")
+        number = int(value)
+        if number < 1 or float(value) != number:
+            raise ValueError(f"{name} 必须是正整数")
+        p[name] = number
 
     if max_pixels < 64 * 64:
         return p, notes, "MAX_PIXELS 不能小于 4096（最小尺寸 64x64）"
 
     # 批量张数 -> 1
-    if int(p.get("n_samples", 1) or 1) != 1:
+    if p["n_samples"] != 1:
         p["n_samples"] = 1
         notes.append("n_samples 已限制为 1，避免额外图片产生 Anlas")
+
+    max_steps = min(28, max_steps)
 
     # steps -> 上限
     if int(p.get("steps", 0) or 0) > max_steps:

@@ -11,21 +11,19 @@ let budgetSnapshot = null, runtimeSnapshot = null, announcementSnapshot = null, 
 let keySaveBusy = false, confirmationResolve = null;
 let viewVersion = 0, overviewRequestVersion = 0;
 const configurationFields = [
-  {name:'allow_img2img',group:'generation',label:'图生图 / 局部重绘',type:'bool',note:'单个 Key 还需开启图生图和 Anlas 权限'},
-  {name:'safe_clamp',group:'generation',label:'免费图片参数自动调整',type:'bool'},
+  {name:'allow_img2img',group:'generation',label:'免费图片处理工具',type:'bool',note:'单个 Key 也需开启；不开放普通 Key 的付费 img2img 或局部重绘'},
+  {name:'safe_clamp',group:'generation',label:'免费图片参数自动调整（兼容设置）',type:'bool',note:'普通 Key 始终强制调整为免费规格，不受此旧开关影响'},
   {name:'max_pixels',group:'generation',label:'免费图片最大像素',min:4096,max:16777216,unit:'像素'},
-  {name:'max_steps',group:'generation',label:'免费图片步数上限',min:1,max:28,unit:'步',note:'V5 High：此值与 23 取小；旧模型：此值与 28 取小。Medium 固定 14 步；付费和管理员 Key 不受此上限约束。'},
+  {name:'max_steps',group:'generation',label:'普通 Key 免费图片步数上限',min:1,max:28,unit:'步',note:'V5 High 和旧模型均取此值与 28 的较小值；Medium 固定 14 步。旧 Anlas 权限不能绕过上限；管理员 Key 不受此上限约束。'},
   {name:'default_image_model_scope',group:'defaults',label:'图片模型范围',type:'scope'},
   {name:'default_daily_images',group:'defaults',label:'每日免费图片',min:0,max:1000000,unit:'张'},
   {name:'default_daily_v5',group:'defaults',label:'每日 V5 额度',min:0,max:100000,unit:'单位'},
-  {name:'default_daily_anlas',group:'defaults',label:'每日 Anlas',min:0,max:100000,step:'any',unit:'Anlas'},
-  {name:'default_monthly_anlas',group:'defaults',label:'每月 Anlas',min:0,max:100000,step:'any',unit:'Anlas'},
+
   {name:'default_daily_text_tokens',group:'defaults',label:'每日文本 Token',min:0,max:100000000,unit:'Token'},
   {name:'default_rpm',group:'defaults',label:'每分钟请求数',min:1,max:600,unit:'次'},
   {name:'default_expires_days',group:'defaults',label:'有效天数',min:0,max:3650,unit:'天',note:'0 = 长期有效'},
   {name:'default_exclude_global_v5',group:'defaults',label:'独立 V5 额度',type:'bool',note:'不占用全站每日 V5 额度'},
-  {name:'default_allow_anlas',group:'defaults',label:'允许消耗 Anlas',type:'bool'},
-  {name:'default_allow_img2img',group:'defaults',label:'允许图生图 / 局部重绘',type:'bool',note:'需同时允许消耗 Anlas'},
+  {name:'default_allow_img2img',group:'defaults',label:'允许免费图片处理工具',type:'bool',note:'不开放普通 Key 的付费图片功能；Vibe 编码使用每日领取额度'},
   {name:'key_inactivity_delete_days',group:'cleanup',label:'闲置 Key 自动清理',min:0,max:3650,unit:'天'},
   {name:'global_concurrency',group:'advanced',label:'全站非图片请求并发',min:1,max:32,unit:'个'},
   {name:'key_concurrency',group:'advanced',label:'每个 Key 请求并发',min:1,max:32,unit:'个'},
@@ -33,7 +31,7 @@ const configurationFields = [
   {name:'max_input_chars',group:'advanced',label:'文本输入长度上限',min:1,max:1000000,unit:'字符'},
 ];
 const budgetFields = [
-  {name:'global_monthly_anlas',label:'全站月度预算',unit:'Anlas'},
+
   {name:'global_daily_v5',label:'全站每日 V5 额度',unit:'单位'},
   {name:'v5_auto_medium',label:'V5 Full 自动节省',type:'bool'},
   {name:'v5_medium_threshold',label:'Medium 切换阈值',unit:'%'},
@@ -307,7 +305,7 @@ async function loadOverview(version=viewVersion){
     $('#pool').innerHTML=!d.pool_configured?'<p class="empty-state">尚未配置上游账号</p>':`<table class="gate-pool-table gate-mobile-table"><thead><tr><th>上游账号</th><th>状态</th><th>免费 V5 每日上限</th><th>图片并发</th><th class="gate-align-right">操作</th></tr></thead><tbody>${d.pool.map(p=>`<tr><td><div class="gate-name-cell"><span class="gate-account-icon"><i data-icon="key"></i></span><div><strong>账号 ${String(p.position).padStart(2,'0')}</strong><small>${esc(p.token)}</small></div></div></td><td><span class="tag ${p.usable?'on':'off'}"><b></b>${!p.admin_enabled?'已停用':p.disabled?'已失效':p.blocked_for>0?'限流中':'可用'}</span></td><td data-label="每日 V5 上限"><label class="gate-inline-number"><input id="token-limit-${p.token_id}" type="number" min="0" max="100000" step="1" value="${p.v5_daily_limit}" aria-label="账号 ${p.position} 的 V5 日限额"><span>单位</span></label><small class="gate-mobile-field-note">0 = 不限</small></td><td data-label="图片并发"><select class="gate-compact-select" id="token-concurrency-${p.token_id}" aria-label="账号 ${p.position} 的图片并发">${[1,2,3,4].map(n=>`<option ${n===p.image_concurrency?'selected':''}>${n}</option>`).join('')}</select></td><td><div class="row-actions"><button class="btn gate-row-button" onclick="saveOverviewAccount('${p.token_id}',this)">保存</button><span class="gate-account-toggle"><button class="gate-switch ${p.admin_enabled?'is-on':''}" role="switch" aria-label="启用账号 ${p.position}" aria-checked="${p.admin_enabled}" onclick="setUpstreamEnabled('${p.token_id}',${!p.admin_enabled})"><span></span></button><span class="gate-mobile-label" aria-hidden="true">启用</span></span></div></td></tr>`).join('')}</tbody></table>`;
     $('#billingStatus').hidden=!(t.unconfirmed_requests>0);
     $('#billingStatus').textContent=`今日有 ${t.unconfirmed_requests||0} 笔费用待确认，预估 ${t.unconfirmed_anlas||0} Anlas。`;
-    $('#usageDetails').innerHTML=`<dl><div><dt>本月 Anlas</dt><dd>${d.month.anlas} / ${d.anlas_budget>0?d.anlas_budget:'不限'}</dd></div><div><dt>今日文本 Token</dt><dd>${fmt(t.text_tokens)}</dd></div><div><dt>今日请求数</dt><dd>${t.requests}</dd></div><div><dt>本月待确认费用</dt><dd>${d.month.unconfirmed_anlas||0} Anlas · ${d.month.unconfirmed_requests||0} 笔</dd></div></dl>`;
+    $('#usageDetails').innerHTML=`<dl><div><dt>本月 Anlas（审计估算）</dt><dd>${d.month.anlas}</dd></div><div><dt>今日文本 Token</dt><dd>${fmt(t.text_tokens)}</dd></div><div><dt>今日请求数</dt><dd>${t.requests}</dd></div><div><dt>本月待确认费用</dt><dd>${d.month.unconfirmed_anlas||0} Anlas · ${d.month.unconfirmed_requests||0} 笔</dd></div></dl>`;
     paintIcons($('#tab-ov'));
   }catch(e){
     if(version===viewVersion && requestVersion===overviewRequestVersion) toast(e.message);
@@ -353,9 +351,9 @@ function renderKeys(){
   const rows=keysCache.filter(k=>k.name.toLowerCase().includes(query)&&(status==='all'||k.enabled===(status==='on')));
   $('#keysTable tbody').innerHTML=rows.map(k=>`<tr>
     <td><div class="gate-name-cell"><div><strong title="${esc(k.name)}">${esc(k.name)}</strong><small><button class="gate-copy" onclick="copyKey(${k.id})" aria-label="复制 ${esc(k.name)} 的 Key">${esc(mask(k.token))}</button></small></div></div></td>
-    <td><span class="tag ${k.enabled?'on':'off'}"><b></b>${k.enabled?'已启用':'已停用'}</span></td>
+    <td><span class="tag ${k.enabled?'on':'off'}"><b></b>${k.enabled?'已启用':'已停用'}</span><small>${k.is_admin?'管理员':'仅免费'}</small></td>
     <td data-label="今日生成">${k.used.images} 张</td><td data-label="今日用量"><div class="gate-key-metric"><span>${k.used.anlas} Anlas</span><small>${k.image_model_scope==='all'?(k.used.v5||0)+' V5':''}</small></div></td>
-    <td data-label="每日配额"><div class="gate-key-metric"><span>${k.is_admin?'不限额':k.image_model_scope==='all'&&!k.daily_images&&!k.daily_v5?'图片、V5 不限':k.daily_images?k.daily_images+' 张':'图片不限'}</span><small>${!k.is_admin&&k.image_model_scope==='all'&&(k.daily_images||k.daily_v5)?(k.daily_v5?k.daily_v5+' V5':'V5 不限'):''}</small></div></td>
+    <td data-label="每日配额"><div class="gate-key-metric"><span>${k.is_admin?'不限额':k.image_model_scope==='all'&&!k.daily_images&&!k.daily_v5?'图片、V5 不限':k.daily_images?k.daily_images+' 张':'图片不限'}</span><small>${!k.is_admin&&k.image_model_scope==='all'&&(k.daily_images||k.daily_v5)?(k.daily_v5?k.daily_v5+' V5':'V5 不限'):''}</small>${!k.is_admin?'<small>Vibe 编码 3 次/日 · /vibe 领取</small>':''}</div></td>
     <td data-label="最近使用">${relativeTime(k.last_used_at)}</td>
     <td><div class="row-actions"><button class="btn gate-row-button" onclick="openEdit(${k.id})">编辑</button><button class="btn gate-row-button is-positive" title="重置今日 V5 / Anlas" aria-label="重置 ${esc(k.name)} 今日 V5 / Anlas" onclick="resetDailyImageQuota(${k.id},this)">重置</button><button class="btn gate-row-button ${k.enabled?'is-danger':'is-muted'}" onclick="toggleKey(${k.id},${k.enabled?0:1})">${k.enabled?'停用':'启用'}</button></div></td>
   </tr>`).join('')||'<tr><td colspan="7" class="empty-state">没有符合条件的 Key</td></tr>';
@@ -378,12 +376,12 @@ async function openCreate(){
     $('#modalTitle').textContent = '新建 Key';
     $('#modalSave').textContent = '创建 Key';
     $('#f_name').value='';
-    const fields={daily_anlas:'default_daily_anlas',image_model_scope:'default_image_model_scope',
-      daily_images:'default_daily_images',daily_v5:'default_daily_v5',monthly_anlas:'default_monthly_anlas',
+    const fields={image_model_scope:'default_image_model_scope',
+      daily_images:'default_daily_images',daily_v5:'default_daily_v5',
       daily_text:'default_daily_text_tokens',rpm:'default_rpm',expires:'default_expires_days'};
     for(const [field,name] of Object.entries(fields)) $('#f_'+field).value=defaults[name];
     $('#f_expires').placeholder=''; $('#f_expires').required=true;
-    $('#f_allow_anlas').checked=defaults.default_allow_anlas;
+
     $('#f_allow_img2img').checked=defaults.default_allow_img2img;
     $('#f_exclude_global_v5').checked=defaults.default_exclude_global_v5;
     $('#modalErr').textContent=''; $('#modal').showModal();
@@ -401,15 +399,15 @@ function openEdit(id){
   $('#modalSave').textContent = '保存修改';
   $('#f_name').value = k.name;
   $('#f_image_model_scope').value = k.image_model_scope || 'legacy';
-  $('#f_daily_anlas').value = k.daily_anlas;
+
   $('#f_daily_images').value = k.daily_images;
   $('#f_daily_v5').value = k.daily_v5;
-  $('#f_monthly_anlas').value = k.monthly_anlas;
+
   $('#f_daily_text').value = k.daily_text_tokens;
   $('#f_rpm').value = k.rpm;
   $('#f_expires').value = '';
   $('#f_expires').placeholder = '留空不修改'; $('#f_expires').required=false;
-  $('#f_allow_anlas').checked = k.allow_anlas;
+
   $('#f_allow_img2img').checked = k.allow_img2img;
   $('#f_exclude_global_v5').checked = k.exclude_global_v5;
   $('#modalErr').textContent=''; $('#modal').showModal();
@@ -421,13 +419,13 @@ async function saveModal(){
   const body = {
     name: $('#f_name').value,
     image_model_scope: $('#f_image_model_scope').value,
-    daily_anlas: +$('#f_daily_anlas').value,
+
     daily_images: +$('#f_daily_images').value,
     daily_v5: +$('#f_daily_v5').value,
-    monthly_anlas: +$('#f_monthly_anlas').value,
+
     daily_text_tokens: +$('#f_daily_text').value,
     rpm: +$('#f_rpm').value,
-    allow_anlas: $('#f_allow_anlas').checked,
+
     allow_img2img: $('#f_allow_img2img').checked,
     exclude_global_v5: $('#f_exclude_global_v5').checked,
   };
@@ -678,7 +676,7 @@ async function loadSettings(){
     announcementSnapshot=typeof a.html==='string'?a.html:null;
     budgetSnapshot=s;
     $('#announce').value = a.html || '';
-    $('#s_budget').value = s.global_monthly_anlas;
+
     $('#s_v5').value = s.global_daily_v5;
     $('#s_v5_alert').value = s.v5_alert_threshold;
     $('#s_auto_medium').checked = s.v5_auto_medium;
@@ -696,7 +694,7 @@ async function saveBudget(){
   }
   try{
   const d = await api('/admin/api/settings', {method:'PUT', body: JSON.stringify({
-    global_monthly_anlas: +$('#s_budget').value,
+
     global_daily_v5: +$('#s_v5').value,
     v5_alert_threshold: +$('#s_v5_alert').value,
     v5_auto_medium: $('#s_auto_medium').checked,

@@ -4,3 +4,11 @@ data/
 .env
 .venv/
 *.db
+
+# Private deployment recovery material; never publish runtime credentials/data.
+.deploy-backups/
+Dockerfile.nai-gate-migration
+Dockerfile.discord-login
+Dockerfile.hero
+Dockerfile.homepage
+Dockerfile.workbench-link

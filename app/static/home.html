@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#f7f6f0">
+<meta name="description" content="NAI Gate。进入 NovelAI 风格绘图工作台，查看今日 V5 共享额度，让灵感落在画布上。">
+<title>NAI Gate — 让灵感成画</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='12' fill='%231e6051'/%3E%3Cpath d='M20 7Q20 20 33 20Q20 20 20 33Q20 20 7 20Q20 20 20 7' fill='%23f7f6f0'/%3E%3C/svg%3E">
+<style>
+:root{--paper:#f7f6f0;--white:#fffefa;--ink:#253d34;--green:#205f50;--green-dark:#16483c;--muted:#65766b;--line:#dce2d6;--soft:#edf0e6;--coral:#b56b50;--serif:"Noto Serif SC","Source Han Serif SC","Songti SC","STSong",serif;--sans:"Noto Sans CJK SC","PingFang SC","Microsoft YaHei",sans-serif}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.7;-webkit-font-smoothing:antialiased}a{color:inherit;text-decoration:none}button{font:inherit;cursor:pointer}button,a{-webkit-tap-highlight-color:transparent}a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var(--coral);outline-offset:5px}button:disabled{cursor:wait;opacity:.6}::selection{background:#cee2d0;color:var(--green-dark)}.wrap{width:min(1240px,calc(100% - 96px));margin:auto}.skip{position:fixed;top:8px;left:8px;padding:12px;background:white;z-index:99;transform:translateY(-160%)}.skip:focus{transform:none}.nav{height:100px;display:flex;align-items:center;justify-content:space-between;gap:24px;border-bottom:1px solid var(--line)}.brand{display:flex;align-items:center;gap:11px;flex-shrink:0}.brand-mark{width:34px;height:34px;color:var(--green)}.brand-name{font-size:27px;font-family:Georgia,serif;letter-spacing:-1px;line-height:1}.brand-cn{font-size:11px;letter-spacing:.23em;border-left:1px solid #c4cec0;margin-left:4px;padding-left:13px}.nav-links{display:flex;gap:30px;align-items:center;font-size:13px}.nav-links>a:not(.nav-enter){color:var(--muted)}.nav-links>a:hover{color:var(--green)}.nav-enter{display:inline-flex;align-items:center;gap:20px;border:1px solid #b5c6b8;border-radius:6px;padding:10px 17px;min-height:44px}.arrow{font-family:Arial,sans-serif;font-size:20px;line-height:1;display:inline-block;transition:transform .2s}.nav-enter:hover .arrow,.primary:hover .arrow{transform:translateX(4px)}
+.hero{display:grid;grid-template-columns:.9fr 1.1fr;gap:48px;align-items:center;padding:48px 0 42px}.eyebrow{font-size:10px;font-weight:600;letter-spacing:.22em;text-transform:uppercase;display:flex;gap:12px;align-items:center;color:var(--green)}.eyebrow:before{content:"";width:24px;height:1px;background:var(--green)}h1{font-family:var(--serif);font-size:clamp(36px,4.1vw,58px);font-weight:500;line-height:1.45;letter-spacing:.005em;margin:23px 0 21px}h1 em{font-style:normal;color:var(--green);position:relative;white-space:nowrap}h1 em:after{content:"";position:absolute;bottom:-7px;left:0;width:100%;height:7px;border-top:2px solid #aabd9d;border-radius:50%;transform:rotate(-2deg)}.intro{color:var(--muted);font-size:14px;line-height:1.9;margin:0;max-width:340px}.hero-actions{margin-top:30px;display:flex;gap:20px;align-items:center;flex-wrap:wrap}.primary{display:inline-flex;gap:34px;align-items:center;justify-content:space-between;padding:15px 23px;min-height:54px;background:var(--green);color:white;border-radius:6px;transition:background .2s,transform .2s;box-shadow:0 5px 0 #dce3d4;font-size:14px}.primary:hover{background:var(--green-dark);transform:translateY(-2px)}.sub-link{font-size:12px;color:var(--muted);padding:12px 0;border-bottom:1px solid #c5cfbf}.compat{display:flex;align-items:center;gap:8px;margin-top:25px;font-size:10px;letter-spacing:.04em;color:var(--muted)}.compat span{border:1px solid #ccd6c5;border-radius:3px;padding:1px 6px;font-size:10px;color:var(--green)}.art{margin:0;position:relative;padding:0 0 16px 16px}.art:before{content:"";position:absolute;inset:18px 16px 0 0;background:#dfe5d5;border-radius:84px 10px 10px 10px;z-index:-1}.art-image{display:block;width:100%;height:auto;aspect-ratio:3/2;object-fit:cover;object-position:center;border-radius:84px 10px 10px 10px}.art figcaption{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:12px;font-size:10px;letter-spacing:.08em;color:var(--muted);padding-left:8px}.art-caption-title{display:flex;gap:8px;align-items:center}.art-caption-title:before{content:"";height:6px;width:6px;border-radius:50%;background:#8f9e75}.art-credit{font-size:9px;letter-spacing:.04em}
+.status-section{padding:24px 0 19px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.section-top{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-bottom:18px}.section-top h2{font-size:14px;font-weight:600;margin:0;letter-spacing:.02em}.live-controls{display:flex;align-items:center;gap:13px;font-size:10px;color:var(--muted)}.live{display:inline-flex;gap:6px;align-items:center}.dot{width:5px;height:5px;border-radius:50%;background:#839182}.live[data-state="ok"] .dot{background:#3e8c6a}.live[data-state="error"] .dot{background:#b58149}.refresh{border:0;background:transparent;color:var(--muted);padding:9px 0 9px 9px;min-height:36px;font-size:11px}.refresh:hover{color:var(--green)}.stats-grid{display:grid;grid-template-columns:1fr 1.45fr .85fr .9fr;gap:27px}.stat+.stat{border-left:1px solid var(--line);padding-left:27px}.stat-label{font-size:11px;color:var(--muted);margin:0 0 4px}.stat-value{font-family:Georgia,"Times New Roman",serif;font-variant-numeric:tabular-nums;font-size:31px;line-height:1.35;color:var(--green);letter-spacing:-.02em;white-space:nowrap}.stat-value small{font-family:var(--sans);font-size:11px;color:var(--muted);margin-left:5px;letter-spacing:0}.stat-value .denom{font-size:20px;color:#88937e}.stat-description{font-size:10px;margin-top:6px;color:var(--muted)}.progress{height:3px;background:#e0e5d9;margin:10px 0 0;width:100%;overflow:hidden;border-radius:3px}.progress-fill{background:#6a8d63;width:0;height:100%;transition:width .4s}.stats-footnote{font-size:10px;color:var(--muted);margin:15px 0 0;display:flex;justify-content:space-between;gap:15px}.stats-error{font-size:11px;color:#965c37;margin:12px 0 0}.stats-error[hidden]{display:none}
+.guide{display:grid;grid-template-columns:.85fr 1.65fr;gap:70px;padding:50px 0 44px}.section-index{font-size:10px;color:var(--coral);letter-spacing:.18em;text-transform:uppercase;margin-bottom:14px}.guide h2{font-family:var(--serif);font-size:29px;font-weight:500;margin:0 0 12px;line-height:1.5}.guide-intro{font-size:12px;line-height:1.9;color:var(--muted);max-width:260px;margin:0 0 22px}.endpoint{display:flex;flex-direction:column;gap:6px}.endpoint-label{font-size:10px;color:var(--muted)}.copy{display:inline-flex;align-items:center;justify-content:space-between;gap:18px;width:fit-content;max-width:100%;padding:10px 12px;background:#ecefe5;border:1px solid #dce2d4;border-radius:5px;color:var(--green);min-height:44px}.copy code{font-size:11px;font-family:"SFMono-Regular",Consolas,monospace}.copy span{font-size:10px}.rules{margin:0;list-style:none;padding:0}.rule{display:grid;grid-template-columns:27px 1fr;gap:14px;padding:15px 0;border-bottom:1px solid var(--line)}.rule:first-child{padding-top:0}.rule:last-child{border-bottom:0}.rule-number{font-size:11px;color:#8b997f;font-family:Georgia,serif;padding-top:3px}.rule h3{font-size:13px;margin:0 0 5px;font-weight:500}.rule p{font-size:12px;line-height:1.9;margin:0;color:var(--muted)}code.command{font-size:11px;color:var(--green);background:#e8ede1;padding:1px 4px;border-radius:3px}.rule strong{color:var(--green);font-weight:500}.faq{border-top:1px solid var(--line);margin-top:19px;padding-top:4px}.faq summary{cursor:pointer;min-height:44px;display:flex;align-items:center;justify-content:space-between;color:var(--green);font-size:11px;list-style:none}.faq summary::-webkit-details-marker{display:none}.faq summary:after{content:"+";font-size:17px}.faq[open] summary:after{content:"−"}.faq p{color:var(--muted);font-size:11px;line-height:1.9;margin:0 0 12px}.foot{display:flex;align-items:flex-start;justify-content:space-between;gap:30px;border-top:1px solid var(--line);padding:22px 0 28px;font-size:10px;color:var(--muted)}.foot-brand{font-family:Georgia,serif;font-size:16px;color:var(--green);margin-right:14px}.foot p{margin:3px 0 0}.foot-right{display:flex;gap:20px;padding-top:5px;flex-shrink:0}.foot a:hover{color:var(--green)}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:10px 18px;background:var(--green-dark);border-radius:6px;color:white;font-size:12px;z-index:10;box-shadow:0 4px 20px #1c32242b}.toast[hidden]{display:none}
+@media(min-width:1500px){.hero{padding-top:60px;padding-bottom:50px}.art-image{height:auto}}
+@media(max-width:1020px){.wrap{width:calc(100% - 56px)}.hero{gap:28px;grid-template-columns:1fr 1fr}.art-image{height:auto}.nav-links{gap:20px}h1{font-size:38px}.hero-actions{gap:14px}.primary{padding:14px 18px;gap:24px}.stats-grid{gap:18px}.stat+.stat{padding-left:18px}.guide{gap:35px;grid-template-columns:.9fr 1.4fr}.stat-value{font-size:28px}}
+@media(max-width:760px){.wrap{width:calc(100% - 40px)}.nav{height:78px}.brand-name{font-size:25px}.brand-cn{display:none}.nav-links{gap:16px}.nav-links .nav-status{display:none}.nav-links>a:not(.nav-enter){font-size:11px}.nav-enter{padding:9px 12px;gap:13px;font-size:11px}.hero{grid-template-columns:1fr;padding-top:30px;gap:29px;padding-bottom:29px}.eyebrow{font-size:9px}h1{font-size:40px;line-height:1.4;margin:19px 0 18px}h1 br{display:none}.intro{max-width:100%;font-size:12px}.hero-actions{margin-top:24px;gap:22px}.compat{margin-top:20px}.art{padding-left:10px;padding-bottom:11px}.art:before{inset:12px 10px 0 0;border-radius:55px 8px 8px 8px}.art-image{height:auto;aspect-ratio:3/2;object-position:center;border-radius:55px 8px 8px 8px}.art figcaption{font-size:9px;margin-top:9px}.art-credit{font-size:8px}.status-section{padding-top:19px}.section-top{margin-bottom:14px}.section-top h2{font-size:13px}.live-controls{gap:6px;font-size:9px}.stats-grid{grid-template-columns:1fr 1fr;gap:20px 18px}.stat+.stat{padding-left:18px}.stat:nth-child(3){padding-left:0;border-left:0}.stat-value{font-size:29px}.stat-label{font-size:10px}.stats-footnote{display:block;font-size:9px;line-height:1.9}.stats-footnote span{display:block}.guide{grid-template-columns:1fr;gap:26px;padding:34px 0 25px}.section-index{margin-bottom:8px}.guide h2{font-size:27px}.guide-intro{max-width:none;margin-bottom:15px}.endpoint{flex-direction:row;align-items:center;gap:14px;flex-wrap:wrap}.rule{gap:10px;padding:15px 0}.rule h3{font-size:13px}.rule p{font-size:12px}.faq{margin-top:12px}.foot{flex-direction:column;gap:12px;padding-top:20px}.foot-right{gap:25px;padding-top:0}.foot-right a{display:inline-flex;align-items:center;padding:7px 0;min-height:44px}.refresh{min-height:44px}}
+@media(max-width:370px){.wrap{width:calc(100% - 32px)}h1{font-size:35px}.nav-links{gap:11px}.nav-links>a:not(.nav-enter){font-size:10px}.hero-actions{gap:15px}.primary{font-size:13px;padding:13px 15px}.art-credit{max-width:100px;text-align:right}.stat-value{font-size:26px}.stat-value .denom{font-size:17px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">跳至正文</a>
+<div class="wrap">
+<header class="nav">
+<a class="brand" href="/" aria-label="NAI Gate首页"><svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M20 3C20 14 26 20 37 20C26 20 20 26 20 37C20 26 14 20 3 20C14 20 20 14 20 3Z" fill="currentColor"/><circle cx="32" cy="7" r="2" fill="#adbd9d"/></svg><span class="brand-name">nai-gate<span style="color:#a3b195">.</span></span><span class="brand-cn">绘图网关</span></a>
+<nav class="nav-links" aria-label="主导航"><a class="nav-status" href="#today">今日额度</a><a href="#guide">用户须知</a></nav>
+</header>
+<main id="main">
+<section class="hero" aria-labelledby="hero-title">
+<div class="hero-copy"><div class="eyebrow">A little space for your imagination</div><h1 id="hero-title">让脑海里的世界，<br>在此刻<em>成画。</em></h1><p class="intro">一个留给灵感的小小入口。<br>用熟悉的 NovelAI 风格工作台，描绘角色、故事，和你想象中的每一种可能。</p><div class="hero-actions"><a class="primary" href="/workbench/">打开绘图工作台 <span class="arrow" aria-hidden="true">↗</span></a><a class="sub-link" href="#guide">初次来访？从这里开始 ↓</a></div><div class="compat"><span>V5</span><span>V4.5 及以下</span> 使用本站 Key · 无需填写官方账号</div></div>
+<figure class="art"><img class="art-image" src="/assets/gate-atelier-v1.webp?v=756417852335&amp;rev=2" width="1536" height="1024" alt="午后海边画室里，画师用画笔在木画板上的画纸绘制海景，窗外是明亮的海湾。" fetchpriority="high"><figcaption><span class="art-caption-title">灵感，从这一笔开始。</span><span class="art-credit">NOVELAI + GPT IMAGE</span></figcaption></figure>
+</section>
+<section class="status-section" id="today" aria-labelledby="today-title">
+<div class="section-top"><h2 id="today-title">今日 V5 · 创作进行中</h2><div class="live-controls"><span class="live" id="live-state" data-state="loading"><span class="dot"></span><span id="live-label">正在读取</span></span><button class="refresh" id="refresh" type="button" aria-label="刷新今日 V5 数据">刷新 ↻</button></div></div>
+<div class="stats-grid" aria-live="polite" aria-atomic="true">
+<div class="stat"><p class="stat-label">今日实际出图</p><div class="stat-value"><span id="images">—</span><small>张</small></div><div class="stat-description">全站 V5，含独立额度</div></div>
+<div class="stat"><p class="stat-label">共享额度 · 已用 / 每日上限</p><div class="stat-value"><span id="used">—</span><span class="denom"> / <span id="limit">—</span></span><small>单位</small></div><div class="progress" role="progressbar" aria-label="今日共享 V5 额度使用情况" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progress"><div class="progress-fill" id="progress-fill"></div></div></div>
+<div class="stat"><p class="stat-label">共享额度剩余</p><div class="stat-value"><span id="remaining">—</span><small>单位</small></div><div class="stat-description" id="capacity-note">以共享配额为准</div></div>
+<div class="stat"><p class="stat-label">距离每日重置</p><div class="stat-value"><span id="countdown">—</span></div><div class="stat-description" id="reset-note">北京时间 00:00</div></div>
+</div>
+<p class="stats-footnote"><span>High 每张 1 单位，Medium 每张 <span id="medium-cost" style="display:inline">—</span> 单位；图片张数与额度消耗不同。独立额度不计入共享消耗。</span><span id="updated">每 30 秒自动更新</span></p>
+<p class="stats-error" id="stats-error" role="status" hidden>数据暂时无法更新，请稍后刷新。不要将未加载的数据视为可用额度。</p>
+<noscript><p class="stats-error">请启用 JavaScript 查看实时数量与额度。工作台入口和用户须知仍可正常使用。</p></noscript>
+</section>
+<section class="guide" id="guide" aria-labelledby="guide-title">
+<div><div class="section-index">Before your first creation</div><h2 id="guide-title">把灵感交给画布，<br>先记住这几件事。</h2><p class="guide-intro">用户须知 · 共享资源，轻量使用。<br>无需复杂配置，带上你的 Key 就能开始。</p><div class="endpoint"><span class="endpoint-label">第三方客户端 API 地址</span><button class="copy" type="button" id="copy-api" aria-label="复制 API 地址 https://gate.example.com"><code>https://gate.example.com</code><span id="copy-label">复制 ↗</span></button></div><details class="faq"><summary>如何领取或找回 Key？</summary><p>在本站 Discord 服务器使用 <code class="command">/register</code> 申请（以当时开放状态及资格要求为准），Key 仅通过私信发送。已有 Key 或因连续 3 天未使用而被回收，可使用 <code class="command">/find</code> 找回。请允许机器人私信，不要在公开频道粘贴 Key。</p></details></div>
+<div><ol class="rules">
+<li class="rule"><span class="rule-number" aria-hidden="true">01</span><div><h3>用本站 Key 登录，不是你的 NovelAI 账号</h3><p>进入仿 NovelAI 工作台，填写私信中收到的 <code class="command">nai-…</code> Key。首次进入请按工作台提示设置连接；第三方客户端的 API 地址使用本站域名。<strong>请勿分享 Key</strong>，多人共用会共用额度。</p></div></li>
+<li class="rule"><span class="rule-number" aria-hidden="true">02</span><div><h3>个人有上限，全站也有共享额度</h3><p>普通 Key 默认每日 V5 <strong><span id="personal-v5">—</span> 单位</strong>、V4.5 及以下 <strong><span id="personal-legacy">—</span> 张</strong>，具体以你的 Key 为准。北京时间零点重置；<code class="command">/charge</code> 每天可恢复一次个人生图额度，不增加全站额度。V5 还受官方账号可用额度影响。</p></div></li>
+<li class="rule"><span class="rule-number" aria-hidden="true">03</span><div><h3>仅开放免费规格，不会自动转付费</h3><p>超出免费条件的尺寸、步数等会自动调整；无法安全转换的图生图、局部重绘、精确参考等不开放。开启自动节省且共享额度不足时，V5 Full 可能切至 Medium；自定义负面词不生效，按最终档位计量。</p></div></li>
+<li class="rule"><span class="rule-number" aria-hidden="true">04</span><div><h3>耐心等队列，也给创作留一点隐私</h3><p>同一 Key 的任务会排队，请勿反复点击生成。<code class="command">/vibe</code> 每日可领取 3 次编码机会，次日需重新领取。本站不保存新生成图片或提示词，会记录用量日志；请及时保存作品。连续 3 天未使用的普通 Key 会被回收。</p></div></li>
+</ol></div>
+</section>
+</main>
+<footer class="foot"><div><span class="foot-brand">nai-gate.</span><span>留一处空白，给下一次灵感。</span><p>独立部署的 NovelAI 中转与绘图工作台，非 NovelAI 官方网站。展示的是本站配额，不是官方实时电量。</p></div><div class="foot-right"><a href="/admin">站点管理</a></div></footer>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<script>
+(() => {
+'use strict';
+const $ = id => document.getElementById(id);
+const fmt = value => new Intl.NumberFormat('zh-CN', {maximumFractionDigits:2}).format(value);
+let busy = false, resetAt = 0, serverOffset = 0, day = '', toastTimer, loaded = false;
+function showToast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => {$('toast').hidden = true;}, 3000); }
+function tick() {
+  if (!resetAt) return;
+  const left = Math.max(0, Math.ceil(resetAt - (Date.now()/1000 + serverOffset)));
+  const h = String(Math.floor(left/3600)).padStart(2,'0');
+  const m = String(Math.floor(left%3600/60)).padStart(2,'0');
+  const s = String(left%60).padStart(2,'0');
+  $('countdown').textContent = `${h}:${m}:${s}`;
+  if (!left && !busy) { resetAt = 0; refresh(); }
+}
+async function refresh() {
+  if (busy) return;
+  busy = true; $('refresh').disabled = true;
+  try {
+    const response = await fetch('/api/public/stats', {cache:'no-store', credentials:'omit', signal:AbortSignal.timeout(12000)});
+    if (!response.ok) throw new Error('stats_unavailable');
+    const data = await response.json();
+    for (const key of ['v5_images_today','shared_v5_used','shared_v5_limit','medium_cost','personal_v5_limit','personal_legacy_limit','refreshed_at']) {
+      if (typeof data[key] !== 'number' || !Number.isFinite(data[key]) || data[key] < 0) throw new Error('invalid_stats');
+    }
+    $('images').textContent = fmt(data.v5_images_today);
+    $('used').textContent = fmt(data.shared_v5_used);
+    const limited = data.shared_v5_limit > 0;
+    $('limit').textContent = limited ? fmt(data.shared_v5_limit) : '不限';
+    $('remaining').textContent = limited ? fmt(Math.max(0, data.shared_v5_limit-data.shared_v5_used)) : '不限';
+    $('capacity-note').textContent = limited && data.shared_v5_used >= data.shared_v5_limit ? '今日共享额度已用尽' : '以共享配额为准';
+    const percent = limited ? Math.min(100,Math.max(0,data.shared_v5_used/data.shared_v5_limit*100)) : 0;
+    $('progress-fill').style.width = `${percent}%`;
+    $('progress').setAttribute('aria-valuenow',String(Math.round(percent)));
+    $('progress').setAttribute('aria-valuetext',limited ? `${fmt(data.shared_v5_used)} / ${fmt(data.shared_v5_limit)} 单位` : '未设置本站共享上限');
+    $('medium-cost').textContent = fmt(data.medium_cost);
+    $('personal-v5').textContent = data.personal_v5_limit > 0 ? fmt(data.personal_v5_limit) : '不限';
+    $('personal-legacy').textContent = data.personal_legacy_limit > 0 ? fmt(data.personal_legacy_limit) : '不限';
+    serverOffset = data.refreshed_at - Date.now()/1000;
+    resetAt = typeof data.reset_at === 'number' ? data.reset_at : Date.parse(data.reset_at)/1000;
+    day = data.day;
+    $('reset-note').textContent = data.timezone === 'Asia/Shanghai' ? '北京时间 00:00' : `${data.timezone} 00:00`;
+    if (Number.isFinite(resetAt)) tick(); else { resetAt = 0; $('countdown').textContent = '零点'; }
+    const clock = new Intl.DateTimeFormat('zh-CN',{timeZone:data.timezone,hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(data.refreshed_at*1000));
+    $('updated').textContent = `${day} · ${clock} 更新 · 每 30 秒刷新`;
+    $('live-state').dataset.state = 'ok'; $('live-label').textContent = '数据已同步';
+    $('stats-error').hidden = true; loaded = true;
+  } catch (_) {
+    $('live-state').dataset.state = 'error'; $('live-label').textContent = '暂未同步';
+    $('stats-error').textContent = loaded ? '数据暂时无法更新，当前保留上次结果，请勿将其视为实时可用额度。' : '数据暂时无法更新，请稍后刷新。不要将未加载的数据视为可用额度。';
+    $('stats-error').hidden = false;
+    if (loaded) $('updated').textContent = '上次更新：' + $('updated').textContent.replace(/^上次更新：/,'').replace(' · 每 30 秒刷新','');
+  } finally { busy = false; $('refresh').disabled = false; }
+}
+$('refresh').addEventListener('click',refresh);
+$('copy-api').addEventListener('click',async () => {
+  try { await navigator.clipboard.writeText('https://gate.example.com'); $('copy-label').textContent = '已复制 ✓'; showToast('API 地址已复制'); setTimeout(() => {$('copy-label').textContent = '复制 ↗';},2500); }
+  catch (_) { showToast('无法自动复制，请手动复制 https://gate.example.com'); }
+});
+refresh();
+setInterval(() => {if (!document.hidden) refresh();},30000);
+setInterval(() => {if (!document.hidden) tick();},1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+})();
+</script>
+</body>
+</html>

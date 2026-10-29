@@ -90,6 +90,33 @@ async def test_automatic_inactivity_cleanup_preserves_ledger(db):
 
 
 @pytest.mark.asyncio
+async def test_inactivity_exemption_survives_restart_and_only_protects_target(tmp_path):
+    path = tmp_path / "exemption.db"
+    store = Database(str(path))
+    await store.connect()
+    try:
+        protected = await key(store)
+        ordinary = await store.create_key(dict(name="ordinary", token="ordinary-fixture",
+            daily_images=60, monthly_anlas=500, daily_text_tokens=1000, rpm=10))
+        await store._db.execute("UPDATE api_keys SET created_at=?", (time.time() - 10 * 86400,))
+        await store._db.execute("UPDATE api_keys SET inactivity_exempt=1 WHERE id=?", (protected["id"],))
+        await store._db.commit()
+    finally:
+        await store.close()
+    await store.connect()
+    try:
+        state = GateState(Settings(key_inactivity_delete_days=3))
+        state.db = store
+        assert await store.inactive_key_ids(time.time() - 3 * 86400) == [ordinary["id"]]
+        assert await state.delete_inactive_keys() == 1
+        row = await store.get_key(protected["id"])
+        assert row["inactivity_exempt"] == 1 and row["is_admin"] == 0
+        assert await store.get_key(ordinary["id"]) is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_inactivity_reset_starts_new_grace_without_faking_last_use(db):
     row = await key(db)
     old_created = time.time() - 10 * 86400

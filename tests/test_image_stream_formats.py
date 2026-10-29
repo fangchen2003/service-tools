@@ -51,6 +51,7 @@ async def test_msgpack_binary_and_base64_images_preserve_wire_and_settle(state, 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode,chunk_size", [("sse", 1), ("sse", 65536), ("msgpack", 1), ("msgpack", 65536)])
 async def test_error_event_never_leaks_and_keeps_completed_prefix(state, mode, chunk_size):
+    state.db.keys["fixture-1"]["is_admin"] = True  # Paid-path fixture, never an ordinary entitlement.
     final = {"event_type": "final", "samp_ix": 0, "image": PNG}
     wire = frame(final, mode)
     wire += frame({"event_type": "error", "message": "fixture-private-upstream"}, mode)

@@ -62,7 +62,7 @@ async def test_quote_does_not_touch_database_admission_or_upstream(effort_env):
     assert response.status_code == 200, response.text
     value = response.json()
     assert value['cost_limit'] == {'anlas': 0, 'v5': 1}
-    assert value['effective_parameters']['steps'] == 23
+    assert value['effective_parameters']['steps'] == 28
     assert body['parameters']['steps'] == 50
     assert st.db._db.total_changes == before
     assert not st.image_reservations and not st._rpm
@@ -71,8 +71,10 @@ async def test_quote_does_not_touch_database_admission_or_upstream(effort_env):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('streaming', [False, True])
-async def test_medium_quote_matches_the_real_route_ledger(effort_env, streaming):
+@pytest.mark.parametrize('paid', [False, True])
+async def test_medium_quote_matches_the_real_route_ledger(effort_env, streaming, paid):
     st = effort_env.state
+    await st.db.update_key(1, {'allow_anlas': paid})
     await st.db.bump_counters(2, st.day(), v5=8, images=8)
     body = {**image_body(steps=50, sampler='k_dpmpp_2m', cfg_rescale=.8), 'model': 'nai-diffusion-5-full'}
     value = (await quote(body)).json()
@@ -94,6 +96,8 @@ async def test_medium_quote_matches_the_real_route_ledger(effort_env, streaming)
     ((256, 512), [512, 1024], [512, 1024], 0, 1),
 ])
 async def test_max_quotes_target_size_and_forwards_original_pixels(effort_env, size, billing, output, anlas, v5):
+    await effort_env.state.db._db.execute("UPDATE api_keys SET is_admin=1 WHERE id=1")
+    await effort_env.state.db._db.commit()
     st = effort_env.state
     await st.db.update_key(1, {'allow_anlas': True})
     body = {**image_body(width=size[0], height=size[1], steps=28, image=picture(*size),
@@ -118,6 +122,8 @@ async def test_max_quotes_target_size_and_forwards_original_pixels(effort_env, s
     {'upscaled_enhance': 'true'}, {'n_samples': 2}, {'mask': 'mask'},
 ])
 async def test_invalid_max_is_rejected_by_quote_and_execution(effort_env, patch):
+    await effort_env.state.db._db.execute("UPDATE api_keys SET is_admin=1 WHERE id=1")
+    await effort_env.state.db._db.commit()
     await effort_env.state.db.update_key(1, {'allow_anlas': True})
     params = dict(width=1024, height=1024, image=picture(1024, 1024), upscaled_enhance=True)
     params.update(patch)
@@ -130,6 +136,8 @@ async def test_invalid_max_is_rejected_by_quote_and_execution(effort_env, patch)
 @pytest.mark.asyncio
 @pytest.mark.parametrize('patch', [{'width': 512}, {'upscale': True}, {'img2img': {'strength': .5}}, {'image': 'invalid'}])
 async def test_max_execution_still_validates_actual_source_and_protocol(effort_env, patch):
+    await effort_env.state.db._db.execute("UPDATE api_keys SET is_admin=1 WHERE id=1")
+    await effort_env.state.db._db.commit()
     await effort_env.state.db.update_key(1, {'allow_anlas': True})
     params = dict(width=1024, height=1024, image=picture(1024, 1024), upscaled_enhance=True)
     params.update(patch)
@@ -141,6 +149,8 @@ async def test_max_execution_still_validates_actual_source_and_protocol(effort_e
 
 @pytest.mark.asyncio
 async def test_max_does_not_open_legacy_models_or_text_generation(effort_env):
+    await effort_env.state.db._db.execute("UPDATE api_keys SET is_admin=1 WHERE id=1")
+    await effort_env.state.db._db.commit()
     await effort_env.state.db.update_key(1, {'allow_anlas': True})
     body = image_body(width=256, height=256, image=picture(256, 256), upscaled_enhance=True)
     body['action'] = 'img2img'
@@ -169,6 +179,8 @@ async def test_price_increase_stops_before_dispatch(effort_env):
 @pytest.mark.asyncio
 @pytest.mark.parametrize('streaming', [False, True])
 async def test_exhausted_upstream_cannot_turn_confirmed_v5_into_anlas(effort_env, streaming):
+    await effort_env.state.db._db.execute("UPDATE api_keys SET is_admin=1 WHERE id=1")
+    await effort_env.state.db._db.commit()
     st = effort_env.state
     await st.db.update_key(1, {'allow_anlas': True})
     body = {**image_body(), 'model': 'nai-diffusion-5-full'}
@@ -185,6 +197,8 @@ async def test_exhausted_upstream_cannot_turn_confirmed_v5_into_anlas(effort_env
 
 @pytest.mark.asyncio
 async def test_pending_vibes_are_deduplicated_without_encoding(effort_env):
+    await effort_env.state.db._db.execute("UPDATE api_keys SET is_admin=1 WHERE id=1")
+    await effort_env.state.db._db.commit()
     await effort_env.state.db.update_key(1, {'allow_anlas': True})
     raw = picture()
     body = image_body(reference_image_multiple=[raw]*5, reference_strength_multiple=[.2]*5,
@@ -202,6 +216,8 @@ async def test_pending_vibes_are_deduplicated_without_encoding(effort_env):
 @pytest.mark.asyncio
 @pytest.mark.parametrize('operation,expected', [('upscale', 1), ('augment-image', 65), ('encode-vibe', 2)])
 async def test_tool_and_encoding_quotes_use_gate_prices(effort_env, operation, expected):
+    await effort_env.state.db._db.execute("UPDATE api_keys SET is_admin=1 WHERE id=1")
+    await effort_env.state.db._db.commit()
     await effort_env.state.db.update_key(1, {'allow_anlas': True})
     body = {'image': picture(), 'model': 'nai-diffusion-5-curated'}
     if operation == 'augment-image':
@@ -221,6 +237,8 @@ async def test_tool_and_encoding_quotes_use_gate_prices(effort_env, operation, e
     ('nai-diffusion-5-full-medium', .99, 50),
 ])
 async def test_medium_anlas_step_factor_matches_official_client(effort_env, model, strength, expected):
+    await effort_env.state.db._db.execute("UPDATE api_keys SET is_admin=1 WHERE id=1")
+    await effort_env.state.db._db.commit()
     st = effort_env.state
     await st.db.update_key(1, {'allow_anlas': True})
     body = {**image_body(width=1408, height=2176, steps=14, image=picture(), strength=strength),
@@ -234,6 +252,8 @@ async def test_medium_anlas_step_factor_matches_official_client(effort_env, mode
 
 @pytest.mark.asyncio
 async def test_max_medium_uses_its_own_step_price_factor(effort_env):
+    await effort_env.state.db._db.execute("UPDATE api_keys SET is_admin=1 WHERE id=1")
+    await effort_env.state.db._db.commit()
     await effort_env.state.db.update_key(1, {'allow_anlas': True})
     body = {**image_body(width=832, height=1216, image=picture(832, 1216),
                         upscaled_enhance=True, strength=.5, steps=28),
@@ -279,6 +299,8 @@ async def test_quote_rejects_old_payload_and_limits_body_to_four_kib(effort_env)
     ('encode-vibe', 'nai-diffusion-4-5-full', {}),
 ])
 async def test_all_quote_operations_skip_image_processing_and_writes(effort_env, monkeypatch, operation, model, parameters):
+    await effort_env.state.db._db.execute("UPDATE api_keys SET is_admin=1 WHERE id=1")
+    await effort_env.state.db._db.commit()
     st = effort_env.state
     await st.db.update_key(1, {'allow_anlas': True})
     def forbidden(*args, **kwargs):
@@ -300,6 +322,8 @@ async def test_all_quote_operations_skip_image_processing_and_writes(effort_env,
 @pytest.mark.asyncio
 @pytest.mark.parametrize('kind', ['size', 'reference', 'mode', 'max', 'upscale'])
 async def test_underreported_metadata_cannot_lower_execution_cost(effort_env, kind):
+    await effort_env.state.db._db.execute("UPDATE api_keys SET is_admin=1 WHERE id=1")
+    await effort_env.state.db._db.commit()
     st = effort_env.state
     await st.db.update_key(1, {'allow_anlas': True})
     body = image_body(width=1408, height=2176, steps=28)
@@ -346,6 +370,8 @@ async def test_underreported_metadata_cannot_lower_execution_cost(effort_env, ki
      {'anlas': 32, 'v5': 0}),
 ])
 async def test_metadata_quotes_match_execution_prices(effort_env, model, parameters, expected):
+    await effort_env.state.db._db.execute("UPDATE api_keys SET is_admin=1 WHERE id=1")
+    await effort_env.state.db._db.commit()
     st = effort_env.state
     await st.db.update_key(1, {'allow_anlas': True})
     body = {**image_body(**parameters), 'model': model}
