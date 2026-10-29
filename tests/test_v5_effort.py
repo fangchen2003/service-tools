@@ -103,14 +103,14 @@ async def test_step_limits_by_model_and_key(effort_env, model, paid, streaming, 
     body = {**image_body(steps=steps), "model": model}
     r = await post("/ai/generate-image" + ("-stream" if streaming else ""), body)
     assert r.status_code == 200, r.text
-    limit = 23 if model.startswith("nai-diffusion-5") else 28
-    assert effort_env.calls[0]["parameters"]["steps"] == (steps if paid else min(steps, limit))
+    limit = 28
+    assert effort_env.calls[0]["parameters"]["steps"] == min(steps, limit)
     counter = await st.db.get_counter(1, st.day())
-    assert (counter["anlas"] > 0) == (paid and steps > 28)
+    assert counter["anlas"] == 0
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model,limit", [("nai-diffusion-4-5-full", 28), ("nai-diffusion-5-full", 23)])
+@pytest.mark.parametrize("model,limit", [("nai-diffusion-4-5-full", 28), ("nai-diffusion-5-full", 28)])
 @pytest.mark.parametrize("configured", [17, 50])
 async def test_free_step_limits_respect_lower_site_cap(effort_env, model, limit, configured):
     effort_env.state.settings.max_steps = configured
@@ -141,17 +141,17 @@ async def test_step_policy_reports_effective_limits(effort_env, paid, admin, con
         response = await client.get("/v1/me", headers={"Authorization": "Bearer fixture-1"})
     assert response.status_code == 200, response.text
     policy = response.json()["image_policy"]
-    assert policy["max_steps"] == (None if paid or admin else configured)
+    assert policy["max_steps"] == (None if admin else configured)
     assert policy["max_steps_by_tier"] == {
-        "legacy": None if paid or admin else configured,
-        "v5": None if paid or admin else min(configured, 23),
+        "legacy": None if admin else configured,
+        "v5": None if admin else min(configured, 28),
     }
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("steps", [23, 50])
-async def test_paid_key_keeps_high_settings_when_budget_is_low(effort_env, streaming, steps):
+async def test_legacy_paid_flag_cannot_avoid_medium_when_budget_is_low(effort_env, streaming, steps):
     st = effort_env.state
     st.settings.max_steps = 17
     await st.db.update_key(1, {"allow_anlas": True})
@@ -161,7 +161,8 @@ async def test_paid_key_keeps_high_settings_when_budget_is_low(effort_env, strea
         body["parameters"]["stream"] = "sse"
     response = await post("/ai/generate-image" + ("-stream" if streaming else ""), body)
     assert response.status_code == 200, response.text
-    assert effort_env.calls[0] == body
+    assert effort_env.calls[0]["model"] == MEDIUM_MODEL
+    assert effort_env.calls[0]["parameters"]["steps"] == 14
 
 
 @pytest.mark.asyncio
@@ -294,3 +295,16 @@ async def test_disabled_auto_mode_preserves_high_settings(effort_env):
     assert (await post("/ai/generate-image", v5_body(cfg_rescale=.8, negative_prompt="hat"))).status_code == 200
     assert effort_env.calls[0]["model"] == "nai-diffusion-5-full"
     assert effort_env.calls[0]["parameters"]["cfg_rescale"] == .8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["nai-diffusion-3", "nai-diffusion-4-5-full", "nai-diffusion-5-full", "nai-diffusion-5-curated"])
+@pytest.mark.parametrize("paid", [False, True])
+async def test_all_models_step_cap_even_without_safe_clamp(effort_env, model, paid):
+    st = effort_env.state
+    st.settings.safe_clamp = False
+    await st.db.update_key(1, {"allow_anlas": paid})
+    body = {**image_body(steps=50), "model": model}
+    r = await post("/ai/generate-image", body)
+    assert r.status_code == 200, r.text
+    assert effort_env.calls[0]["parameters"]["steps"] == 28

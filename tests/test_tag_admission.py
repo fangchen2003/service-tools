@@ -51,6 +51,81 @@ async def test_second_tag_request_queues_without_future_generation_reservations(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["GET", "POST"])
+async def test_consecutive_tags_do_not_wait_for_image_interval(state, method):
+    state.settings.key_image_min_interval = 15
+    state.settings.queue_timeout = .05
+    for _ in range(2):
+        response = await main.suggest_tags(request({}, method=method))
+        assert response.status_code == 200
+    assert len(state.nai.calls) == 2
+    assert not state._key_image_next_at
+    assert not state._tag_active and state._tag_waiting == 0
+
+
+@pytest.mark.asyncio
+async def test_tags_ignore_upstream_image_pacing_without_changing_it(state):
+    client = NaiClient(["fixture-only"], "https://fixture.invalid", "https://fixture.invalid",
+                       "https://fixture.invalid", db=FakeDB(), day_fn=lambda: "2026-09-22",
+                       v5_daily_limits=[100], allow_anlas=[True], image_min_interval=15)
+    calls = []
+
+    async def handler(incoming):
+        calls.append(incoming)
+        return httpx.Response(200, json={"tags": []})
+
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    state.nai = client
+    state.settings.queue_timeout = .05
+    token = client.pool[0]
+    token.image_next_at = time.monotonic() + 60
+    before = token.image_next_at
+    try:
+        response = await post(PATH, {})
+        assert response.status_code == 200
+        assert len(calls) == 1
+        assert token.image_next_at == before
+        assert token.image_slots.active == 0
+        with pytest.raises(UpstreamError) as caught:
+            await client.request("POST", "https://fixture.invalid/ai/generate-image",
+                                 image_lane=True, queue_timeout=.01)
+        assert caught.value.status == 429
+        assert len(calls) == 1
+        assert token.image_next_at == before
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_unpaced_tags_still_respect_real_upstream_429_and_do_not_retry(state):
+    calls = []
+
+    async def handler(incoming):
+        calls.append(incoming)
+        return httpx.Response(429, headers={"retry-after": "60"})
+
+    async def save_setting(*args):
+        pass
+
+    state.db.set_setting = save_setting
+    client = NaiClient(["fixture-only", "fixture-two"], "https://fixture.invalid", "https://fixture.invalid",
+                       "https://fixture.invalid", db=state.db, day_fn=lambda: "2026-09-22",
+                       v5_daily_limits=[100, 100], allow_anlas=[True, True], image_min_interval=15)
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    state.nai = client
+    try:
+        assert (await post(PATH, {})).status_code == 429
+        assert len(calls) == 1
+        assert state.image_cooldown_remaining() > 0
+        assert (await post(PATH, {})).status_code == 429
+        assert len(calls) == 1
+        assert not state._tag_active and state._tag_waiting == 0
+        assert all(token.image_slots.active == 0 for token in client.pool)
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_rate_window_separate_from_generation_and_other_key(state):
     assert (await post(PATH, {})).status_code == 200
     assert (await post(PATH, {})).status_code == 200
@@ -102,7 +177,7 @@ async def test_every_exit_releases_tag_admission(state, failure):
 
 @pytest.mark.asyncio
 async def test_admission_happens_before_post_body_read(state):
-    state._tag_next_at[1] = time.monotonic() + 60
+    state._tag_active.add(1)
     state.settings.queue_timeout = .03
     incoming = request({})
 
@@ -137,7 +212,7 @@ async def test_disconnected_waiter_never_dispatches_upstream(state):
 async def test_admin_cannot_bypass_tag_resource_limit(state):
     state.db.keys["fixture-1"]["is_admin"] = True
     assert (await post(PATH, {})).status_code == 200
-    state._tag_next_at[1] = time.monotonic() + 60
+    state._tag_active.add(1)
     state.settings.queue_timeout = .03
     assert (await post(PATH, {})).status_code == 429
 
@@ -158,7 +233,7 @@ async def test_tag_log_distinguishes_local_unavailable_from_upstream_http_503(st
 
 
 @pytest.mark.asyncio
-async def test_busy_token_waits_without_reserving_future_image_slots():
+async def test_tag_token_skips_idle_image_pacing_without_reserving_future_slot():
     client = NaiClient(["fixture-only"], "https://fixture.invalid", "https://fixture.invalid",
                        "https://fixture.invalid", db=FakeDB(), day_fn=lambda: "2026-09-22",
                        v5_daily_limits=[100], allow_anlas=[True], image_min_interval=.03)
@@ -173,14 +248,37 @@ async def test_busy_token_waits_without_reserving_future_image_slots():
         token = client.pool[0]
         token.image_next_at = time.monotonic() + .03
         before = token.image_next_at
+        response = await asyncio.wait_for(client.request(
+            "GET", "https://fixture.invalid/tags", image_lane=True, wait_for_image_slot=False), 1)
+        assert response.status_code == 200 and len(calls) == 1
+        assert token.image_next_at == before
+        assert token.image_slots.active == 0
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_token_wait_does_not_reserve_future_image_slot():
+    client = NaiClient(["fixture-only"], "https://fixture.invalid", "https://fixture.invalid",
+                       "https://fixture.invalid", db=FakeDB(), day_fn=lambda: "2026-09-22",
+                       v5_daily_limits=[100], allow_anlas=[True], image_min_interval=.03)
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda _: httpx.Response(200, json={"tags": []})))
+    try:
+        token = client.pool[0]
+        token.image_next_at = time.monotonic() + 1
+        before = token.image_next_at
+        await token.image_slots.acquire()
         pending = asyncio.create_task(client.request(
             "GET", "https://fixture.invalid/tags", image_lane=True, wait_for_image_slot=False))
         await asyncio.sleep(.01)
         assert not pending.done()
-        assert token.image_next_at == before and not calls
-        response = await asyncio.wait_for(pending, 1)
-        assert response.status_code == 200 and len(calls) == 1
-        assert token.image_next_at > time.monotonic()
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        assert token.image_next_at == before
+        assert token.image_slots.active == 1
+        token.image_slots.release()
     finally:
         await client._client.aclose()
 
@@ -197,7 +295,7 @@ async def test_cancelled_token_wait_does_not_reserve_future_image_slot():
         token.image_next_at = time.monotonic() + 1
         before = token.image_next_at
         pending = asyncio.create_task(client.request(
-            "GET", "https://fixture.invalid/tags", image_lane=True, wait_for_image_slot=False))
+            "POST", "https://fixture.invalid/image", image_lane=True, wait_for_image_slot=True))
         await asyncio.sleep(.01)
         pending.cancel()
         with pytest.raises(asyncio.CancelledError):

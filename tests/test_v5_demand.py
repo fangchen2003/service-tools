@@ -87,9 +87,16 @@ def body():
 @pytest.mark.asyncio
 @pytest.mark.parametrize('streaming', [False, True])
 @pytest.mark.parametrize('percent,negative', [(80,False),(0,False),(0,True),(1,True)])
-async def test_confirmed_exhaustion_only_and_same_token(env, streaming, percent, negative):
+@pytest.mark.parametrize('admin', [False, True])
+async def test_confirmed_exhaustion_only_and_same_token(env, streaming, percent, negative, admin):
+    env.st.db.keys['fixture-1']['is_admin'] = admin
     env.subscription=usage(percent, negative)
     r = await post('/ai/generate-image' + ('-stream' if streaming else ''), body())
+    if negative and not admin:
+        assert r.status_code in (402, 403)
+        assert not env.generations and not env.st.db.charges
+        assert env.st.nai.pool[0].pending_v5 == 0
+        return
     assert r.status_code == 200
     charge, = env.st.db.charges
     estimate=estimate_image_cost(body(), v5_allowance_available=not negative)
@@ -120,7 +127,7 @@ async def test_unknown_pauses_without_generation_or_charge(env, streaming, failu
 @pytest.mark.asyncio
 @pytest.mark.parametrize('permission', ['token','key','budget'])
 @pytest.mark.parametrize('streaming',[False,True])
-async def test_paid_permissions_and_budget_are_rechecked_before_send(env, permission, streaming):
+async def test_exhaustion_refused_despite_historical_paid_permissions_or_budgets(env, permission, streaming):
     env.subscription=usage(0,True)
     if permission=='token':env.st.nai.pool[0].allow_anlas=False
     elif permission=='key':env.st.db.keys['fixture-1']['allow_anlas']=False
@@ -142,8 +149,10 @@ async def test_cache_idle_snapshot_and_recovery_never_query_in_background(env):
     token_id=env.st.nai.pool[0].token_id
     cache._rows[token_id]['at']-=301
     env.subscription=usage(0,True)
-    await post('/ai/generate-image',body())
-    assert env.st.db.charges[-1][1]['anlas']>0
+    rejected = await post('/ai/generate-image',body())
+    assert rejected.status_code in (402, 403)
+    assert len(env.st.db.charges) == len(env.generations) == 2
+    assert env.st.db.charges[-1][1]['anlas'] == 0
     env.subscription=usage(0,False)
     await post('/ai/generate-image',body())
     assert len(env.queries)==3  # never reuse prior depleted result to bill another image
@@ -156,6 +165,7 @@ async def test_cache_idle_snapshot_and_recovery_never_query_in_background(env):
 
 @pytest.mark.asyncio
 async def test_failed_generation_does_not_charge_or_consume_reservation(env):
+    env.st.db.keys['fixture-1']['is_admin'] = True
     env.subscription=usage(0,True)
     env.generation_status=500
     assert (await post('/ai/generate-image',body())).status_code==500
@@ -164,14 +174,16 @@ async def test_failed_generation_does_not_charge_or_consume_reservation(env):
 
 
 @pytest.mark.asyncio
-async def test_legacy_and_already_paid_v5_make_no_subscription_query(env):
+async def test_legacy_and_admin_paid_v5_make_no_subscription_query(env):
     await post('/ai/generate-image',image_body())
+    env.st.db.keys['fixture-1']['is_admin'] = True
     await post('/ai/generate-image',{**body(),'parameters':{**body()['parameters'],'width':1152,'steps':23}})
     assert not env.queries and len(env.generations)==2
 
 
 @pytest.mark.asyncio
 async def test_paid_v5_inpainting_preserves_strength_without_cost_discount(env):
+    env.st.db.keys["fixture-1"]["is_admin"] = True  # Paid-path fixture, never an ordinary entitlement.
     masked = {**body(), 'model': 'nai-diffusion-5-full-inpainting', 'action': 'infill',
               'parameters': {**body()['parameters'], 'width': 1152, 'height': 1024,
               'steps': 23, 'image': 'fixture', 'mask': 'fixture', 'strength': .6,
@@ -188,6 +200,7 @@ async def test_paid_v5_inpainting_preserves_strength_without_cost_discount(env):
 @pytest.mark.parametrize('streaming', [False, True])
 @pytest.mark.parametrize('exhausted', [False, True])
 async def test_img2img_batch_settles_mixed_or_exhausted_cost(env, streaming, exhausted):
+    env.st.db.keys["fixture-1"]["is_admin"] = True  # Paid-path fixture, never an ordinary entitlement.
     env.subscription = usage(0 if exhausted else 80, exhausted)
     batch = {**body(), 'parameters': {**body()['parameters'], 'width': 512, 'height': 512,
              'steps': 20, 'n_samples': 2, 'image': 'fixture', 'strength': .6}}
@@ -213,13 +226,14 @@ async def test_mixed_batch_keeps_paid_permissions_and_rechecks_budget(env, restr
         env.st.db.keys['fixture-1']['daily_anlas'] = 4 if restriction == 'exhausted_budget' else 3
         if restriction == 'exhausted_budget': env.subscription = usage(0, True)
     response = await post('/ai/generate-image', batch)
-    assert response.status_code in (402, 503)
+    assert response.status_code in (400, 402, 503)
     assert not env.generations and not env.st.db.charges
     assert env.st.nai.pool[0].pending_v5 == 0
 
 
 @pytest.mark.asyncio
 async def test_partial_stream_retains_confirmed_exhausted_price(env):
+    env.st.db.keys["fixture-1"]["is_admin"] = True  # Paid-path fixture, never an ordinary entitlement.
     env.subscription = usage(0, True)
     env.frames = event(index=1)
     batch = {**body(), 'parameters': {**body()['parameters'], 'width': 512, 'height': 512,

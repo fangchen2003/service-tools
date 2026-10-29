@@ -290,11 +290,11 @@ async def test_invalid_image_success_never_reaches_user_ledger(monkeypatch):
     state = FakeState()
     state.nai, upstream_db = make_client(http=FakeHTTP(200, content=b'{"error":"invalid image"}'))
     monkeypatch.setattr(main, 'STATE', state)
-    response = await post('/ai/generate-image', image_body(precise=1))
+    response = await post('/ai/generate-image', image_body())
     assert response.status_code == 502
     assert not state.db.charges and not upstream_db.images
     assert not state.image_budget_lock.locked() and state.global_active == 0
-    assert state.db.logs[-1][1]['unconfirmed_anlas'] == 5
+    assert state.db.logs[-1][1]['unconfirmed_anlas'] == 0  # Ordinary request was clamped free.
 
 
 @pytest.mark.asyncio
@@ -366,6 +366,7 @@ async def test_nonstream_anomaly_reaches_ledger_without_charging_or_retrying(
                               content=b'{"error":"private upstream token"}')
 
     state = FakeState()
+    state.db.keys['fixture-1']['is_admin'] = True
     state.nai, upstream_db = make_client()
     monkeypatch.setattr(main, 'STATE', state)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:

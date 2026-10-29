@@ -43,8 +43,8 @@ async def test_saved_values_survive_restart_and_leave_other_settings_unchanged(s
     assert baseline["sources"]["key_concurrency"] == "environment"
     assert baseline["sources"]["default_expires_days"] == "default"
     assert baseline["values"]["default_image_model_scope"] == "legacy"
-    assert baseline["image_policy"]["free_max_steps_by_tier"] == {"v5": 23, "legacy": 28}
-    assert baseline["image_policy"]["paid_max_steps"] is None
+    assert baseline["image_policy"]["free_max_steps_by_tier"] == {"v5": 28, "legacy": 28}
+    assert baseline["image_policy"]["paid_max_steps"] == 28
     assert set(baseline["values"]) == set(CONFIGURATION_FIELDS)
     assert "password" not in json.dumps(baseline)
     assert "secret" not in json.dumps(baseline)

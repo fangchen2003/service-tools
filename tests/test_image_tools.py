@@ -78,6 +78,8 @@ async def test_routes_permissions_and_success(state, prefix, operation, tool, co
     state.db.keys['fixture-1']['allow_img2img'] = False
     assert (await post(url,data)).status_code == 403
     state.db.keys['fixture-1']['allow_img2img'] = True
+    if cost:
+        state.db.keys['fixture-1']['is_admin'] = True
     state.nai.content = zipped(count)
     response = await post(url,data)
     assert response.status_code == 200 and response.headers['cache-control'] == 'no-store'
@@ -93,7 +95,7 @@ async def test_routes_permissions_and_success(state, prefix, operation, tool, co
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ['free-key','daily','monthly','global','permission'])
-async def test_preflight_rejects_without_dispatch(state, failure):
+async def test_paid_tools_always_refused_regardless_obsolete_budgets(state, failure):
     key=state.db.keys['fixture-1']
     if failure=='free-key': key['allow_anlas']=False
     elif failure=='daily': key['daily_anlas']=64
@@ -108,6 +110,7 @@ async def test_preflight_rejects_without_dispatch(state, failure):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ['429','500','network','timeout','empty','json','truncated','partial'])
 async def test_failure_never_charges_or_retries(state, failure):
+    state.db.keys['fixture-1']['is_admin'] = True
     if failure=='429':state.nai.error=UpstreamError(429,'limited')
     elif failure=='500':state.nai.status=500
     elif failure=='network':state.nai.error=httpx.ReadError('private upstream')
@@ -128,23 +131,17 @@ async def test_failure_never_charges_or_retries(state, failure):
 
 
 @pytest.mark.asyncio
-async def test_budget_serializes_competing_tools_and_settlement(state):
+async def test_ordinary_paid_tools_refused_without_numeric_limit_or_dispatch(state):
     state.db.keys['fixture-1']['daily_anlas']=1
-    state.nai.content=png()
-    state.db.accounting_release=asyncio.Event()
-    first=asyncio.create_task(post('/ai/upscale',body()))
-    await state.db.accounting_entered.wait()
-    second=asyncio.create_task(post('/ai/upscale',body()))
-    await asyncio.sleep(.03)
-    assert len(state.nai.calls)==1 and (not second.done() or (await second).status_code==402)
-    state.db.accounting_release.set()
-    assert (await first).status_code==200
-    assert (await second).status_code==402
-    assert len(state.nai.calls)==len(state.db.charges)==1
+    first, second = await asyncio.gather(post('/ai/upscale',body()), post('/ai/upscale',body()))
+    assert first.status_code == second.status_code == 402
+    assert '仅支持免费' in first.json()['error']['message']
+    assert not state.nai.calls and not state.db.charges
 
 
 @pytest.mark.asyncio
 async def test_disconnect_after_dispatch_settles_once(state):
+    state.db.keys['fixture-1']['is_admin'] = True
     state.nai.content=png()
     state.nai.release=asyncio.Event()
     task=asyncio.create_task(post('/ai/upscale',body()))

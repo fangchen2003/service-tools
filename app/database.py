@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     exclude_global_v5 INTEGER NOT NULL DEFAULT 0,
     image_model_scope TEXT NOT NULL DEFAULT 'legacy',
     is_admin INTEGER NOT NULL DEFAULT 0,
+    inactivity_exempt INTEGER NOT NULL DEFAULT 0,
     expires_at REAL,
     created_at REAL NOT NULL,
     last_used_at REAL
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS anlas_reconciliations (
 CREATE TABLE IF NOT EXISTS discord_registrations (
     discord_id TEXT PRIMARY KEY,
     key_id INTEGER NOT NULL UNIQUE,
+    token TEXT,
     created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS counters (
@@ -98,7 +100,31 @@ CREATE TABLE IF NOT EXISTS daily_quota_offsets (
     day TEXT NOT NULL,
     anlas REAL NOT NULL DEFAULT 0,
     v5 INTEGER NOT NULL DEFAULT 0,
+    legacy_free_images INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (key_id, day)
+);
+CREATE TABLE IF NOT EXISTS discord_daily_charges (
+    discord_id TEXT NOT NULL,
+    day TEXT NOT NULL,
+    key_id INTEGER NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (discord_id, day)
+);
+CREATE TABLE IF NOT EXISTS discord_daily_vibes (
+    discord_id TEXT NOT NULL,
+    day TEXT NOT NULL,
+    remaining INTEGER NOT NULL DEFAULT 3 CHECK (remaining BETWEEN 0 AND 3),
+    created_at REAL NOT NULL,
+    PRIMARY KEY (discord_id, day)
+);
+CREATE TABLE IF NOT EXISTS vibe_encoding_reservations (
+    token TEXT PRIMARY KEY,
+    discord_id TEXT NOT NULL,
+    day TEXT NOT NULL,
+    key_id INTEGER NOT NULL,
+    key_name TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('reserved', 'released', 'settled')),
+    created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS deleted_key_usage_flags (
     key_id INTEGER PRIMARY KEY,
@@ -163,12 +189,35 @@ class Database:
             "ALTER TABLE api_keys ADD COLUMN image_model_scope TEXT NOT NULL DEFAULT 'legacy'",
             "ALTER TABLE api_keys ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE upstream_token_counters ADD COLUMN images INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE daily_quota_offsets ADD COLUMN legacy_free_images INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE discord_registrations ADD COLUMN token TEXT",
+            "ALTER TABLE api_keys ADD COLUMN inactivity_exempt INTEGER NOT NULL DEFAULT 0",
         ):
             try:
                 await self._db.execute(ddl)
                 await self._db.commit()
             except aiosqlite.OperationalError:
                 pass  # 列已存在
+        # Install after the legacy recovery-token column migration. Triggers
+        # keep credential changes atomic, including deletion by any reclaim path.
+        await self._db.executescript("""
+            CREATE TRIGGER IF NOT EXISTS sync_discord_recovery_token
+            AFTER UPDATE OF token ON api_keys
+            BEGIN
+                UPDATE discord_registrations SET token=NEW.token WHERE key_id=NEW.id;
+            END;
+            CREATE TRIGGER IF NOT EXISTS preserve_discord_recovery_token
+            BEFORE DELETE ON api_keys
+            BEGIN
+                UPDATE discord_registrations SET token=OLD.token WHERE key_id=OLD.id;
+            END;
+        """)
+        await self._db.execute(
+            """UPDATE discord_registrations
+               SET token=(SELECT token FROM api_keys WHERE api_keys.id=discord_registrations.key_id)
+               WHERE token IS NULL"""
+        )
+        await self._db.commit()
         # Keep historical image counts intact. Quotas use integer hundredths;
         # old V5 requests are conservatively one High unit each. Each ALTER and
         # backfill commits together, so reconnecting never scales a row twice.
@@ -429,7 +478,8 @@ class Database:
             return []
         cur = await self._db.execute(
             """SELECT id FROM api_keys
-               WHERE is_admin=0 AND MAX(COALESCE(last_used_at, created_at), ?) < ?
+               WHERE is_admin=0 AND inactivity_exempt=0
+                 AND MAX(COALESCE(last_used_at, created_at), ?) < ?
                ORDER BY id ASC""",
             (grace_started_at, cutoff),
         )
@@ -460,7 +510,8 @@ class Database:
     async def get_counter(self, key_id: int, day: str) -> dict[str, Any]:
         cur = await self._db.execute(
             """SELECT c.*, COALESCE(o.anlas, 0) AS _quota_offset_anlas,
-                      COALESCE(o.v5_units, 0) AS _quota_offset_v5
+                      COALESCE(o.v5_units, 0) AS _quota_offset_v5,
+                      COALESCE(o.legacy_free_images, 0) AS _quota_offset_legacy
                FROM counters AS c
                LEFT JOIN daily_quota_offsets AS o ON o.key_id=c.key_id AND o.day=c.day
                WHERE c.key_id=? AND c.day=?""", (key_id, day)
@@ -470,8 +521,275 @@ class Database:
             result = dict(row)
             result["anlas"] = max(0, result["anlas"] - result.pop("_quota_offset_anlas"))
             result["v5"] = max(0, result.pop("v5_units") - result.pop("_quota_offset_v5")) / SCALE
+            result["legacy_free_images"] = max(0, result["legacy_free_images"] - result.pop("_quota_offset_legacy"))
             return result
         return {"images": 0, "legacy_free_images": 0, "anlas": 0.0, "text_tokens": 0, "requests": 0, "v5": 0}
+
+    def vibe_day(self) -> str:
+        """Vibe grants always reset at Shanghai midnight, independent of site TZ."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+
+    async def get_vibe_remaining(self, key_id: int, day: str | None = None) -> int:
+        row = await (await self._db.execute(
+            """SELECT v.remaining FROM discord_registrations r
+               JOIN discord_daily_vibes v ON v.discord_id=r.discord_id
+               WHERE r.key_id=? AND v.day=?""",
+            (key_id, day or self.vibe_day()),
+        )).fetchone()
+        return int(row[0]) if row else 0
+
+    async def claim_registered_vibe(self, discord_id: str,
+                                    day: str | None = None) -> dict[str, Any]:
+        day = day or self.vibe_day()
+        async with aiosqlite.connect(self.path, timeout=10) as conn:
+            try:
+                await conn.execute("BEGIN IMMEDIATE")
+                active = await (await conn.execute(
+                    """SELECT k.id FROM discord_registrations r
+                       JOIN api_keys k ON k.id=r.key_id
+                       WHERE r.discord_id=? AND k.enabled=1
+                         AND (k.expires_at IS NULL OR k.expires_at>?)""",
+                    (discord_id, time.time()),
+                )).fetchone()
+                if active is None:
+                    await conn.rollback()
+                    return {"status": "not_registered", "remaining": 0}
+                claim = await conn.execute(
+                    """INSERT INTO discord_daily_vibes(discord_id,day,created_at)
+                       VALUES(?,?,?) ON CONFLICT(discord_id,day) DO NOTHING""",
+                    (discord_id, day, time.time()),
+                )
+                row = await (await conn.execute(
+                    "SELECT remaining FROM discord_daily_vibes WHERE discord_id=? AND day=?",
+                    (discord_id, day),
+                )).fetchone()
+                await conn.commit()
+                return {"status": "claimed" if claim.rowcount else "already",
+                        "remaining": int(row[0])}
+            except BaseException:
+                await conn.rollback()
+                raise
+
+    async def reserve_vibe_encoding(self, key_id: int,
+                                    day: str | None = None) -> str | None:
+        """Consume before dispatch; an abandoned reservation remains consumed."""
+        import secrets
+
+        day = day or self.vibe_day()
+        async with aiosqlite.connect(self.path, timeout=10) as conn:
+            try:
+                await conn.execute("BEGIN IMMEDIATE")
+                row = await (await conn.execute(
+                    """SELECT r.discord_id,k.name FROM discord_registrations r
+                       JOIN api_keys k ON k.id=r.key_id
+                       WHERE k.id=? AND k.enabled=1
+                         AND (k.expires_at IS NULL OR k.expires_at>?)""",
+                    (key_id, time.time()),
+                )).fetchone()
+                if row is None:
+                    await conn.rollback()
+                    return None
+                updated = await conn.execute(
+                    """UPDATE discord_daily_vibes SET remaining=remaining-1
+                       WHERE discord_id=? AND day=? AND remaining>0""",
+                    (row[0], day),
+                )
+                if not updated.rowcount:
+                    await conn.rollback()
+                    return None
+                token = secrets.token_urlsafe(32)
+                await conn.execute(
+                    """INSERT INTO vibe_encoding_reservations
+                       (token,discord_id,day,key_id,key_name,status,created_at)
+                       VALUES(?,?,?,?,?,'reserved',?)""",
+                    (token, row[0], day, key_id, row[1], time.time()),
+                )
+                await conn.commit()
+                return token
+            except BaseException:
+                await conn.rollback()
+                raise
+
+    async def release_vibe_encoding(self, token: str) -> bool:
+        """Refund a failed operation to its original Discord/day at most once."""
+        async with aiosqlite.connect(self.path, timeout=10) as conn:
+            try:
+                await conn.execute("BEGIN IMMEDIATE")
+                row = await (await conn.execute(
+                    """SELECT discord_id,day FROM vibe_encoding_reservations
+                       WHERE token=? AND status='reserved'""", (token,),
+                )).fetchone()
+                if row is None:
+                    await conn.rollback()
+                    return False
+                await conn.execute(
+                    "UPDATE vibe_encoding_reservations SET status='released' WHERE token=?",
+                    (token,),
+                )
+                await conn.execute(
+                    """UPDATE discord_daily_vibes SET remaining=remaining+1
+                       WHERE discord_id=? AND day=?""", (row[0], row[1]),
+                )
+                await conn.commit()
+                return True
+            except BaseException:
+                await conn.rollback()
+                raise
+
+    async def settle_vibe_encoding(self, token: str, model: str) -> bool:
+        """Settle success and its actual 2-Anlas audit in one idempotent transaction."""
+        from .policy import VIBE_ENCODING_ANLAS
+
+        async with aiosqlite.connect(self.path, timeout=10) as conn:
+            try:
+                await conn.execute("BEGIN IMMEDIATE")
+                row = await (await conn.execute(
+                    """SELECT key_id,key_name,day FROM vibe_encoding_reservations
+                       WHERE token=? AND status='reserved'""", (token,),
+                )).fetchone()
+                if row is None:
+                    await conn.rollback()
+                    return False
+                key_id, key_name, day = row
+                now = time.time()
+                await conn.execute(
+                    """INSERT INTO usage_log(ts,key_id,key_name,kind,model,status,anlas,detail)
+                       VALUES(?,?,?,'vibe_encode',?,'ok',?,?)""",
+                    (now, key_id, key_name, model, VIBE_ENCODING_ANLAS,
+                     f"Vibe 编码 {VIBE_ENCODING_ANLAS} Anlas"),
+                )
+                await conn.execute(
+                    """INSERT INTO counters(key_id,day,anlas,requests) VALUES(?,?,?,1)
+                       ON CONFLICT(key_id,day) DO UPDATE SET
+                       anlas=anlas+excluded.anlas,requests=requests+1""",
+                    (key_id, day, VIBE_ENCODING_ANLAS),
+                )
+                await conn.execute("UPDATE api_keys SET last_used_at=? WHERE id=?", (now, key_id))
+                await conn.execute(
+                    "UPDATE vibe_encoding_reservations SET status='settled' WHERE token=?", (token,),
+                )
+                await conn.commit()
+                return True
+            except BaseException:
+                await conn.rollback()
+                raise
+
+    async def charge_registered_key(self, discord_id: str, day: str) -> str:
+        """Restore only personal V5 and legacy image quota, once per Discord ID/day.
+
+        A separate SQLite connection and immediate transaction make concurrent
+        claims atomic without altering raw usage, global V5, or Anlas totals.
+        """
+        async with aiosqlite.connect(self.path, timeout=10) as conn:
+            try:
+                await conn.execute("BEGIN IMMEDIATE")
+                row = await (await conn.execute(
+                    """SELECT k.id FROM discord_registrations AS r
+                       JOIN api_keys AS k ON k.id=r.key_id
+                       WHERE r.discord_id=? AND k.enabled=1
+                         AND (k.expires_at IS NULL OR k.expires_at>?)""",
+                    (discord_id, time.time()),
+                )).fetchone()
+                if row is None:
+                    await conn.rollback()
+                    return "not_registered"
+                key_id = row[0]
+                claim = await conn.execute(
+                    """INSERT INTO discord_daily_charges(discord_id,day,key_id,created_at)
+                       VALUES(?,?,?,?) ON CONFLICT(discord_id,day) DO NOTHING""",
+                    (discord_id, day, key_id, time.time()),
+                )
+                if claim.rowcount == 0:
+                    await conn.rollback()
+                    return "already"
+                await conn.execute(
+                    """INSERT INTO daily_quota_offsets(key_id,day,v5,legacy_free_images,v5_units)
+                       SELECT key_id,day,v5,legacy_free_images,v5_units FROM counters
+                       WHERE key_id=? AND day=?
+                       ON CONFLICT(key_id,day) DO UPDATE SET
+                           v5=excluded.v5,
+                           v5_units=excluded.v5_units,
+                           legacy_free_images=excluded.legacy_free_images""",
+                    (key_id, day),
+                )
+                await conn.commit()
+                return "charged"
+            except Exception:
+                await conn.rollback()
+                raise
+
+    async def get_discord_registration(self, discord_id: str) -> Optional[aiosqlite.Row]:
+        cur = await self._db.execute(
+            """SELECT r.discord_id,r.key_id,r.token,k.token AS active_token
+               FROM discord_registrations AS r
+               LEFT JOIN api_keys AS k ON k.id=r.key_id
+               WHERE r.discord_id=?""",
+            (discord_id,),
+        )
+        return await cur.fetchone()
+
+    async def restore_discord_key(self, discord_id: str, token: str) -> tuple[str, int, int]:
+        """Return (status, current key id, previous key id), restoring if deleted."""
+        async with aiosqlite.connect(self.path, timeout=10) as conn:
+            try:
+                await conn.execute("BEGIN IMMEDIATE")
+                row = await (await conn.execute(
+                    """SELECT r.key_id,k.id,k.token FROM discord_registrations AS r
+                       LEFT JOIN api_keys AS k ON k.id=r.key_id WHERE r.discord_id=?""",
+                    (discord_id,),
+                )).fetchone()
+                if row is None:
+                    await conn.rollback()
+                    return ("not_registered", 0, 0)
+                old_key_id = int(row[0])
+                if row[1] is not None:
+                    await conn.execute(
+                        "UPDATE discord_registrations SET token=? WHERE discord_id=?",
+                        (row[2], discord_id),
+                    )
+                    await conn.commit()
+                    return ("active", old_key_id, old_key_id)
+                cur = await conn.execute(
+                    """INSERT INTO api_keys
+                       (name,token,enabled,daily_images,daily_anlas,daily_v5,monthly_anlas,
+                        daily_text_tokens,rpm,allow_anlas,allow_img2img,exclude_global_v5,
+                        image_model_scope,is_admin,expires_at,created_at)
+                       VALUES (?,?,1,100,0,30,0,0,5,0,0,0,'all',0,NULL,?)""",
+                    ("Discord:" + discord_id, token, time.time()),
+                )
+                new_key_id = int(cur.lastrowid)
+                await conn.execute(
+                    "UPDATE discord_registrations SET key_id=?,token=? WHERE discord_id=?",
+                    (new_key_id, token, discord_id),
+                )
+                await conn.commit()
+                return ("restored", new_key_id, old_key_id)
+            except Exception:
+                await conn.rollback()
+                raise
+
+    async def rollback_discord_key_restore(self, discord_id: str, new_key_id: int,
+                                           old_key_id: int) -> None:
+        async with aiosqlite.connect(self.path, timeout=10) as conn:
+            try:
+                await conn.execute("BEGIN IMMEDIATE")
+                current = await (await conn.execute(
+                    "SELECT key_id FROM discord_registrations WHERE discord_id=?",
+                    (discord_id,),
+                )).fetchone()
+                if current is not None and int(current[0]) == new_key_id:
+                    await conn.execute(
+                        "UPDATE discord_registrations SET key_id=? WHERE discord_id=?",
+                        (old_key_id, discord_id),
+                    )
+                    await conn.execute("DELETE FROM api_keys WHERE id=?", (new_key_id,))
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
 
     async def reset_daily_image_quota(self, key_id: int, day: str) -> None:
         """重置单个 Key 当日的 V5 与 Anlas 可用额度基线。

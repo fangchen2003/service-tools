@@ -94,6 +94,7 @@ def state(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["/ai/generate-image-stream", "/nai/ai/generate-image-stream"])
 async def test_stream_reuses_reference_validation_cost_and_sse_wire_format(state, path):
+    state.db.keys["fixture-1"]["is_admin"] = True
     response = await post(path, image_body(precise=1))
     assert response.status_code == 200
     assert response.content == event("intermediate") + event()
@@ -109,6 +110,7 @@ async def test_stream_reuses_reference_validation_cost_and_sse_wire_format(state
 @pytest.mark.parametrize("frames", [[], [event("intermediate")], [b'data: {"event_type":"error"}\n\n'],
                                           [event()[:-1]], [b'data: invalid\n\n']])
 async def test_empty_progress_error_truncated_and_malformed_never_charge(state, frames):
+    state.db.keys["fixture-1"]["is_admin"] = True
     state.nai.frames = Frames(frames)
     response = await post("/ai/generate-image-stream", image_body(precise=1))
     assert b'"event_type": "error"' in response.content
@@ -117,7 +119,8 @@ async def test_empty_progress_error_truncated_and_malformed_never_charge(state, 
 
 
 @pytest.mark.asyncio
-async def test_partial_batch_charges_completed_reference_fee_and_counts_duplicate_once(state):
+async def test_partial_batch_charges_only_completed_share_and_counts_duplicate_once(state):
+    state.db.keys["fixture-1"]["is_admin"] = True
     body = image_body(precise=1, n_samples=2)
     state.nai.frames = Frames([event(), event(), httpx.ReadError("private transport detail")])
     response = await post("/ai/generate-image-stream", body)
@@ -130,6 +133,7 @@ async def test_partial_batch_charges_completed_reference_fee_and_counts_duplicat
 @pytest.mark.asyncio
 @pytest.mark.parametrize('completed,anlas', [(2, 9), (3, 18)])
 async def test_stream_reference_batch_discount_uses_completed_count(state, completed, anlas):
+    state.db.keys["fixture-1"]["is_admin"] = True  # Paid-path fixture, never an ordinary entitlement.
     body = image_body(precise=1, width=512, height=512, steps=20,
                       image='fixture', strength=1, n_samples=3)
     state.nai.frames = Frames([*(event(index=i) for i in range(completed)),
@@ -142,6 +146,7 @@ async def test_stream_reference_batch_discount_uses_completed_count(state, compl
 @pytest.mark.asyncio
 @pytest.mark.parametrize('indices,anlas', [([0], 0), ([1], 0), ([1, 0, 1], 4)])
 async def test_partial_batch_applies_one_discount_to_completed_images(state, indices, anlas):
+    state.db.keys["fixture-1"]["is_admin"] = True  # Paid-path fixture, never an ordinary entitlement.
     # Gate 只对完整结果结算；折扣按已完成张数重算，不由到达顺序或重复事件决定。
     body = image_body(width=512, height=512, steps=20, image='fixture', strength=1, n_samples=3)
     state.nai.frames = Frames([*(event(index=i) for i in indices), httpx.ReadError('fixture')])
@@ -158,6 +163,7 @@ async def test_partial_batch_applies_one_discount_to_completed_images(state, ind
 ])
 async def test_stream_anomaly_is_estimated_separately_from_user_charge(
         state, paid, finals, expected_charge, expected_uncertain):
+    state.db.keys["fixture-1"]["is_admin"] = True  # Paid-path fixture, never an ordinary entitlement.
     state.nai.frames = Frames([event('intermediate'), *(event(index=i) for i in finals),
                               httpx.ReadError('private failure')])
     await post('/ai/generate-image-stream', image_body(width=256, height=256, steps=23,
@@ -170,6 +176,7 @@ async def test_stream_anomaly_is_estimated_separately_from_user_charge(
 
 @pytest.mark.asyncio
 async def test_partial_reference_batch_records_only_unsettled_difference_once(state):
+    state.db.keys["fixture-1"]["is_admin"] = True  # Paid-path fixture, never an ordinary entitlement.
     state.nai.frames = Frames([event(), event(), httpx.ReadError('fixture')])
     await post('/ai/generate-image-stream', image_body(
         precise=1, width=512, height=512, steps=20, image='fixture', strength=1, n_samples=3))
@@ -181,6 +188,7 @@ async def test_partial_reference_batch_records_only_unsettled_difference_once(st
 @pytest.mark.asyncio
 @pytest.mark.parametrize('uncertain', [False, True])
 async def test_stream_before_headers_preserves_upstream_outcome_flag(state, uncertain):
+    state.db.keys["fixture-1"]["is_admin"] = True  # Paid-path fixture, never an ordinary entitlement.
     state.nai.error = UpstreamError(502, 'fixture', billing_uncertain=uncertain)
     await post('/ai/generate-image-stream', image_body(width=256, height=256, steps=23, controlnet_model='fixture'))
     assert not state.db.charges
@@ -206,15 +214,16 @@ async def test_wrong_content_type_rejected_before_headers_and_no_charge(state):
 @pytest.mark.asyncio
 async def test_stream_preserves_permission_and_parameter_rejections(state):
     state.db.keys["fixture-1"]["allow_anlas"] = False
-    assert (await post("/ai/generate-image-stream", image_body(precise=1))).status_code == 402
+    assert (await post("/ai/generate-image-stream", image_body(precise=1))).status_code == 400
     assert (await post("/ai/generate-image-stream", image_body(), "unknown")).status_code == 401
     invalid = image_body() | {"model": "unknown"}
     assert (await post("/ai/generate-image-stream", invalid)).status_code == 400
     assert not state.nai.calls
 
 
-async def start_asgi(state, *, send_failure=False):
-    response = await main.generate_image_stream(request(image_body(precise=1)))
+async def start_asgi(state, *, send_failure=False, admin=True):
+    state.db.keys["fixture-1"]["is_admin"] = admin
+    response = await main.generate_image_stream(request(image_body(precise=1 if admin else 0)))
     disconnect = asyncio.Event()
     messages = []
 
@@ -273,6 +282,7 @@ async def test_disconnect_does_not_release_budget_or_skip_final_settlement(state
 
 @pytest.mark.asyncio
 async def test_cancel_anyio_scope_drains_upstream_and_settles(state):
+    state.db.keys["fixture-1"]["is_admin"] = True
     release = asyncio.Event()
     state.nai.frames = Frames([release, event()])
     scope = anyio.CancelScope()
@@ -303,7 +313,7 @@ async def test_cancel_anyio_scope_drains_upstream_and_settles(state):
 async def test_disconnect_while_queued_never_dispatches(state):
     state.settings.key_concurrency = 1
     await state.key_sem(1, 1).acquire()
-    task, disconnected, _ = await start_asgi(state)
+    task, disconnected, _ = await start_asgi(state, admin=False)
     await asyncio.sleep(0.01)
     assert state.global_waiting == 1
     disconnected.set()
@@ -326,22 +336,23 @@ async def test_disconnect_during_token_pacing_cancels_before_http_dispatch(state
 
 @pytest.mark.asyncio
 async def test_waiting_stream_rechecks_quota_after_prior_settlement(state):
-    state.db.keys["fixture-1"].update(daily_anlas=5)
+    state.db.keys["fixture-1"].update(daily_images=1)
     release = asyncio.Event()
     state.nai.frames = Frames([release, event()])
-    first = asyncio.create_task(post("/ai/generate-image-stream", image_body(precise=1)))
+    first = asyncio.create_task(post("/ai/generate-image-stream", image_body()))
     await state.nai.entered.wait()
-    second = asyncio.create_task(post("/ai/generate-image-stream", image_body(precise=1)))
+    second = asyncio.create_task(post("/ai/generate-image-stream", image_body()))
     await asyncio.sleep(0.01)
     assert len(state.nai.calls) == 1
     release.set()
     assert (await first).status_code == 200
-    assert (await second).status_code == 402
+    assert (await second).status_code == 429
     assert len(state.nai.calls) == 1 and len(state.db.charges) == 1
 
 
 @pytest.mark.asyncio
 async def test_real_http_delivers_preview_before_final_without_buffering(state):
+    state.db.keys["fixture-1"]["is_admin"] = True
     release = asyncio.Event()
     state.nai.frames = Frames([event("intermediate"), release, event()])
     listener = socket.socket()

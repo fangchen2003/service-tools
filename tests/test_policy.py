@@ -261,10 +261,10 @@ def test_clamp_rejects_img2img_when_disallowed():
     assert err and "img2img" in err
 
 
-def test_clamp_allows_img2img_when_allowed():
+def test_clamp_rejects_paid_img2img_even_when_permission_allowed():
     out, _, err = clamp_image_params(
         img_payload(image="AAAA"), max_pixels=1048576, max_steps=28, allow_img2img=True)
-    assert err is None
+    assert err and "Anlas" in err
     assert out["parameters"]["image"] == "AAAA"
 
 

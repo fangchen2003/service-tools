@@ -160,6 +160,64 @@ def test_only_encoded_vibes_can_omit_extraction_amount(model):
 
 
 
+VIBE_UUID = "1e6714a5-571c-4ec2-b34a-27f263bef0e2"
+
+
+def cached_vibes(key=VIBE_UUID, count=1):
+    # BaiBai's V4/V4.5 request uses encoded references and omits extraction.
+    return payload(reference_image_multiple_cached=[
+        {"cache_secret_key": key, "data": ENCODED} for _ in range(count)
+    ], reference_strength_multiple=[0.6] * count)
+
+
+@pytest.mark.parametrize("key", [VIBE_UUID, "b" * 64])
+@pytest.mark.parametrize("model", ["nai-diffusion-4-full", "nai-diffusion-4-5-full"])
+def test_cached_vibe_accepts_uuid_or_hex_without_changing_payload(key, model):
+    body = cached_vibes(key, count=5)
+    body["model"] = model
+    assert validate_image_references(body) is None
+    assert body["parameters"]["reference_image_multiple_cached"][0]["cache_secret_key"] == key
+    assert "reference_information_extracted_multiple" not in body["parameters"]
+    assert estimate_image_cost(body)["anlas"] == 2
+
+
+@pytest.mark.parametrize("key", [
+    VIBE_UUID.upper(), VIBE_UUID.replace("-4ec2-", "-1ec2-"),
+    VIBE_UUID.replace("-b34a-", "-734a-"), VIBE_UUID.replace("-", ""),
+    " " + VIBE_UUID, VIBE_UUID + "\n", "a" * 63, "a" * 65, None, True,
+])
+def test_cached_vibe_rejects_invalid_cache_keys(key):
+    assert validate_image_references(cached_vibes(key))
+
+
+def test_vibe_uuid_does_not_relax_data_arrays_models_or_precise_validation():
+    missing = cached_vibes()
+    del missing["parameters"]["reference_image_multiple_cached"][0]["data"]
+    invalid_data = cached_vibes()
+    invalid_data["parameters"]["reference_image_multiple_cached"][0]["data"] = "not base64"
+    mismatch = cached_vibes()
+    mismatch["parameters"]["reference_strength_multiple"] = []
+    explicit_empty = cached_vibes()
+    explicit_empty["parameters"]["reference_information_extracted_multiple"] = []
+    unsupported = cached_vibes()
+    unsupported["model"] = "nai-diffusion-5-full"
+    precise = payload(precise=1)
+    precise["parameters"]["director_reference_images_cached"][0]["cache_secret_key"] = VIBE_UUID
+    for body in (missing, invalid_data, mismatch, explicit_empty, unsupported, precise, cached_vibes(count=17)):
+        assert validate_image_references(body)
+
+
+@pytest.mark.parametrize("model", ["nai-diffusion-3", "nai-diffusion-4-full", "nai-diffusion-4-5-full"])
+def test_only_encoded_vibes_can_omit_extraction_amount(model):
+    body = payload(model, vibes=1)
+    del body["parameters"]["reference_information_extracted_multiple"]
+    assert (validate_image_references(body) is None) == (model != "nai-diffusion-3")
+    for invalid in ([], [float("nan")], [True]):
+        body["parameters"]["reference_information_extracted_multiple"] = invalid
+        assert validate_image_references(body)
+
+
+
 def test_vibe_encoding_validation_and_price():
     body = {"model": "nai-diffusion-4-5-full", "image": PNG, "informationExtracted": 0.7}
     assert VIBE_ENCODING_ANLAS == 2

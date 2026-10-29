@@ -74,10 +74,12 @@ class GateState:
             "sources": dict(self._configuration_sources),
             "image_policy": {
                 "free_max_steps_by_tier": {
-                    "v5": min(23, self.settings.max_steps),
+                    "v5": min(28, self.settings.max_steps),
                     "legacy": self.settings.max_steps,
                 },
-                "paid_max_steps": None,
+                "free_only": True,
+                "anlas_quota_enabled": False,
+                "paid_max_steps": min(28, self.settings.max_steps),
                 "admin_max_steps": None,
                 "max_pixels": self.settings.max_pixels,
                 "safe_clamp": self.settings.safe_clamp,
@@ -226,7 +228,7 @@ class GateState:
         }
 
     async def wait_for_tag_request(self, key_id: int) -> bool:
-        """Queue autocomplete without reserving future image slots or buffering bodies."""
+        """Bound autocomplete concurrency without image pacing or buffering bodies."""
         async with self._tag_condition:
             # Bound idle requests independently of the outer queue timeout.
             if self._tag_waiting >= max(16, self.settings.global_concurrency * 16):
@@ -234,21 +236,11 @@ class GateState:
             self._tag_waiting += 1
             try:
                 while True:
-                    now = time.monotonic()
-                    delay = max(0.0, self._tag_next_at.get(key_id, 0) - now)
                     capacity = min(8, max(1, self.settings.global_concurrency))
                     if key_id not in self._tag_active and len(self._tag_active) < capacity:
-                        if not delay:
-                            self._tag_active.add(key_id)
-                            self._tag_next_at[key_id] = now + max(
-                                1.0, self.settings.key_image_min_interval)
-                            return True
-                        try:
-                            await asyncio.wait_for(self._tag_condition.wait(), delay)
-                        except TimeoutError:
-                            pass
-                    else:
-                        await self._tag_condition.wait()
+                        self._tag_active.add(key_id)
+                        return True
+                    await self._tag_condition.wait()
             finally:
                 self._tag_waiting -= 1
 

@@ -19,6 +19,10 @@ class DB:
                         monthly_anlas=100, daily_v5=10, allow_anlas=True,
                         image_model_scope="all", is_admin=False, exclude_global_v5=False)
 
+    async def get_vibe_remaining(self, key_id, day=None):
+        assert day is None  # Vibe uses the database's Shanghai day, not site day.
+        return {1: 2, 2: 0}[key_id]
+
     async def month_anlas(self, key_id, _month):
         return self.used[key_id]
 
@@ -49,8 +53,15 @@ def test_view_limits_by_current_key_and_shared_v5_without_upstream_account():
         st = state()
         first = await subscription_payload(st, st.db.key)
         second = await subscription_payload(st, st.db.key | {"id": 2})
-        assert first["naiGate"]["anlasLeft"] == 80
-        assert second["naiGate"]["anlasLeft"] == 20
+        assert first["naiGate"]["anlasLeft"] == 0
+        assert second["naiGate"]["anlasLeft"] == 0
+        assert first["naiGate"]["anlasEnabled"] is False
+        assert first["trainingStepsLeft"]["fixedTrainingStepsLeft"] == 0
+        assert first["naiGate"]["anlasMonthlyLimit"] == 0
+        assert first["naiGate"]["freeOnly"] is True
+        assert first["naiGate"]["vibeRemainingToday"] == 2
+        assert second["naiGate"]["vibeRemainingToday"] == 0
+        assert first["naiGate"]["vibeDailyLimit"] == 3
         assert first["naiGate"]["v5LeftToday"] == 3
         assert second["naiGate"]["v5LeftToday"] == 1
         assert first["naiGate"]["account"] is None

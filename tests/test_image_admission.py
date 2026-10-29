@@ -33,34 +33,34 @@ async def test_image_admission_uses_key_limit_but_not_legacy_global_slot(state):
 
 
 @pytest.mark.asyncio
-async def test_concurrent_requests_cannot_overspend_one_key(state):
+async def test_concurrent_requests_cannot_overspend_one_key_v5(state):
     key = state.db.keys["fixture-1"]
-    key["daily_anlas"] = 2
-    async with main.reserve_image_budget(key, {"anlas": 2, "v5": 0}):
+    key["daily_v5"] = 1
+    async with main.reserve_image_budget(key, {"anlas": 0, "v5": 1}):
         assert len(state.image_reservations) == 1
         with pytest.raises(main.GateError) as caught:
-            async with main.reserve_image_budget(key, {"anlas": 2, "v5": 0}):
+            async with main.reserve_image_budget(key, {"anlas": 0, "v5": 1}):
                 pass
-        assert caught.value.status == 402
+        assert caught.value.status == 429
     assert not state.image_reservations
 
 
 @pytest.mark.asyncio
-async def test_concurrent_keys_share_global_anlas_budget(state):
-    state.settings.global_monthly_anlas = 2
+async def test_concurrent_keys_share_global_v5_budget(state):
+    state.settings.global_daily_v5 = 1
     first, second = state.db.keys.values()
-    async with main.reserve_image_budget(first, {"anlas": 2, "v5": 0}):
+    async with main.reserve_image_budget(first, {"anlas": 0, "v5": 1}):
         with pytest.raises(main.GateError) as caught:
-            async with main.reserve_image_budget(second, {"anlas": 2, "v5": 0}):
+            async with main.reserve_image_budget(second, {"anlas": 0, "v5": 1}):
                 pass
         assert caught.value.status == 402
 
 
 @pytest.mark.asyncio
-async def test_v5_cost_change_is_checked_against_pending_paid_budget(state):
+async def test_v5_cost_change_to_paid_is_always_refused(state):
     state.settings.global_monthly_anlas = 2
     first, second = state.db.keys.values()
-    async with main.reserve_image_budget(first, {"anlas": 2, "v5": 0}):
+    async with main.reserve_image_budget(first, {"anlas": 0, "v5": 0}):
         async with main.reserve_image_budget(second, {"anlas": 0, "v5": 1}) as reservation:
             with pytest.raises(main.GateError) as caught:
                 await reservation.update(second, {"anlas": 2, "v5": 0})

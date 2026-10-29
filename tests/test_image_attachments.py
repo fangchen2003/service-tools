@@ -55,6 +55,7 @@ async def test_image_mask_and_reference_dedup_preserve_metadata():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["image", "mask", "vibe", "precise"])
 async def test_uploads_reach_existing_generation_validation_and_accounting(state, mode):
+    state.db.keys["fixture-1"]["is_admin"] = True  # Paid-path fixture, never an ordinary entitlement.
     image = png(64, 64)
     payload = image_body()
     params = payload["parameters"]
@@ -104,6 +105,7 @@ async def test_upload_format_cannot_skip_admission(state, restriction):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["upscale", "augment-image", "encode-vibe"])
 async def test_image_tool_uploads_and_vibe_field_alias(state, operation):
+    state.db.keys["fixture-1"]["is_admin"] = True  # Paid-path fixture, never an ordinary entitlement.
     payload = {"image": "image", "model": "nai-diffusion-5-curated", "declared_blur_sigma": 0}
     state.nai.content = zipped()
     if operation == "augment-image":
@@ -115,20 +117,22 @@ async def test_image_tool_uploads_and_vibe_field_alias(state, operation):
     assert response.status_code == 200
     assert state.nai.calls[0][2]["image"] == base64.b64encode(png()).decode()
     if operation == "encode-vibe":
-        assert state.nai.calls[0][2]["information_extracted"] == .7
+        assert state.nai.calls[0][2]["informationExtracted"] == .7
     assert len(state.db.charges) == 1
 
 
 @pytest.mark.asyncio
-async def test_conflicting_vibe_encoding_fields_rejected_before_dispatch(state):
+async def test_canonical_vibe_field_takes_precedence_over_alias(state):
     response = await post_upload("/ai/encode-vibe", {
         "image": "image", "model": "nai-diffusion-4-5-full",
         "informationExtracted": .7, "information_extracted": .8}, [("image", png())])
-    assert response.status_code == 400 and not state.nai.calls
+    assert response.status_code == 200
+    assert state.nai.calls[-1][2]["informationExtracted"] == .7
 
 
 @pytest.mark.asyncio
 async def test_multipart_generation_with_binary_stream(state):
+    state.db.keys["fixture-1"]["is_admin"] = True  # Paid-path fixture, never an ordinary entitlement.
     state.nai = StreamingNai()
     state.nai.content_type = "application/x-msgpack"
     state.nai.frames = Frames([frame({"event_type": "final", "samp_ix": 0, "image": PNG}, "msgpack")])

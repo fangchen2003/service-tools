@@ -334,6 +334,8 @@ async def test_real_generation_must_settle_before_balance_read(env, monkeypatch)
         await original(*args, **kwargs)
 
     monkeypatch.setattr(env.st.db, "record_success", settle)
+    await env.st.db._db.execute("UPDATE api_keys SET is_admin=1 WHERE id=?", (env.key["id"],))
+    await env.st.db._db.commit()
     generation = asyncio.create_task(post("/ai/generate-image", image_body(width=1152, steps=23)))
     reconcile = None
     try:

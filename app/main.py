@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import admin, registration_routes
+from . import admin, public_stats, registration_routes, workbench_auth
 from .registration import configured_service
 from .body import read_bounded_body, read_json_body
 from .config import load_settings
@@ -150,6 +150,9 @@ async def lifespan(app: FastAPI):
     app.state.gate = STATE
     registration_http = httpx.AsyncClient()
     app.state.registrar = configured_service(STATE.db, registration_http)
+    app.state.workbench_auth = workbench_auth.configured_service(STATE.db, registration_http)
+    if app.state.workbench_auth is not None:
+        await app.state.workbench_auth.initialize()
     cleanup_task = asyncio.create_task(inactive_key_cleanup_loop())
     try:
         yield
@@ -168,10 +171,13 @@ app = FastAPI(title="NAI Gate", docs_url=None, redoc_url=None, lifespan=lifespan
 if SETTINGS.cors_origins:
     app.add_middleware(CORSMiddleware, allow_origins=SETTINGS.cors_origins,
                        allow_methods=["*"], allow_headers=["*"], allow_credentials=False)
+app.add_middleware(workbench_auth.SecurityHeadersMiddleware)
 app.include_router(admin.router)
 app.include_router(registration_routes.router)
 app.mount("/admin/assets", StaticFiles(directory=Path(__file__).parent / "static" / "assets"),
           name="admin-assets")
+app.include_router(workbench_auth.router)
+app.include_router(public_stats.router)
 
 
 @app.exception_handler(GateError)
@@ -269,16 +275,13 @@ def check_image_tool_permission(key) -> None:
 
 def prepare_vibe_encoding(body: dict):
     body = copy.deepcopy(body)
-    if "information_extracted" in body:
-        value = body.pop("information_extracted")
-        if "informationExtracted" in body and body["informationExtracted"] != value:
-            raise err(400, "两种 informationExtracted 字段的值不一致")
-        body["informationExtracted"] = value
+    if "informationExtracted" not in body and "information_extracted" in body:
+        body["informationExtracted"] = body["information_extracted"]
     problem = validate_vibe_encoding(body)
     if problem:
         raise err(400, problem)
     return {"image": body["image"], "model": body["model"],
-            "information_extracted": body["informationExtracted"]}
+            "informationExtracted": body["informationExtracted"]}
 
 
 @asynccontextmanager
@@ -315,8 +318,8 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
     own = [r for r in pending if r.key_id == key["id"]]
     # A request started before midnight can settle after midnight; count every
     # in-flight reservation conservatively against the current period.
-    own_day = own_month = own
-    global_day = global_month = pending
+    own_day = own
+    global_day = pending
     if legacy_free_images and key["daily_images"] > 0:
         if c["legacy_free_images"] + sum(r.legacy for r in own_day) + legacy_free_images > key["daily_images"]:
             raise err(429, f"今日 V4.5 及以下免费图额度已用完（{key['daily_images']} 张/天），明日恢复")
@@ -331,20 +334,7 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
             if units(total) + sum(units(r.v5) for r in global_day if not r.exclude_global_v5) + units(est["v5"]) > units(g):
                 raise err(402, f"全站今日 V5 额度已用完（{int(g)} 单位/天），明天再来")
     if est["anlas"] > 0:
-        if not key["allow_anlas"]:
-            raise err(402, "该请求会消耗 Anlas，此 Key 未开通付费额度权限")
-        if key["daily_anlas"] > 0 and c["anlas"] + sum(r.anlas for r in own_day) + est["anlas"] > key["daily_anlas"]:
-            raise err(402, f"今日 Anlas 额度不足（已用 {c['anlas']:.0f} / 上限 "
-                           f"{key['daily_anlas']:.0f}），明日恢复")
-        used = await STATE.db.month_anlas(key["id"], STATE.month())
-        if key["monthly_anlas"] > 0 and used + sum(r.anlas for r in own_month) + est["anlas"] > key["monthly_anlas"]:
-            raise err(402, f"本月 Anlas 额度不足（已用 {used:.0f}/{key['monthly_anlas']:.0f}）")
-        budget = float(await STATE.db.get_setting(
-            "global_monthly_anlas", STATE.settings.global_monthly_anlas) or 0)
-        if budget > 0:
-            all_used = await STATE.db.month_anlas_all(STATE.month())
-            if all_used + sum(r.anlas for r in global_month) + est["anlas"] > budget:
-                raise err(402, f"全站本月 Anlas 预算已耗尽（{budget:.0f}），请联系站长")
+        raise err(402, "普通用户仅支持免费功能；该请求会消耗 Anlas，无法安全转换为免费请求")
 
 
 class ImageReservation:
@@ -559,7 +549,7 @@ async def augment_image(request: Request):
     return await image_tool(request, "augment-image")
 
 async def encode_vibe(request: Request):
-    """Encode a V4/V4.5 reference; only a successful binary result costs 2 Anlas."""
+    """Encode using a claimed daily opportunity; actual upstream cost is audited."""
     key = await authenticate(request)
     check_image_cooldown()
     await check_rpm(key)
@@ -569,7 +559,8 @@ async def encode_vibe(request: Request):
     model = payload["model"]
     estimate = {"anlas": VIBE_ENCODING_ANLAS, "v5": 0}
     check_cost_limit(estimate, cost_limit)
-    await quota_image_check(key, estimate)
+    if not key["is_admin"] and not await STATE.db.get_vibe_remaining(key["id"]):
+        raise err(429, "今日 Vibe 编码额度未领取或已用完，请在指定服务器使用 /vibe（每天 3 次）")
 
     async def record_encoding_429(retry_after: float) -> None:
         # 回调更新冷却，日志由请求收尾时统一记录。
@@ -578,6 +569,11 @@ async def encode_vibe(request: Request):
         ))
 
     async def perform_encoding():
+        reservation = None
+        if not key["is_admin"]:
+            reservation = await STATE.db.reserve_vibe_encoding(key["id"])
+            if reservation is None:
+                raise err(429, "今日 Vibe 编码额度未领取或已用完，请使用 /vibe（每天 3 次）")
         try:
             resp = await upstream_call(
                 f"{STATE.nai.image_host}/ai/encode-vibe", payload,
@@ -585,6 +581,8 @@ async def encode_vibe(request: Request):
                 requires_anlas=True, image_lane=True, max_response_bytes=MAX_RESPONSE_BYTES,
             )
         except (GateError, httpx.HTTPError, TimeoutError) as exc:
+            if reservation is not None:
+                await STATE.db.release_vibe_encoding(reservation)
             await record(key, "vibe_encode", model, "error",
                          detail=exc.message if isinstance(exc, GateError) else "上游编码请求失败，未记费",
                          unconfirmed_anlas=VIBE_ENCODING_ANLAS
@@ -593,17 +591,24 @@ async def encode_vibe(request: Request):
                 raise
             raise err(502, "Vibe 编码连接失败，未记费；请勿自动重试") from None
         if resp.status_code not in (200, 201):
+            if reservation is not None:
+                await STATE.db.release_vibe_encoding(reservation)
             await record(key, "vibe_encode", model, "error", detail=f"upstream {resp.status_code}",
                          unconfirmed_anlas=VIBE_ENCODING_ANLAS if resp.status_code >= 500 else 0)
             raise err(resp.status_code if 400 <= resp.status_code < 500 else 502,
                       f"Vibe 编码失败（上游状态 {resp.status_code}），未记费")
         content_type = resp.headers.get("content-type", "application/octet-stream").lower()
         if not resp.content or "json" in content_type or content_type.startswith("text/"):
+            if reservation is not None:
+                await STATE.db.release_vibe_encoding(reservation)
             await record(key, "vibe_encode", model, "error", detail="上游未返回有效二进制编码，未记费",
                          unconfirmed_anlas=VIBE_ENCODING_ANLAS)
             raise err(502, "Vibe 编码未返回有效数据，未记费")
-        await settle_record(key, "vibe_encode", model, "ok", anlas=VIBE_ENCODING_ANLAS,
-                            detail=f"Vibe 编码 {VIBE_ENCODING_ANLAS} Anlas")
+        if reservation is not None:
+            await STATE.db.settle_vibe_encoding(reservation, model)
+        else:
+            await settle_record(key, "vibe_encode", model, "ok", anlas=VIBE_ENCODING_ANLAS,
+                                detail=f"Vibe 编码 {VIBE_ENCODING_ANLAS} Anlas")
         return Response(resp.content, media_type="application/octet-stream",
                         headers={"Cache-Control": "no-store",
                                  **receipt_headers(request, image_receipt(payload, "encode-vibe", 0, estimate))})
@@ -611,14 +616,16 @@ async def encode_vibe(request: Request):
     await wait_for_user_image_slot(key)
     async with acquire_concurrency(key, image=True):
         check_image_cooldown()
-        async with reserve_image_budget(key, estimate):
+        # Track in-flight paid audit work for reconciliation without applying
+        # obsolete numeric Anlas entitlement checks to the bounded daily claim.
+        async with reserve_image_budget(key, {"anlas": 0, "v5": 0}):
             return await complete_image_operation(perform_encoding())
 
 
 def image_step_limit(key, model_tier):
-    if key["is_admin"] or key["allow_anlas"]:
+    if key["is_admin"]:
         return None
-    return min(23 if model_tier == "v5" else 28, max(1, STATE.settings.max_steps))
+    return min(28, max(1, STATE.settings.max_steps))
 
 
 def prepare_image_pricing(model: str, parameters: dict, key, *, log_rejections: bool = False):
@@ -660,14 +667,14 @@ def prepare_image_pricing(model: str, parameters: dict, key, *, log_rejections: 
                 record(key, "image", model, "rejected", detail="img2img 未开通 Anlas 权限")
             raise err(402, "该 Key 未开通 Anlas 权限，无法使用图生图 / 局部重绘")
 
-    # 免费档钳制：只对未开通 Anlas 的 Key 生效；开通 Anlas 的 Key 靠配额约束
-    if STATE.settings.safe_clamp and not key["is_admin"] and not key["allow_anlas"]:
+    # SAFE_CLAMP and legacy allow_anlas cannot opt ordinary keys into paid paths.
+    if not key["is_admin"]:
         try:
             p0, notes, problem = clamp_image_pricing(
                 model, p0,
                 max_pixels=STATE.settings.max_pixels,
                 max_steps=STATE.settings.max_steps,
-                allow_img2img=True,  # 权限已在上面预检
+                allow_img2img=False,
             )
         except (TypeError, ValueError, OverflowError):
             raise err(400, "图片参数无效") from None
@@ -694,6 +701,8 @@ def prepare_image_pricing(model: str, parameters: dict, key, *, log_rejections: 
 async def prepare_image_generation(body: dict, key, *, log_rejections: bool = False):
     """Validate real image/reference data before applying the shared pricing policy."""
     body = copy.deepcopy(body)
+    if not key["is_admin"] and body.get("action", "generate") != "generate":
+        raise err(400, "普通用户仅支持免费文生图 action=generate；无法安全转换其他生成操作")
     if body.get("image") or body.get("mask"):
         raise err(400, "生图请求的 image 和 mask 请放在 parameters 中")
     problem = validate_image_references(body)
@@ -733,6 +742,8 @@ async def prepare_image_generation(body: dict, key, *, log_rejections: bool = Fa
 
 
 async def resolve_v5_price(body: dict, key, *, exhausted: bool = False, reservation=None):
+    if exhausted and not key["is_admin"]:
+        raise err(402, "V5 免费额度已耗尽；普通用户不会回退到 Anlas 付费生成，请等待额度恢复")
     p = body["parameters"]
     problem = validate_image_references(body)
     if problem:
@@ -757,7 +768,7 @@ async def resolve_v5_pricing(model: str, p: dict, key, *, pure_generation: bool,
                             exhausted: bool = False, reservation=None):
     config = await effort_settings(STATE.db)
     auto = False
-    if (config["v5_auto_medium"] and not key["is_admin"] and not key["allow_anlas"]
+    if (config["v5_auto_medium"] and not key["is_admin"]
             and model == "nai-diffusion-5-full" and pure_generation):
         cap = units(await STATE.db.get_setting("global_daily_v5", STATE.settings.global_daily_v5) or 0)
         used = units(await STATE.db.day_v5_total(STATE.day()))
@@ -814,8 +825,7 @@ async def quote_image(request: Request):
                 legacy = int(tier == "legacy" and pricing_free_eligible(model, p))
             except (TypeError, ValueError, OverflowError):
                 raise err(400, "图片参数无效，无法报价") from None
-            await quota_image_check(key, {**price, "anlas": price["anlas"] + encoding_count * VIBE_ENCODING_ANLAS},
-                                    legacy_free_images=legacy)
+            await quota_image_check(key, price, legacy_free_images=legacy)
         billing_size = pricing_image_size(model, p, p["width"], p["height"])
         output_size = max_enhance_sizes(p["width"], p["height"])[1] if p.get("upscaled_enhance") else billing_size
     elif operation == "encode-vibe":
@@ -827,14 +837,23 @@ async def quote_image(request: Request):
         except ValueError as exc:
             raise err(400, str(exc)) from None
         price = {"anlas": cost, "v5": 0}
-    if operation != "generate-image":
+    if operation not in {"generate-image", "encode-vibe"}:
         async with STATE.image_budget_lock:
             await quota_image_check(key, price)
+    # Metadata already supplies the client-deduplicated encoding count. Quotes
+    # only inspect the Shanghai-day entitlement; actual encoding reserves it.
+    vibe_required = encoding_count + int(operation == "encode-vibe")
+    vibe_remaining = None
+    if vibe_required and not key["is_admin"]:
+        vibe_remaining = await STATE.db.get_vibe_remaining(key["id"])
+        if vibe_remaining < vibe_required:
+            raise err(429, "今日 Vibe 编码额度未领取或不足，请使用 /vibe（每天 3 次）")
     encoding_cost = encoding_count * VIBE_ENCODING_ANLAS
     effective = {name: p[name] for name in ("width", "height", "steps", "upscaled_enhance") if name in p}
     if model in MEDIUM_MODELS:
         effective["sampler"] = "k_euler_ancestral"
     return {"source": "gate", "anlas": price["anlas"] + encoding_cost, "v5": price["v5"],
+            "vibe_required": vibe_required, "vibe_remaining": vibe_remaining,
             "generation_anlas": price["anlas"], "encoding_anlas": encoding_cost,
             "encoding_count": encoding_count, "legacy_free_images": legacy,
             "cost_limit": price, "encoding_cost_limit": {"anlas": VIBE_ENCODING_ANLAS, "v5": 0},
@@ -1263,7 +1282,10 @@ async def v1_me(request: Request):
         "is_admin": bool(key["is_admin"]),
         "generated_images_total": generated_images.get(key["id"], 0),
         "image_policy": {
-            "max_steps": image_step_limit(key, "legacy"),
+            "free_only": not bool(key["is_admin"]),
+            "anlas_quota_enabled": False,
+            "max_steps": None if key["is_admin"] else min(28, STATE.settings.max_steps),
+            "v5_max_steps": None if key["is_admin"] else min(28, STATE.settings.max_steps),
             "max_steps_by_tier": {
                 tier: image_step_limit(key, tier) for tier in ("legacy", "v5")
             },
@@ -1276,11 +1298,13 @@ async def v1_me(request: Request):
             "images": c["images"], "daily_images": key["daily_images"],
             "legacy_free_images_today": c["legacy_free_images"],
             "anlas_today": round(float(c["anlas"]), 2),
-            "daily_anlas": key["daily_anlas"],
+            "daily_anlas": 0,  # Compatibility field; numeric quotas are disabled.
+            "vibe_remaining": None if key["is_admin"] else await STATE.db.get_vibe_remaining(key["id"]),
+            "vibe_daily_limit": None if key["is_admin"] else 3,
             "v5_today": c["v5"], "daily_v5": key["daily_v5"],
             "image_model_scope": key["image_model_scope"],
             "anlas_month": round(await STATE.db.month_anlas(key["id"], STATE.month()), 2),
-            "monthly_anlas": key["monthly_anlas"],
+            "monthly_anlas": 0,
             "text_tokens": c["text_tokens"], "daily_text_tokens": key["daily_text_tokens"],
             "requests": c["requests"],
         },
@@ -1409,7 +1433,16 @@ async def index():
     p = SETTINGS.announcement_path
     if p.exists() and p.read_text(encoding="utf-8").strip():
         return Response(p.read_text(encoding="utf-8"), media_type="text/html")
-    return Response(DEFAULT_ANNOUNCEMENT, media_type="text/html")
+    return FileResponse(Path(__file__).parent / "static" / "home.html", media_type="text/html")
+
+
+@app.get("/assets/gate-atelier-v1.webp")
+async def homepage_art():
+    return FileResponse(
+        Path(__file__).parent / "static" / "gate-atelier-v1.webp",
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @app.get("/admin")

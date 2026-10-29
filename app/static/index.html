@@ -13,7 +13,7 @@
 <script src="/admin/assets/theme.js?v=20261027-parity" defer></script>
 <script src="/admin/assets/sidebar-tools.js?v=20261027-sidebar-collapse" defer></script>
 <script src="/admin/assets/palette-picker.js?v=20261027-rose-pine" defer></script>
-<script src="/admin/assets/gate.js?v=20261027-mobile-records" defer></script>
+<script src="/admin/assets/gate.js?v=20261028-local-freeonly-pr7" defer></script>
 </head>
 <body class="gate-page">
 <div id="login">
@@ -78,7 +78,7 @@
   <section id="tab-set" class="gate-view" hidden>
     <div class="settings-layout">
       <nav class="settings-nav" aria-label="设置分组">
-        <button class="active" data-setting-page="budget" onclick="settingsPage('budget')" aria-current="page">预算</button>
+        <button class="active" data-setting-page="budget" onclick="settingsPage('budget')" aria-current="page">免费额度</button>
         <button data-setting-page="generation" onclick="settingsPage('generation')">生成</button>
         <button data-setting-page="upstream" onclick="settingsPage('upstream')">上游账号</button>
         <button data-setting-page="defaults" onclick="settingsPage('defaults')">Key 默认</button>
@@ -89,8 +89,8 @@
       </nav>
       <div class="settings-content">
         <section class="panel settings-page settings-fields" id="settings-budget">
-          <h2>预算与额度</h2>
-          <div class="setting-row"><label for="s_budget">全站月度预算<small>0 = 不限</small></label><div class="setting-control"><input id="s_budget" type="number" min="0" max="1000000" step="any" required><span>Anlas</span></div></div>
+          <h2>免费图片额度</h2>
+          <p class="settings-note">普通用户仅支持免费生成，V4.5 及以下最多 28 步，V5 High 最多 28 步、Medium 固定 14 步；High 和旧模型还受生成设置中的步数上限约束。超尺寸、多张、SMEA 自动调整为免费规格；付费参考、img2img 和局部重绘拒绝。V5 额度耗尽不回退付费。Vibe 编码须通过 /vibe 每日领取 3 次，北京时间零点归零且需重新领取；Anlas 仅保留用量审计。</p>
           <div class="setting-row"><label for="s_v5">全站每日 V5 额度<small>0 = 不限</small></label><div class="setting-control"><input id="s_v5" type="number" min="0" max="100000" step="1" required><span>单位</span></div></div>
           <div class="setting-row"><label for="s_auto_medium">V5 Full 自动节省<small>仅免费 Key 自动切换 Medium</small></label><div class="setting-check"><input id="s_auto_medium" type="checkbox"></div></div>
           <div class="setting-row"><label for="s_medium_threshold">Medium 切换阈值</label><div class="setting-control"><input id="s_medium_threshold" type="number" min="0" max="100" step="any" required><span>%</span></div></div>
@@ -149,14 +149,13 @@
     <div class="grid2">
       <div><label for="f_daily_images">每日免费图片</label><input id="f_daily_images" type="number" min="0" max="1000000" step="1" required></div>
       <div><label for="f_daily_v5">每日 V5 额度</label><input id="f_daily_v5" type="number" min="0" max="100000" step="1" required></div>
-      <div><label for="f_daily_anlas">每日 Anlas</label><input id="f_daily_anlas" type="number" min="0" max="100000" step="any" required></div>
-      <div><label for="f_monthly_anlas">每月 Anlas</label><input id="f_monthly_anlas" type="number" min="0" max="100000" step="any" required></div>
+
       <div><label for="f_daily_text">每日文本 Token</label><input id="f_daily_text" type="number" min="0" max="100000000" step="1" required></div>
       <div><label for="f_rpm">每分钟请求数</label><input id="f_rpm" type="number" min="1" max="600" step="1" required></div>
       <div><label for="f_expires" id="expiryLabel">有效天数 · 0 为长期</label><input id="f_expires" type="number" min="0" max="3650" step="1"></div>
     </div>
-    <label class="check"><input id="f_allow_anlas" type="checkbox"><span>允许消耗 Anlas</span></label>
-    <label class="check"><input id="f_allow_img2img" type="checkbox"><span>允许图生图 / 局部重绘<small>需同时允许消耗 Anlas</small></span></label>
+    <p class="settings-note">普通 Key 仅支持免费生成；Vibe 编码使用 /vibe 领取的每日 3 次独立额度。</p>
+    <label class="check"><input id="f_allow_img2img" type="checkbox"><span>允许免费图片处理工具<small>不开放付费 img2img、局部重绘、超分或去背景</small></span></label>
     <label class="check"><input id="f_exclude_global_v5" type="checkbox"><span>独立 V5 额度</span></label>
     <div id="keyUsageDetail" class="settings-note" hidden></div>
     <div id="keyOperations" class="key-operations" hidden></div>
