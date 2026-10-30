@@ -13,6 +13,7 @@ from starlette.requests import Request
 
 from app import main, registration_routes
 from app.database import Database
+from app.image_queue import ImageQueue
 from app.registration import COMMAND_GUILD
 
 
@@ -68,6 +69,9 @@ class EncodingState:
                                         global_monthly_anlas=1, image_429_cooldown_seconds=60)
         self.image_budget_lock = asyncio.Lock()
         self.semaphores, self.key_slots = {}, []
+        self.image_queue = ImageQueue(
+            lambda: self.settings.key_concurrency, lambda: self.settings.key_concurrency,
+            lambda key_id: key_id in self.semaphores and self.semaphores[key_id].locked())
         self.global_active = self.global_waiting = self.rpm_hits = 0
 
     def key_sem(self, key_id, capacity):
@@ -579,13 +583,14 @@ async def test_cancellation_before_concurrency_admission_does_not_consume(encodi
     state.semaphores[1] = asyncio.Semaphore(0)
     task = asyncio.create_task(main.encode_vibe(request(encoding_body())))
     async with asyncio.timeout(3):
-        while state.global_waiting != 1:
+        while state.global_waiting != 1 and not state.image_queue.snapshot()["queued"]:
             await asyncio.sleep(0)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
     assert await state.db.get_vibe_remaining(1) == 3
     assert not state.nai.calls and state.global_active == state.global_waiting == 0
+    assert state.image_queue.snapshot()["total"] == 0
 
 
 @pytest.mark.asyncio

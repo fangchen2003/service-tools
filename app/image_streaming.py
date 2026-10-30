@@ -13,7 +13,7 @@ from .image_events import STREAM_MEDIA_TYPES, encode_image_event
 class ImageStreamResponse(Response):
     media_type = "text/event-stream"
 
-    def __init__(self, run, wire_format="sse"):
+    def __init__(self, run, wire_format="sse", *, on_close=None):
         self.wire_format = wire_format
         self.media_type = STREAM_MEDIA_TYPES[wire_format]
         super().__init__(content=None, media_type=self.media_type)
@@ -21,6 +21,7 @@ class ImageStreamResponse(Response):
         self.started = False
         self.disconnected = asyncio.Event()
         self._send = None
+        self.on_close = on_close
 
     async def write(self, message):
         if self.disconnected.is_set():
@@ -43,13 +44,15 @@ class ImageStreamResponse(Response):
     async def chunk(self, data):
         await self.write({"type": "http.response.body", "body": data, "more_body": True})
 
-    async def error(self, status, message):
+    async def error(self, status, message, *, code=None):
         if not self.started:
             await self.start(status, "application/json")
-            await self.chunk(json.dumps({"error": message, "message": message}, ensure_ascii=False).encode())
+            await self.chunk(json.dumps({"error": message, "message": message,
+                                         **({"code": code} if code else {})}, ensure_ascii=False).encode())
         else:
             await self.chunk(encode_image_event({"event_type": "error", "error": message,
-                                                "message": message, "status_code": status},
+                                                "message": message, "status_code": status,
+                                                **({"code": code} if code else {})},
                                                self.wire_format))
 
     async def __call__(self, scope, receive, send):
@@ -83,16 +86,20 @@ class ImageStreamResponse(Response):
                 pass
             raise
         finally:
-            # Direct cancellation and Starlette/AnyIO scopes both await cleanup.
-            with anyio.CancelScope(shield=True):
-                if not worker.done():
-                    worker.cancel()
+            try:
+                # Direct cancellation and Starlette/AnyIO scopes both await cleanup.
+                with anyio.CancelScope(shield=True):
+                    if not worker.done():
+                        worker.cancel()
+                        try:
+                            await _wait_cleanup(worker)
+                        except asyncio.CancelledError:
+                            pass
+                    listener.cancel()
                     try:
-                        await _wait_cleanup(worker)
+                        await listener
                     except asyncio.CancelledError:
                         pass
-                listener.cancel()
-                try:
-                    await listener
-                except asyncio.CancelledError:
-                    pass
+            finally:
+                if self.on_close is not None:
+                    self.on_close()

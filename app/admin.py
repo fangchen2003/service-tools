@@ -240,6 +240,7 @@ async def regenerate_key(request: Request, response: Response, key_id: int):
     token = gen_key("nai")
     if not await request.app.state.gate.db.rotate_key_token(key_id, token):
         raise HTTPException(404, "key 不存在")
+    request.app.state.gate.image_queue.cancel_key(key_id)
     response.headers["Cache-Control"] = "no-store"
     return {"token": token}
 
@@ -281,6 +282,8 @@ async def patch_key(request: Request, key_id: int):
         fields["expires_at"] = (time.time() + d * 86400) if d > 0 else None
     await st.db.update_key(key_id, fields)
     row = await st.db.get_key(key_id)
+    if not row["enabled"] or (row["expires_at"] and row["expires_at"] < time.time()):
+        st.image_queue.cancel_key(key_id)
     c = await st.db.get_counter(key_id, st.day())
     totals = await st.db.generated_image_totals(key_id)
     return {"key": _key_json(row, c, totals.get(key_id, 0))}
@@ -304,6 +307,7 @@ async def reset_daily_image_quota(request: Request, key_id: int):
 async def delete_key(request: Request, key_id: int):
     require_admin(request)
     await request.app.state.gate.db.delete_key(key_id)
+    request.app.state.gate.image_queue.cancel_key(key_id)
     return {"ok": True}
 
 

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import time
+import uuid
 
 import pytest
 import pytest_asyncio
@@ -187,6 +188,7 @@ async def test_cleanup_preview_is_read_only_and_reuses_inactivity_filter(state):
 @pytest.mark.asyncio
 async def test_disabling_cleanup_waits_for_inflight_pass_and_blocks_later_deletions(state, monkeypatch):
     first = await create_old_key(state, "first")
+    ticket = state.image_queue.create(first, str(uuid.uuid4()), "generate-image")
     await state.update_configuration({"key_inactivity_delete_days": 3})
     assert await state.db.get_key(first) is not None  # Saving never runs a cleanup pass.
     entered, release = asyncio.Event(), asyncio.Event()
@@ -205,6 +207,7 @@ async def test_disabling_cleanup_waits_for_inflight_pass_and_blocks_later_deleti
     assert not disabling.done()
     release.set()
     assert await cleanup == 1
+    assert ticket.state == "cancelled"
     await disabling
     later = await create_old_key(state, "later")
     assert await state.delete_inactive_keys() == 0

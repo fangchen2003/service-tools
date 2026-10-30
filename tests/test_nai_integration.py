@@ -109,6 +109,45 @@ def make_client(db=None, http=None, *, tokens=None, allow=None):
     return client, db
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_image_selection_uses_idle_eligible_upstream_instead_of_waiting_on_busy_one(streaming):
+    client, _ = make_client(tokens=['fake-a', 'fake-b'])
+    busy, idle = client.pool
+    await busy.image_slots.acquire()
+    client._rr = 1  # Round-robin alone would select the busy account.
+    sent = []
+    def respond(request):
+        sent.append(request.headers['authorization'])
+        return httpx.Response(200, content=PNG)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+        client._client = http
+        try:
+            if streaming:
+                async with client.image_stream('https://offline.invalid', {'parameters': {}}, queue_timeout=.03):
+                    assert idle.image_slots.active == 1
+            else:
+                assert (await client.request('POST', 'https://offline.invalid', image_lane=True,
+                                             queue_timeout=.03)).status_code == 200
+            assert sent == ['Bearer fake-b']
+            assert idle.image_slots.active == 0
+        finally:
+            busy.image_slots.release()
+
+
+@pytest.mark.asyncio
+async def test_free_image_selection_preserves_idle_paid_capacity_without_ignoring_eligibility():
+    client, _ = make_client(tokens=['fake-free', 'fake-paid'], allow=[False, True])
+    free, paid = client.pool
+    assert await client.pick_token(image_lane=True) is free
+    assert await client.pick_token(image_lane=True, requires_anlas=True) is paid
+    await free.image_slots.acquire()
+    try:
+        assert await client.pick_token(image_lane=True) is paid
+    finally:
+        free.image_slots.release()
+
+
 @pytest.mark.parametrize('status', [200, 201])
 def test_success_records_once_and_releases_pending(status):
     async def run():
