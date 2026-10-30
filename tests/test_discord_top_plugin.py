@@ -1,5 +1,6 @@
 """Discord /top restoration, using real command objects and no live writes."""
 import importlib.util
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -10,7 +11,7 @@ try:
 except ImportError:
     raise unittest.SkipTest("Optional Hermes Discord plugin dependencies are not installed") from None
 
-PLUGIN = Path('~/.hermes/plugins/discord-top/__init__.py')
+PLUGIN = Path(os.environ["HERMES_TOP_PLUGIN_PATH"]) if os.environ.get("HERMES_TOP_PLUGIN_PATH") else None
 
 def load():
     spec = importlib.util.spec_from_file_location('discord_top_test', PLUGIN)
@@ -19,9 +20,10 @@ def load():
     spec.loader.exec_module(module)
     return module
 
-@unittest.skipUnless(PLUGIN.exists(), "Requires the optional local Hermes plugin installation")
+@unittest.skipUnless(PLUGIN is not None and PLUGIN.is_file(), "Requires the optional local Hermes plugin installation")
 class TopTests(unittest.IsolatedAsyncioTestCase):
     async def test_top_is_public_guild_only_and_syncs_once(self):
+        assert PLUGIN is not None
         self.assertTrue(PLUGIN.exists(), 'Durable /top plugin missing')
         m = load()
         bot = commands.Bot(command_prefix='!', intents=discord.Intents.none())

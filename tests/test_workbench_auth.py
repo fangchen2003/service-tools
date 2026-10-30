@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from app.database import Database
 from app.registration_routes import router as registration_router
 from app import workbench_auth as auth
+from test_domain_migration import ENV
 
 
 OAUTH_COOKIE = "__Host-nai-gate-wb-oauth"
@@ -23,6 +24,9 @@ SESSION_COOKIE = "__Host-nai-gate-wb-session"
 
 class WorkbenchTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self.env = patch.dict("os.environ", ENV, clear=True)
+        self.env.start()
+        self.addCleanup(self.env.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.db = Database(str(Path(self.tmp.name) / "gate.sqlite"))
         await self.db.connect()
@@ -83,6 +87,95 @@ class WorkbenchTests(unittest.IsolatedAsyncioTestCase):
         return {table: [tuple(r) for r in await self.db._db.execute_fetchall("SELECT * FROM " + table)]
                 for table in ("api_keys", "discord_registrations", "counters", "usage_log",
                               "daily_quota_offsets", "discord_daily_charges", "discord_daily_vibes")}
+
+    async def test_unconfigured_auth_rejects_before_state_or_session_use(self):
+        from app.deployment import DeploymentConfig
+        await self.registered_key()
+        token = await self.login()
+        query, _ = await self.begin()
+        state = query["state"][0]
+        nonce = self.client.cookies.get(OAUTH_COOKIE)
+        self.service.deployment = DeploymentConfig()
+        before = len(self.calls)
+        for operation in (self.service.begin, lambda: self.service.resolve(token),
+                          lambda: self.service.finish("private-code", state, nonce, "", "")):
+            with self.subTest(operation=operation), self.assertRaises(auth.AuthError):
+                await operation()
+        self.assertEqual(len(self.calls), before)
+
+    async def test_custom_deployment_redirects_and_logout_origins_ignore_request_headers(self):
+        from app.deployment import DeploymentConfig
+        await self.registered_key()
+        deployment = DeploymentConfig(site_url="https://gate.example.com",
+            workbench_url="https://workbench.example.com:8443/studio/",
+            redirect_uri="https://callback.example.com/self-register/callback")
+        self.service = auth.WorkbenchAuthService(self.db, self.http, client_id="client-id",
+            client_secret="private-client-secret", bridge_secret="private-bridge-secret", deployment=deployment)
+        self.app.state.workbench_auth = self.service
+        query, _ = await self.begin()
+        self.assertEqual(query["redirect_uri"], [deployment.redirect_uri])
+        forged = {"Host": "evil.example.com", "Forwarded": "host=evil.example.com;proto=http",
+                  "X-Forwarded-Host": "evil.example.com", "X-Forwarded-Proto": "http"}
+        response = await self.client.get("/self-register/callback",
+            params={"state": query["state"][0], "code": "private-code"}, headers=forged)
+        self.assertEqual(response.headers["location"], deployment.workbench_url)
+        self.assertEqual(parse_qs(self.calls[0].content.decode())["redirect_uri"], [deployment.redirect_uri])
+        self.assertTrue(any(SESSION_COOKIE in c and "Secure" in c and "HttpOnly" in c
+                            and "Domain=" not in c for c in response.headers.get_list("set-cookie")))
+        query, _ = await self.begin()
+        error = await self.client.get("/self-register/callback", params={"state": query["state"][0], "error": "cancel"},
+                                      headers=forged)
+        self.assertEqual(error.headers["location"], deployment.workbench_url + "?login_error=auth_failed")
+        for origin in ("https://workbench.example.com", "https://workbench.example.com:8443/",
+                       "https://workbench.example.com:8443.evil.test", "https://callback.example.com", "https://evil.example.com"):
+            with self.subTest(origin=origin):
+                denied = await self.client.post("/workbench-auth/logout",
+                    headers={**forged, "Origin": origin, "X-Workbench-CSRF": "1"})
+                self.assertEqual(denied.status_code, 403)
+        for origin in ("https://gate.example.com", "https://workbench.example.com:8443"):
+            with self.subTest(allowed_origin=origin):
+                ok = await self.client.post("/workbench-auth/logout", headers={"Origin": origin, "X-Workbench-CSRF": "1"})
+                self.assertEqual(ok.status_code, 200)
+
+    async def test_logout_canonical_config_origins_revoke_real_sessions_with_exact_csrf(self):
+        from app.deployment import DeploymentConfig
+        await self.registered_key()
+        for url, origin in (
+            ("https://gate.example.com:443", "https://gate.example.com"),
+            ("https://Gate.Example.COM:443", "https://gate.example.com"),
+            ("https://bücher.example:443", "https://xn--bcher-kva.example"),
+            ("https://[2001:0DB8::1]:443", "https://[2001:db8::1]"),
+            ("https://Gate.Example.COM:8443", "https://gate.example.com:8443"),
+        ):
+            with self.subTest(url=url):
+                # Create a real session with the normal OAuth mock before changing deployment.
+                self.service.deployment = DeploymentConfig.from_env()
+                token = await self.login()
+                assert isinstance(token, str)
+                self.service.deployment = DeploymentConfig(site_url=url,
+                    redirect_uri="https://gate.example.com/self-register/callback")
+                forged = {"Host": "evil.example.com", "Forwarded": "host=evil.example.com;proto=https",
+                          "X-Forwarded-Host": "evil.example.com"}
+                for headers in (
+                    {"Origin": origin},
+                    {"Origin": origin, "X-Workbench-CSRF": "0"},
+                    {"Origin": origin + "/", "X-Workbench-CSRF": "1"},
+                    {"Origin": origin + ".evil.test", "X-Workbench-CSRF": "1"},
+                    {"Origin": "https://evil.example.com", "X-Workbench-CSRF": "1"},
+                    {"Origin": "http" + origin[5:], "X-Workbench-CSRF": "1"},
+                ):
+                    denied = await self.client.post("/workbench-auth/logout", headers={**forged, **headers})
+                    self.assertEqual(denied.status_code, 403)
+                    await self.service.resolve(token)
+                response = await self.client.post("/workbench-auth/logout",
+                    headers={**forged, "Origin": origin, "X-Workbench-CSRF": "1"})
+                self.assertEqual(response.status_code, 200)
+                self.assertIsNone(self.client.cookies.get(SESSION_COOKIE))
+                with self.assertRaises(auth.AuthError):
+                    await self.service.resolve(token)
+                assert self.db._db is not None
+                rows = await self.db._db.execute_fetchall("SELECT count(*) FROM workbench_sessions")
+                self.assertEqual(rows[0][0], 0)
 
     async def test_existing_key_login_persists_opaque_session_without_mutating_key_or_quota(self):
         key = await self.registered_key()
@@ -249,7 +342,8 @@ class WorkbenchTests(unittest.IsolatedAsyncioTestCase):
         import os
         from app import main
         from app.config import Settings
-        env = {"DISCORD_CLIENT_ID": "client-id", "DISCORD_CLIENT_SECRET": "client-secret",
+        env = {"SITE_URL": "https://gate.example.com",
+               "DISCORD_CLIENT_ID": "client-id", "DISCORD_CLIENT_SECRET": "client-secret",
                "DISCORD_REDIRECT_URI": "https://gate.example.com/self-register/callback",
                "WORKBENCH_AUTH_BRIDGE_SECRET": "separate-secret"}
         settings = Settings(data_dir=Path(self.tmp.name), nai_tokens=[], seed_demo_key=False,
@@ -267,8 +361,7 @@ class WorkbenchTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {}, clear=True):
             self.assertIsNone(auth.configured_service(self.db, self.http))
         with patch.dict(os.environ, {"DISCORD_CLIENT_ID": "client", "DISCORD_CLIENT_SECRET": "secret"}, clear=True):
-            self.assertEqual(auth.configured_service(self.db, self.http).redirect_uri,
-                             "https://gate.example.com/self-register/callback")
+            self.assertIsNone(auth.configured_service(self.db, self.http))
 
     async def test_session_storage_has_per_account_and_global_bounds(self):
         await self.registered_key()
@@ -301,7 +394,7 @@ class WorkbenchTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.headers.get("referrer-policy"), "no-referrer")
 
     async def test_error_redirect_uses_closed_whitelist(self):
-        response = auth.redirect_error("private-code&return_to=https://evil.test")
+        response = auth.redirect_error("private-code&return_to=https://evil.test", self.service.deployment)
         self.assertEqual(response.headers["location"], "https://gate.example.com/workbench/?login_error=auth_failed")
 
     async def test_nonce_browser_binding_rejects_login_csrf_without_consuming_victim_state(self):
@@ -488,13 +581,27 @@ class WorkbenchTests(unittest.IsolatedAsyncioTestCase):
 
 
 class WorkbenchUnavailableTests(unittest.IsolatedAsyncioTestCase):
-    async def test_start_without_configuration_fails_closed_with_safe_redirect(self):
+    async def test_unconfigured_routes_never_derive_a_redirect_or_origin_from_headers(self):
+        app = FastAPI()
+        app.include_router(auth.router)
+        app.include_router(registration_router)
+        headers = {"Host": "evil.example.com", "X-Forwarded-Host": "evil.example.com",
+                   "Forwarded": "host=evil.example.com;proto=https", "Origin": "https://evil.example.com",
+                   "X-Workbench-CSRF": "1"}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://gate.example.com") as client:
+            for path in ("/workbench-auth/discord/start", "/self-register/callback?state=wb.invalid&code=code"):
+                response = await client.get(path, headers=headers)
+                self.assertEqual(response.status_code, 503)
+                self.assertNotIn("location", response.headers)
+                self.assertEqual(response.headers["cache-control"], "no-store")
+            self.assertEqual((await client.post("/workbench-auth/logout", headers=headers)).status_code, 403)
+
+    async def test_start_without_configuration_fails_closed_without_redirect(self):
         from app.main import app
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                      base_url="https://gate.example.com") as client:
             response = await client.get("/workbench-auth/discord/start?return_to=https://evil.test")
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["location"],
-                         "https://gate.example.com/workbench/?login_error=service_unavailable")
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("location", response.headers)
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertEqual(response.headers["referrer-policy"], "no-referrer")

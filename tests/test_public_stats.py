@@ -175,7 +175,11 @@ class PublicStatsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.post("/api/public/stats")).status_code, 405)
 
     async def test_public_personal_limits_match_real_discord_registration(self):
-        from app.registration import COMMAND_GUILD, MEMBERSHIP_ROLE
+        from app.deployment import DeploymentConfig
+        deployment = DeploymentConfig(command_guild="100000000000000001",
+            membership_guild="100000000000000002", membership_role="100000000000000003",
+            site_url="https://gate.example.com/",
+            redirect_uri="https://gate.example.com/self-register/callback")
 
         def discord(request):
             path = request.url.path
@@ -184,7 +188,7 @@ class PublicStatsTests(unittest.IsolatedAsyncioTestCase):
             if path == "/api/users/@me":
                 return httpx.Response(200, json={"id": "777"})
             if path.endswith("/member"):
-                return httpx.Response(200, json={"roles": [MEMBERSHIP_ROLE]})
+                return httpx.Response(200, json={"roles": [deployment.membership_role]})
             if path == "/api/users/@me/channels":
                 return httpx.Response(200, json={"id": "fixture-channel"})
             if path.endswith("/messages"):
@@ -194,9 +198,9 @@ class PublicStatsTests(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=httpx.MockTransport(discord)) as http:
             service = RegistrationService(self.state.db, http, client_id="local-client",
                 client_secret="private-client", bot_token="private-bot",
-                bridge_secret="private-bridge", redirect_uri="http://local/callback")
+                bridge_secret="private-bridge", deployment=deployment)
             from urllib.parse import parse_qs, urlparse
-            link = await service.begin("777", COMMAND_GUILD)
+            link = await service.begin("777", deployment.command_guild)
             state = parse_qs(urlparse(link).query)["state"][0]
             self.assertEqual(await service.finish("local-code", state), "sent")
         row = (await self.state.db._db.execute_fetchall(

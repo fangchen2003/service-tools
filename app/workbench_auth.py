@@ -8,12 +8,14 @@ import os
 import re
 import secrets
 import time
+from dataclasses import replace
 from urllib.parse import urlencode
 
 import aiosqlite
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from .body import read_json_body
+from .deployment import DeploymentConfig
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.datastructures import MutableHeaders
 
@@ -40,7 +42,6 @@ class SecurityHeadersMiddleware:
 
 
 router = APIRouter(prefix="/workbench-auth")
-WORKBENCH_URL = "https://gate.example.com/workbench/"
 HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
            "X-Content-Type-Options": "nosniff"}
 
@@ -49,10 +50,12 @@ ERROR_CODES = frozenset({"not_registered", "key_reclaimed", "key_disabled", "key
                          "auth_failed", "state_invalid", "service_unavailable"})
 
 
-def redirect_error(code: str):
+def redirect_error(code: str, deployment: DeploymentConfig | None = None):
+    if deployment is None or not deployment.auth_ready:
+        return failure("service_unavailable", 503)
     if code not in ERROR_CODES:
         code = "auth_failed"
-    return RedirectResponse(WORKBENCH_URL + "?login_error=" + code, status_code=302, headers=HEADERS)
+    return RedirectResponse(deployment.workbench_url + "?login_error=" + code, status_code=302, headers=HEADERS)
 
 
 OAUTH_COOKIE = "__Host-nai-gate-wb-oauth"
@@ -70,10 +73,15 @@ def digest(value: str) -> str:
 
 class WorkbenchAuthService:
     def __init__(self, db, http: httpx.AsyncClient, *, client_id: str, client_secret: str,
-                 bridge_secret: str, redirect_uri: str):
+                 bridge_secret: str, redirect_uri: str | None = None,
+                 deployment: DeploymentConfig | None = None):
         self.db, self.http = db, http
         self.client_id, self.client_secret = client_id, client_secret
-        self.bridge_secret, self.redirect_uri = bridge_secret, redirect_uri
+        self.bridge_secret = bridge_secret
+        self.deployment = deployment if deployment is not None else DeploymentConfig.from_env()
+        if redirect_uri is not None:
+            self.deployment = replace(self.deployment, redirect_uri=redirect_uri)
+        self.redirect_uri = self.deployment.redirect_uri
 
     async def initialize(self):
         async with aiosqlite.connect(self.db.path, timeout=5) as conn:
@@ -117,7 +125,12 @@ class WorkbenchAuthService:
             """)
             await conn.commit()
 
+    def _require_configured(self):
+        if not self.deployment.auth_ready or not self.client_id or not self.client_secret:
+            raise AuthError("service_unavailable")
+
     async def begin(self):
+        self._require_configured()
         state = "wb." + secrets.token_urlsafe(32)
         nonce, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         now = time.time()
@@ -158,6 +171,7 @@ class WorkbenchAuthService:
             return row[0]
 
     async def finish(self, code: str, state: str, nonce: str, old_session: str, error: str):
+        self._require_configured()
         verifier = await self.consume_state(state, nonce)
         if error or not code or len(code) > 2048:
             raise AuthError("auth_failed")
@@ -218,6 +232,7 @@ class WorkbenchAuthService:
             await conn.commit()
 
     async def resolve(self, session: str):
+        self._require_configured()
         if not valid_token(session):
             raise AuthError("auth_failed")
         async with aiosqlite.connect(self.db.path, timeout=5) as conn:
@@ -238,11 +253,12 @@ class WorkbenchAuthService:
 
 def configured_service(db, http: httpx.AsyncClient) -> WorkbenchAuthService | None:
     client_id, client_secret = os.getenv("DISCORD_CLIENT_ID", ""), os.getenv("DISCORD_CLIENT_SECRET", "")
-    if not client_id or not client_secret:
+    deployment = DeploymentConfig.from_env()
+    if not client_id or not client_secret or not deployment.auth_ready:
         return None
     return WorkbenchAuthService(db, http, client_id=client_id, client_secret=client_secret,
         bridge_secret=os.getenv("WORKBENCH_AUTH_BRIDGE_SECRET", ""),
-        redirect_uri=os.getenv("DISCORD_REDIRECT_URI", "https://gate.example.com/self-register/callback"))
+        deployment=deployment)
 
 
 class AuthError(Exception):
@@ -260,22 +276,23 @@ def clear_cookie(response, name):
 
 async def callback(request: Request, code: str, state: str, error: str):
     service = getattr(request.app.state, "workbench_auth", None)
-    response = redirect_error("service_unavailable")
+    deployment = service.deployment if service is not None else None
+    response = redirect_error("service_unavailable", deployment)
     if service is not None:
         try:
             session = await service.finish(code, state, request.cookies.get(OAUTH_COOKIE, ""),
                                            request.cookies.get(SESSION_COOKIE, ""), error)
-            response = RedirectResponse(WORKBENCH_URL, status_code=302, headers=HEADERS)
+            response = RedirectResponse(service.deployment.workbench_url, status_code=302, headers=HEADERS)
             response.set_cookie(SESSION_COOKIE, session, max_age=SESSION_TTL,
                                 httponly=True, secure=True, samesite="lax", path="/")
         except AuthError as exc:
-            response = redirect_error(exc.code)
+            response = redirect_error(exc.code, deployment)
         except httpx.HTTPError:
-            response = redirect_error("service_unavailable")
+            response = redirect_error("service_unavailable", deployment)
         except (ValueError, KeyError, TypeError):
-            response = redirect_error("auth_failed")
+            response = redirect_error("auth_failed", deployment)
         except Exception:
-            response = redirect_error("service_unavailable")
+            response = redirect_error("service_unavailable", deployment)
     clear_cookie(response, OAUTH_COOKIE)
     return response
 
@@ -302,9 +319,10 @@ def failure(code: str, status: int):
 
 @router.post("/logout")
 async def logout(request: Request):
-    if request.headers.get("Origin") != "https://gate.example.com" or request.headers.get("X-Workbench-CSRF") != "1":
-        return failure("auth_failed", 403)
     service = getattr(request.app.state, "workbench_auth", None)
+    origins = service.deployment.allowed_origins if service is not None else frozenset()
+    if request.headers.get("Origin") not in origins or request.headers.get("X-Workbench-CSRF") != "1":
+        return failure("auth_failed", 403)
     session = request.cookies.get(SESSION_COOKIE, "")
     if session:
         if service is None:
@@ -348,4 +366,4 @@ async def start(request: Request):
     try:
         return await service.begin()
     except Exception:
-        return redirect_error("service_unavailable")
+        return redirect_error("service_unavailable", service.deployment)

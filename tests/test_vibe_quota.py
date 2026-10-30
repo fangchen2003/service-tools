@@ -14,7 +14,7 @@ from starlette.requests import Request
 from app import main, registration_routes
 from app.database import Database
 from app.image_queue import ImageQueue
-from app.registration import COMMAND_GUILD
+COMMAND_GUILD = "100000000000000001"  # Synthetic deployment fixture.
 
 
 DAY = "2026-10-14"
@@ -166,7 +166,7 @@ async def test_settlement_audits_actual_two_anlas_exactly_once_and_never_refunds
 async def test_vibe_bridge_requires_secret_guild_active_registration_and_returns_remaining(db):
     app = FastAPI()
     app.include_router(registration_routes.router)
-    app.state.registrar = SimpleNamespace(db=db, bridge_secret="test-secret")
+    app.state.registrar = SimpleNamespace(db=db, bridge_secret="test-secret", command_guild=COMMAND_GUILD)
     headers = {"Authorization": "Bearer test-secret"}
     body = {"discord_id": "777", "guild_id": COMMAND_GUILD}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:

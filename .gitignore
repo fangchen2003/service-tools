@@ -7,7 +7,7 @@ data/
 
 # Private deployment recovery material; never publish runtime credentials/data.
 .deploy-backups/
-Dockerfile.nai-gate-migration
+Dockerfile.*-migration
 Dockerfile.discord-login
 Dockerfile.hero
 Dockerfile.homepage

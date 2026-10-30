@@ -39,8 +39,11 @@ def test_homepage_artwork_has_cache_version_and_updated_dimensions():
     image = image_match.group()
     src_match = re.search(r'src="([^"]+)"', image)
     assert src_match is not None
+    assert urlsplit(src_match.group(1)).path == '/assets/gate-atelier-v1.webp'
     version = parse_qs(urlsplit(src_match.group(1)).query).get('v', [])
-    expected = hashlib.sha256((ROOT / 'app/static/gate-atelier-v1.webp').read_bytes()).hexdigest()[:12]
+    digest = hashlib.sha256((ROOT / 'app/static/gate-atelier-v1.webp').read_bytes()).hexdigest()
+    assert digest == '756417852335f26466188fa1a26c723bbe29e0d4be3162f75653460b337037de'
+    expected = digest[:12]
     assert version == [expected]
     # The original hash URL was accidentally served with stale bytes; rotate
     # its cache generation without changing the approved artwork content.
@@ -92,4 +95,6 @@ def test_landing_art_route_is_available_without_key():
             assert response.status_code == 200
             assert response.headers['content-type'] == 'image/webp'
             assert response.content.startswith(b'RIFF')
+            assert response.content == (ROOT / 'app/static/gate-atelier-v1.webp').read_bytes()
+            assert response.headers['cache-control'] == 'public, max-age=31536000, immutable'
     asyncio.run(run())

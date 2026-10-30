@@ -41,7 +41,7 @@ def check(origin, expected_file):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--origin', default='https://gate.example.com')
+    parser.add_argument('--origin', required=True, help='Explicit site origin to check (no default target)')
     parser.add_argument('--expected', default=str(Path(__file__).resolve().parents[1]/'app/static/gate-atelier-v1.webp'))
     args = parser.parse_args()
     print(json.dumps(check(args.origin, args.expected), ensure_ascii=False, indent=2))

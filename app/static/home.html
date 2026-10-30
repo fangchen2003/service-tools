@@ -24,7 +24,7 @@
 <a class="skip" href="#main">跳至正文</a>
 <div class="wrap">
 <header class="nav">
-<a class="brand" href="/" aria-label="NAI Gate首页"><svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M20 3C20 14 26 20 37 20C26 20 20 26 20 37C20 26 14 20 3 20C14 20 20 14 20 3Z" fill="currentColor"/><circle cx="32" cy="7" r="2" fill="#adbd9d"/></svg><span class="brand-name">nai-gate<span style="color:#a3b195">.</span></span><span class="brand-cn">绘图网关</span></a>
+<a class="brand" href="/" aria-label="NAI Gate 首页"><svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M20 3C20 14 26 20 37 20C26 20 20 26 20 37C20 26 14 20 3 20C14 20 20 14 20 3Z" fill="currentColor"/><circle cx="32" cy="7" r="2" fill="#adbd9d"/></svg><span class="brand-name">NAI Gate<span style="color:#a3b195">.</span></span><span class="brand-cn">绘图工作台</span></a>
 <nav class="nav-links" aria-label="主导航"><a class="nav-status" href="#today">今日额度</a><a href="#guide">用户须知</a></nav>
 </header>
 <main id="main">
@@ -45,7 +45,7 @@
 <noscript><p class="stats-error">请启用 JavaScript 查看实时数量与额度。工作台入口和用户须知仍可正常使用。</p></noscript>
 </section>
 <section class="guide" id="guide" aria-labelledby="guide-title">
-<div><div class="section-index">Before your first creation</div><h2 id="guide-title">把灵感交给画布，<br>先记住这几件事。</h2><p class="guide-intro">用户须知 · 共享资源，轻量使用。<br>无需复杂配置，带上你的 Key 就能开始。</p><div class="endpoint"><span class="endpoint-label">第三方客户端 API 地址</span><button class="copy" type="button" id="copy-api" aria-label="复制 API 地址 https://gate.example.com"><code>https://gate.example.com</code><span id="copy-label">复制 ↗</span></button></div><details class="faq"><summary>如何领取或找回 Key？</summary><p>在本站 Discord 服务器使用 <code class="command">/register</code> 申请（以当时开放状态及资格要求为准），Key 仅通过私信发送。已有 Key 或因连续 3 天未使用而被回收，可使用 <code class="command">/find</code> 找回。请允许机器人私信，不要在公开频道粘贴 Key。</p></details></div>
+<div><div class="section-index">Before your first creation</div><h2 id="guide-title">把灵感交给画布，<br>先记住这几件事。</h2><p class="guide-intro">用户须知 · 共享资源，轻量使用。<br>无需复杂配置，带上你的 Key 就能开始。</p><div class="endpoint"><span class="endpoint-label">第三方客户端 API 地址</span><button class="copy" type="button" id="copy-api" aria-label="复制当前站点 API 地址"><code id="api-origin">当前站点地址</code><span id="copy-label">复制 ↗</span></button></div><details class="faq"><summary>如何领取或找回 Key？</summary><p>在本站 Discord 服务器使用 <code class="command">/register</code> 申请（以当时开放状态及资格要求为准），Key 仅通过私信发送。已有 Key 或因连续 3 天未使用而被回收，可使用 <code class="command">/find</code> 找回。请允许机器人私信，不要在公开频道粘贴 Key。</p></details></div>
 <div><ol class="rules">
 <li class="rule"><span class="rule-number" aria-hidden="true">01</span><div><h3>用本站 Key 登录，不是你的 NovelAI 账号</h3><p>进入仿 NovelAI 工作台，填写私信中收到的 <code class="command">nai-…</code> Key。首次进入请按工作台提示设置连接；第三方客户端的 API 地址使用本站域名。<strong>请勿分享 Key</strong>，多人共用会共用额度。</p></div></li>
 <li class="rule"><span class="rule-number" aria-hidden="true">02</span><div><h3>个人有上限，全站也有共享额度</h3><p>普通 Key 默认每日 V5 <strong><span id="personal-v5">—</span> 单位</strong>、V4.5 及以下 <strong><span id="personal-legacy">—</span> 张</strong>，具体以你的 Key 为准。北京时间零点重置；<code class="command">/charge</code> 每天可恢复一次个人生图额度，不增加全站额度。V5 还受官方账号可用额度影响。</p></div></li>
@@ -54,13 +54,16 @@
 </ol></div>
 </section>
 </main>
-<footer class="foot"><div><span class="foot-brand">nai-gate.</span><span>留一处空白，给下一次灵感。</span><p>独立部署的 NovelAI 中转与绘图工作台，非 NovelAI 官方网站。展示的是本站配额，不是官方实时电量。</p></div><div class="foot-right"><a href="/admin">站点管理</a></div></footer>
+<footer class="foot"><div><span class="foot-brand">NAI Gate</span><span>留一处空白，给下一次灵感。</span><p>独立部署的 NovelAI 中转与绘图工作台，非 NovelAI 官方网站。展示的是本站配额，不是官方实时电量。</p></div><div class="foot-right"><a href="/admin">站点管理</a></div></footer>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 <script>
 (() => {
 'use strict';
 const $ = id => document.getElementById(id);
+const apiOrigin = window.location.origin;
+$('api-origin').textContent = apiOrigin;
+$('copy-api').setAttribute('aria-label', `复制 API 地址 ${apiOrigin}`);
 const fmt = value => new Intl.NumberFormat('zh-CN', {maximumFractionDigits:2}).format(value);
 let busy = false, resetAt = 0, serverOffset = 0, day = '', toastTimer, loaded = false;
 function showToast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => {$('toast').hidden = true;}, 3000); }
@@ -114,8 +117,8 @@ async function refresh() {
 }
 $('refresh').addEventListener('click',refresh);
 $('copy-api').addEventListener('click',async () => {
-  try { await navigator.clipboard.writeText('https://gate.example.com'); $('copy-label').textContent = '已复制 ✓'; showToast('API 地址已复制'); setTimeout(() => {$('copy-label').textContent = '复制 ↗';},2500); }
-  catch (_) { showToast('无法自动复制，请手动复制 https://gate.example.com'); }
+  try { await navigator.clipboard.writeText(apiOrigin); $('copy-label').textContent = '已复制 ✓'; showToast('API 地址已复制'); setTimeout(() => {$('copy-label').textContent = '复制 ↗';},2500); }
+  catch (_) { showToast(`无法自动复制，请手动复制 ${apiOrigin}`); }
 });
 refresh();
 setInterval(() => {if (!document.hidden) refresh();},30000);

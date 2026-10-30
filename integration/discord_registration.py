@@ -5,12 +5,19 @@ import os
 
 import httpx
 
-COMMAND_GUILD = 100000000000000001
+def command_guild() -> int | None:
+    value = os.getenv("REGISTRATION_COMMAND_GUILD", "").strip()
+    return int(value) if value.isascii() and value.isdecimal() and int(value) > 0 else None
+
+
+def gate_url(path: str) -> str:
+    return os.getenv("REGISTRATION_GATE_URL", "http://127.0.0.1:8000").rstrip("/") + path
 
 
 async def handle_register(interaction):
     # This is the sole untrusted-user exception to Hermes's normal allowlist.
-    if getattr(interaction, "guild_id", None) != COMMAND_GUILD or not getattr(
+    guild = command_guild()
+    if guild is None or getattr(interaction, "guild_id", None) != guild or not getattr(
         getattr(interaction, "user", None), "id", None
     ):
         await interaction.response.send_message("请在指定服务器使用 /register。", ephemeral=True)
@@ -22,7 +29,7 @@ async def handle_register(interaction):
     await interaction.response.defer(ephemeral=True)
     try:
         async with httpx.AsyncClient(timeout=8) as client:
-            response = await client.post("http://127.0.0.1:3003/self-register/intent",
+            response = await client.post(gate_url("/self-register/intent"),
                 headers={"Authorization": "Bearer " + secret},
                 json={"discord_id": str(interaction.user.id), "guild_id": str(interaction.guild_id)})
         if response.status_code == 200:
@@ -37,7 +44,8 @@ async def handle_register(interaction):
 
 
 async def handle_charge(interaction):
-    if getattr(interaction, "guild_id", None) != COMMAND_GUILD or not getattr(
+    guild = command_guild()
+    if guild is None or getattr(interaction, "guild_id", None) != guild or not getattr(
         getattr(interaction, "user", None), "id", None
     ):
         await interaction.response.send_message("请在指定服务器使用 /charge。", ephemeral=True)
@@ -49,7 +57,7 @@ async def handle_charge(interaction):
     await interaction.response.defer(ephemeral=True)
     try:
         async with httpx.AsyncClient(timeout=12) as client:
-            response = await client.post("http://127.0.0.1:3003/self-register/charge",
+            response = await client.post(gate_url("/self-register/charge"),
                 headers={"Authorization": "Bearer " + secret},
                 json={"discord_id": str(interaction.user.id), "guild_id": str(interaction.guild_id)})
         if response.status_code == 200:
@@ -70,7 +78,8 @@ async def handle_charge(interaction):
 
 
 async def handle_find(interaction):
-    if getattr(interaction, "guild_id", None) != COMMAND_GUILD or not getattr(
+    guild = command_guild()
+    if guild is None or getattr(interaction, "guild_id", None) != guild or not getattr(
         getattr(interaction, "user", None), "id", None
     ):
         await interaction.response.send_message("请在指定服务器使用 /find。", ephemeral=True)
@@ -82,7 +91,7 @@ async def handle_find(interaction):
     await interaction.response.defer(ephemeral=True)
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.post("http://127.0.0.1:3003/self-register/find",
+            response = await client.post(gate_url("/self-register/find"),
                 headers={"Authorization": "Bearer " + secret},
                 json={"discord_id": str(interaction.user.id), "guild_id": str(interaction.guild_id)})
         if response.status_code == 200:
@@ -104,7 +113,8 @@ async def handle_find(interaction):
 
 async def handle_vibe(interaction):
     """Claim the caller's daily Vibe allowance without invoking agent tools."""
-    if getattr(interaction, "guild_id", None) != COMMAND_GUILD or not getattr(
+    guild = command_guild()
+    if guild is None or getattr(interaction, "guild_id", None) != guild or not getattr(
         getattr(interaction, "user", None), "id", None
     ):
         await interaction.response.send_message("请在指定服务器使用 /vibe。", ephemeral=True)
@@ -119,7 +129,7 @@ async def handle_vibe(interaction):
     try:
         async with httpx.AsyncClient(timeout=12) as client:
             response = await client.post(
-                "http://127.0.0.1:3003/self-register/vibe",
+                gate_url("/self-register/vibe"),
                 headers={"Authorization": "Bearer " + secret},
                 json={"discord_id": str(interaction.user.id), "guild_id": str(interaction.guild_id)},
             )

@@ -3,6 +3,7 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -11,10 +12,14 @@ from fastapi import FastAPI
 from app.database import Database
 from app.registration import RegistrationService, RegistrationError
 from app.registration_routes import router
+from test_domain_migration import ENV
 
 
 class RegistrationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self.env = patch.dict("os.environ", ENV, clear=True)
+        self.env.start()
+        self.addCleanup(self.env.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.db = Database(str(Path(self.tmp.name) / "gate.sqlite"))
         await self.db.connect()
@@ -54,6 +59,85 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
     async def begin(self, user="777", guild="100000000000000001"):
         link = await self.service.begin(user, guild)
         return parse_qs(urlparse(link).query)["state"][0]
+
+    async def test_unconfigured_registration_rejects_empty_guild_before_db_or_network(self):
+        from app.deployment import DeploymentConfig
+        from unittest.mock import AsyncMock
+        self.service.deployment = DeploymentConfig()
+        self.service.command_guild = ""
+        for method in (self.service.begin, self.service.find):
+            with self.subTest(method=method.__name__), self.assertRaises(RegistrationError):
+                await method("777", "")
+        app = FastAPI()
+        app.include_router(router)
+        app.state.registrar = self.service
+        with patch.object(self.db, "charge_registered_key", new_callable=AsyncMock) as charge, \
+                patch.object(self.db, "claim_registered_vibe", new_callable=AsyncMock) as vibe:
+            charge.return_value = "charged"
+            vibe.return_value = {"status": "claimed"}
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://gate.example.com") as client:
+                for route in ("charge", "vibe"):
+                    response = await client.post("/self-register/" + route,
+                        json={"discord_id": "777", "guild_id": ""},
+                        headers={"Authorization": "Bearer bridge-secret"})
+                    self.assertEqual(response.status_code, 403)
+            charge.assert_not_awaited()
+            vibe.assert_not_awaited()
+        self.assertEqual(self.calls, [])
+
+    async def test_callback_cannot_mint_after_membership_configuration_is_removed(self):
+        from app.deployment import DeploymentConfig
+        from unittest.mock import AsyncMock
+        state = await self.begin()
+        self.service.deployment = DeploymentConfig()
+        with patch.object(self.http, "post", AsyncMock(return_value=httpx.Response(400, json={}))) as exchange:
+            with self.assertRaises(RegistrationError):
+                await self.service.finish("auth-code", state)
+            exchange.assert_not_awaited()
+        self.assertEqual((await self.db._db.execute_fetchall("SELECT count(*) FROM api_keys"))[0][0], 0)
+
+    async def test_bridge_never_accepts_an_empty_secret_or_non_ascii_authorization(self):
+        app = FastAPI()
+        app.include_router(router)
+        app.state.registrar = self.service
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://gate.example.com") as client:
+            for secret, authorization in (("", b"Bearer "), ("bridge-secret", "Bearer ü".encode())):
+                self.service.bridge_secret = secret
+                for route in ("intent", "find", "charge", "vibe"):
+                    with self.subTest(route=route, secret=secret):
+                        response = await client.post("/self-register/" + route,
+                            json={"discord_id": "777", "guild_id": "100000000000000001"},
+                            headers={b"authorization": authorization})
+                        self.assertEqual(response.status_code, 401)
+        self.assertEqual(self.calls, [])
+
+    async def test_charge_and_vibe_use_the_service_command_guild(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        db = SimpleNamespace(tz="Asia/Shanghai", charge_registered_key=AsyncMock(return_value="charged"),
+                             claim_registered_vibe=AsyncMock(return_value={"status": "claimed"}))
+        service = SimpleNamespace(db=db, bridge_secret="bridge-secret", command_guild="100000000000000002")
+        app = FastAPI()
+        app.include_router(router)
+        app.state.registrar = service
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://gate.example.com") as client:
+            for route in ("charge", "vibe"):
+                for guild, status in (("100000000000000001", 403), ("", 403), (service.command_guild, 200)):
+                    with self.subTest(route=route, guild=guild):
+                        response = await client.post("/self-register/" + route,
+                            json={"discord_id": "777", "guild_id": guild}, headers={"Authorization": "Bearer bridge-secret"})
+                        self.assertEqual(response.status_code, status)
+        db.charge_registered_key.assert_awaited_once()
+        db.claim_registered_vibe.assert_awaited_once_with("777")
+
+    async def test_missing_registration_credentials_reject_before_oauth(self):
+        for field in ("client_id", "client_secret", "bot_token", "bridge_secret"):
+            self.service.pending.clear()
+            with self.subTest(field=field), patch.object(self.service, field, ""):
+                with self.assertRaises(RegistrationError):
+                    await self.service.begin("777", "100000000000000001")
+        self.assertEqual(self.service.pending, {})
+        self.assertEqual(self.calls, [])
 
     async def test_charge_restores_both_personal_image_quotas_once_per_day(self):
         await self.service.finish("auth-code", await self.begin())

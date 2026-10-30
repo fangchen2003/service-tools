@@ -135,6 +135,21 @@ V5 Full、Curated 与 Full Medium 的单张图生图可使用 `parameters.upscal
 
 回执包含实际派发的模型与核心参数、完成张数和 Gate 已记账的 `anlas`、`v5`、`legacy_free_images`，不包含图片、提示词或凭据。金额是 Gate 的记账值，不是官方余额实扣核对；报价仍用于提交前确认。
 
+## 独立部署与隐私配置
+
+仓库不内置某个站点的域名、Discord 服务器/身份组 ID 或服务器插件绝对路径。部署信息只写入不受 Git 跟踪的 `.env`，示例地址使用保留域名 `gate.example.com`，不可直接用于生产。
+
+- Discord 注册需要 `SITE_URL`、`DISCORD_REDIRECT_URI`、`DISCORD_CLIENT_ID`、`DISCORD_CLIENT_SECRET`、`DISCORD_BOT_TOKEN`、`REGISTRATION_BRIDGE_SECRET`，以及 `REGISTRATION_COMMAND_GUILD`、`REGISTRATION_MEMBERSHIP_GUILD`、`REGISTRATION_MEMBERSHIP_ROLE`。缺少必要配置时注册关闭，不会放宽资格检查。
+- 工作台登录使用同一站点/回调配置，并通过私有的 `WORKBENCH_AUTH_BRIDGE_SECRET` 对接。`WORKBENCH_URL` 默认由 `SITE_URL` 派生，也可显式配置。回调必须与 Discord Developer Portal 完全一致，不从客户端 Host 或转发头推导。
+- bot 集成进程单独读取 `REGISTRATION_COMMAND_GUILD`、`REGISTRATION_BRIDGE_SECRET` 和 `REGISTRATION_GATE_URL`；网关与 bot 是不同进程时，需分别设置环境变量。网关地址必须是受信任的私有服务，Bearer 密钥会发送到该地址。
+- 首页 API 地址显示与复制取当前浏览器页面的 origin，不会指向项目作者的站点。站点公告可继续由后台管理，不会因更新源码自动覆盖 `data/announcement.html`。
+- **升级提醒**：从依赖硬编码默认值的旧版本升级前，必须先把自己的域名和 Discord ID 迁入私有环境配置。本次通用化没有数据库/Key 迁移。工作台 Cookie 改用通用名称；部署新版网关前，独立工作台/SSR 服务中读取会话 Cookie 的逻辑也必须配套使用 `__Host-nai-gate-wb-session`，并检查 OAuth Cookie `__Host-nai-gate-wb-oauth`、logout 和反向代理转发。仅让用户重新登录不足以修复旧工作台仍读取旧名称的问题。配套升级后，验证登录 → 工作台服务端解析 → 注销链路；保持 Cookie 的 `__Host-`、Secure、HttpOnly、SameSite=Lax、Path=/ 及无 Domain 属性，不要降级安全属性。
+- 工作台 OAuth/session 配置与私有 resolve 桥接分别拒绝未授权请求：缺少 `WORKBENCH_AUTH_BRIDGE_SECRET` 时可能仍可完成 OAuth，但工作台无法解析会话，`/workbench-auth/resolve` 会返回 401。实际部署应同时配置网关与工作台侧匹配的桥接密钥，再开放登录入口。
+
+可选 Hermes 插件测试只在显式设置 `HERMES_TOP_PLUGIN_PATH` / `HERMES_SITE_COMMANDS_PLUGIN_PATH` 且安装其依赖时运行，不会自动读取服务器上的插件。站点命令插件测试使用独立测试配置（命令 guild 为 `100000000000000001`），不要指向生产插件进行在线交互。
+
+对外发布前，除了检查源码，还应检查提交作者/提交者邮箱、Git 历史、PR 引用和附件。使用 GitHub noreply 邮箱提交，并在 GitHub 邮箱设置开启隐藏邮箱和阻止泄露邮箱的命令行推送；网页合并提交也应检查邮箱隐私设置。删除当前文件不能清除旧提交、关闭 PR、缓存或第三方 fork；真实凭证应先撤销，再按 GitHub 官方敏感数据清理流程处理历史。不要把生产日志或成员关联资料放进公开仓库。
+
 ## 配置与数据
 
 完整环境变量见 [.env.example](.env.example)。特别注意：

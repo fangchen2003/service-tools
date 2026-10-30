@@ -1,6 +1,7 @@
 """Real Discord tree; sync and interactions are mocked, no external writes."""
 import asyncio
 import importlib.util
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -12,11 +13,12 @@ try:
 except ImportError:
     raise unittest.SkipTest("Optional Hermes Discord plugin dependencies are not installed") from None
 
-PLUGIN = Path('~/.hermes/plugins/nai-site-commands/__init__.py')
+PLUGIN = Path(os.environ["HERMES_SITE_COMMANDS_PLUGIN_PATH"]) if os.environ.get("HERMES_SITE_COMMANDS_PLUGIN_PATH") else None
 
-@unittest.skipUnless(PLUGIN.exists(), "Requires the optional local Hermes plugin installation")
+@unittest.skipUnless(PLUGIN is not None and PLUGIN.is_file(), "Requires the optional local Hermes plugin installation")
 class SiteCommandsTests(unittest.IsolatedAsyncioTestCase):
     async def test_public_native_commands_are_restored_and_synced_once(self):
+        assert PLUGIN is not None
         self.assertTrue(PLUGIN.exists(), 'Durable site command extension is missing')
         spec = importlib.util.spec_from_file_location('site_commands_under_test', PLUGIN)
         module = importlib.util.module_from_spec(spec)

@@ -6,20 +6,15 @@ import os
 import re
 import secrets
 import time
+from dataclasses import replace
 from typing import Any
 from urllib.parse import urlencode
 
 import httpx
 
+from .deployment import DeploymentConfig
 from .policy import gen_key
 
-COMMAND_GUILD = "100000000000000001"
-MEMBERSHIP_GUILD = "100000000000000002"
-MEMBERSHIP_ROLE = "100000000000000003"
-SITE_URL = "https://gate.example.com/"
-# Keep the Discord-registered callback during the parallel-domain migration.
-LEGACY_OAUTH_REDIRECT_URI = "https://gate.example.com/self-register/callback"
-WORKBENCH_URL = "https://gate.example.com/workbench/"
 KEY_PATTERN = re.compile(r"nai-[A-Za-z0-9_-]{16,128}")
 
 
@@ -29,16 +24,27 @@ class RegistrationError(Exception):
 
 class RegistrationService:
     def __init__(self, db, http: httpx.AsyncClient, *, client_id: str, client_secret: str,
-                 bot_token: str, bridge_secret: str, redirect_uri: str):
+                 bot_token: str, bridge_secret: str, redirect_uri: str | None = None,
+                 deployment: DeploymentConfig | None = None):
         self.db, self.http = db, http
         self.client_id, self.client_secret = client_id, client_secret
         self.bot_token, self.bridge_secret = bot_token, bridge_secret
-        self.redirect_uri = redirect_uri
+        self.deployment = deployment if deployment is not None else DeploymentConfig.from_env()
+        if redirect_uri is not None:
+            self.deployment = replace(self.deployment, redirect_uri=redirect_uri)
+        self.redirect_uri = self.deployment.redirect_uri
+        self.command_guild = self.deployment.command_guild
         self.pending: dict[str, tuple[str, float]] = {}
         self.lock = asyncio.Lock()
 
+    def _require_configured(self):
+        if not self.deployment.registration_ready or not all((
+                self.client_id, self.client_secret, self.bot_token, self.bridge_secret)):
+            raise RegistrationError("自助注册尚未配置。")
+
     async def begin(self, user_id: str, guild_id: str) -> str:
-        if guild_id != COMMAND_GUILD or not user_id.isdecimal():
+        self._require_configured()
+        if not self.command_guild or guild_id != self.command_guild or not user_id.isdecimal():
             raise RegistrationError("请在指定服务器使用 /register。")
         if (await self.db._db.execute_fetchall(
             "SELECT 1 FROM discord_registrations WHERE discord_id=?", (user_id,)
@@ -61,10 +67,9 @@ class RegistrationService:
             raise RegistrationError("Discord 身份核验或私信失败，请检查授权和私信设置后重试。")
         return response.json()
 
-    @staticmethod
-    def _key_message(key: str, *, restored: bool = False) -> str:
+    def _key_message(self, key: str, *, restored: bool = False) -> str:
         prefix = "你的原 NAI Gate API Key 已恢复：" if restored else "你的 NAI Gate API Key："
-        return (f"{prefix}`{key}`\n网址：{SITE_URL}\n仿 NAI 官方的工作台：{WORKBENCH_URL}\n"
+        return (f"{prefix}`{key}`\n网址：{self.deployment.site_url}\n仿 NAI 官方的工作台：{self.deployment.workbench_url}\n"
                 "每日额度：V5 High 30 张；V4.5 及以下 100 张。\n"
                 "普通生图仅支持免费规格，超尺寸、步数、多张及 SMEA 会自动调整；不能安全转为免费的功能拒绝，V5 耗尽不会回退付费。\n"
                 "使用 `/vibe` 上传参考图并编码为可导入工作台的 Vibe 文件；每天最多成功编码 3 次，北京时间零点恢复。已编码 Vibe 可重复使用，V4/V4.5 每次生图最多使用 4 个。\n"
@@ -96,7 +101,8 @@ class RegistrationService:
         return None
 
     async def find(self, user_id: str, guild_id: str) -> str:
-        if guild_id != COMMAND_GUILD or not user_id.isdecimal():
+        self._require_configured()
+        if not self.command_guild or guild_id != self.command_guild or not user_id.isdecimal():
             raise RegistrationError("请在指定服务器使用 /find。")
         async with self.lock:
             registration = await self.db.get_discord_registration(user_id)
@@ -124,6 +130,7 @@ class RegistrationService:
             return status
 
     async def finish(self, code: str, state: str) -> str:
+        self._require_configured()
         pending = self.pending.pop(state, None)
         if not pending or pending[1] <= time.time() or not code:
             raise RegistrationError("授权链接无效或已过期，请重新使用 /register。")
@@ -146,9 +153,9 @@ class RegistrationService:
                 user = await self._discord("GET", "/users/@me", bearer="Bearer " + token)
                 if str(user.get("id")) != expected_id:
                     raise RegistrationError("授权的 Discord 账号与命令发起者不一致。")
-                member = await self._discord("GET", f"/users/@me/guilds/{MEMBERSHIP_GUILD}/member",
+                member = await self._discord("GET", f"/users/@me/guilds/{self.deployment.membership_guild}/member",
                                              bearer="Bearer " + token)
-                if MEMBERSHIP_ROLE not in member.get("roles", []):
+                if self.deployment.membership_role not in member.get("roles", []):
                     raise RegistrationError("未检测到指定身份组，无法领取 Key。")
                 channel = await self._discord("POST", "/users/@me/channels",
                     bearer="Bot " + self.bot_token, json={"recipient_id": expected_id})
@@ -181,8 +188,9 @@ class RegistrationService:
 
 def configured_service(db, http: httpx.AsyncClient) -> RegistrationService | None:
     names = ("DISCORD_CLIENT_ID", "DISCORD_CLIENT_SECRET", "DISCORD_BOT_TOKEN", "REGISTRATION_BRIDGE_SECRET")
-    if not all(os.getenv(name) for name in names):
+    deployment = DeploymentConfig.from_env()
+    if not deployment.registration_ready or not all(os.getenv(name) for name in names):
         return None
     return RegistrationService(db, http, client_id=os.environ[names[0]], client_secret=os.environ[names[1]],
         bot_token=os.environ[names[2]], bridge_secret=os.environ[names[3]],
-        redirect_uri=os.getenv("DISCORD_REDIRECT_URI", LEGACY_OAUTH_REDIRECT_URI))
+        deployment=deployment)

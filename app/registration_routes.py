@@ -10,9 +10,15 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from .registration import RegistrationError
-from .registration import COMMAND_GUILD
 
 router = APIRouter(prefix="/self-register")
+
+
+def require_bridge(request: Request, service):
+    secret = service.bridge_secret
+    given = request.headers.get("Authorization", "")
+    if not secret or not hmac.compare_digest(given.encode(), ("Bearer " + secret).encode()):
+        raise HTTPException(401, "未授权")
 
 
 class Intent(BaseModel):
@@ -25,9 +31,7 @@ async def find(request: Request, body: Intent):
     service = getattr(request.app.state, "registrar", None)
     if service is None:
         raise HTTPException(503, "自助服务尚未配置")
-    if not hmac.compare_digest(request.headers.get("Authorization", ""),
-                               "Bearer " + service.bridge_secret):
-        raise HTTPException(401, "未授权")
+    require_bridge(request, service)
     try:
         status = await service.find(body.discord_id, body.guild_id)
     except RegistrationError as exc:
@@ -40,10 +44,8 @@ async def charge(request: Request, body: Intent):
     service = getattr(request.app.state, "registrar", None)
     if service is None:
         raise HTTPException(503, "自助服务尚未配置")
-    if not hmac.compare_digest(request.headers.get("Authorization", ""),
-                               "Bearer " + service.bridge_secret):
-        raise HTTPException(401, "未授权")
-    if body.guild_id != COMMAND_GUILD or not body.discord_id.isdecimal():
+    require_bridge(request, service)
+    if not service.command_guild or body.guild_id != service.command_guild or not body.discord_id.isdecimal():
         raise HTTPException(403, "请在指定服务器使用 /charge。")
     day = datetime.now(ZoneInfo(service.db.tz)).strftime("%Y-%m-%d")
     result = await service.db.charge_registered_key(body.discord_id, day)
@@ -57,10 +59,8 @@ async def vibe(request: Request, body: Intent):
     service = getattr(request.app.state, "registrar", None)
     if service is None:
         raise HTTPException(503, "自助服务尚未配置")
-    if not hmac.compare_digest(request.headers.get("Authorization", ""),
-                               "Bearer " + service.bridge_secret):
-        raise HTTPException(401, "未授权")
-    if body.guild_id != COMMAND_GUILD or not body.discord_id.isdecimal():
+    require_bridge(request, service)
+    if not service.command_guild or body.guild_id != service.command_guild or not body.discord_id.isdecimal():
         raise HTTPException(403, "请在指定服务器使用 /vibe。")
     result = await service.db.claim_registered_vibe(body.discord_id)
     if result["status"] == "not_registered":
@@ -73,9 +73,7 @@ async def intent(request: Request, body: Intent):
     service = getattr(request.app.state, "registrar", None)
     if service is None:
         raise HTTPException(503, "自助注册尚未配置")
-    given = request.headers.get("Authorization", "")
-    if not hmac.compare_digest(given, "Bearer " + service.bridge_secret):
-        raise HTTPException(401, "未授权")
+    require_bridge(request, service)
     try:
         url = await service.begin(body.discord_id, body.guild_id)
     except RegistrationError as exc:

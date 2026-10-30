@@ -17,7 +17,17 @@ class FakeResponse:
         self.defer = AsyncMock()
 
 
-class CommandTests(unittest.IsolatedAsyncioTestCase):
+class ConfiguredBridgeTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        env = patch.dict(os.environ, {
+            "REGISTRATION_COMMAND_GUILD": "100000000000000001",
+            "REGISTRATION_GATE_URL": "http://127.0.0.1:8000",
+        })
+        env.start()
+        self.addCleanup(env.stop)
+
+
+class CommandTests(ConfiguredBridgeTests):
     async def test_find_is_private_and_requests_registered_key_recovery(self):
         interaction = SimpleNamespace(guild_id=100000000000000001, user=SimpleNamespace(id=777),
                                       response=FakeResponse(), followup=SimpleNamespace(send=AsyncMock()))
@@ -76,7 +86,7 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("discord.com/oauth2", interaction.followup.send.await_args.args[0])
 
 
-class VibeCommandTests(unittest.IsolatedAsyncioTestCase):
+class VibeCommandTests(ConfiguredBridgeTests):
     def interaction(self, guild_id: int | None = 100000000000000001, user_id: int | None = 777):
         return SimpleNamespace(
             guild_id=guild_id, user=SimpleNamespace(id=user_id, name="spoofed-888"),
@@ -109,7 +119,7 @@ class VibeCommandTests(unittest.IsolatedAsyncioTestCase):
         interaction = self.interaction()
         requests = await self.invoke(interaction, {"status": "claimed", "remaining": 3})
         self.assertEqual(len(requests), 1)
-        self.assertEqual(str(requests[0].url), "http://127.0.0.1:3003/self-register/vibe")
+        self.assertEqual(str(requests[0].url), "http://127.0.0.1:8000/self-register/vibe")
         self.assertEqual(requests[0].headers["Authorization"], "Bearer bridge-secret")
         self.assertEqual(json.loads(requests[0].content), {
             "discord_id": "777", "guild_id": "100000000000000001",

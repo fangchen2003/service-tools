@@ -179,7 +179,13 @@ def test_admin_ui_has_no_obsolete_anlas_permission_or_budget_editors():
 
 def test_registration_message_explains_vibe_daily_encode_reset():
     from app.registration import RegistrationService
-    message = RegistrationService._key_message("nai-fixture")
+    from app.deployment import DeploymentConfig
+    from unittest.mock import Mock
+    import httpx
+    service = RegistrationService(None, Mock(spec=httpx.AsyncClient), client_id="fixture-client", client_secret="fixture-secret",
+        bot_token="fixture-bot", bridge_secret="fixture-bridge",
+        deployment=DeploymentConfig(site_url="https://gate.example.com/"))
+    message = service._key_message("nai-fixture")
     assert "/vibe" in message and "3" in message
     assert "零点" in message and "编码" in message
     assert "免费" in message
