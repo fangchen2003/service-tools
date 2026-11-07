@@ -18,6 +18,7 @@ from .v5_effort import settings as effort_settings
 from .reconciliation import ReconciliationError
 from .state import RUNTIME_LIMIT_BOUNDS
 from .upstream_store import UpstreamManagementError
+from .queue_metrics import MetricsUnavailable
 
 router = APIRouter(prefix="/admin/api")
 
@@ -108,6 +109,26 @@ async def logout(request: Request, response: Response):
 async def me(request: Request):
     require_admin(request)
     return {"ok": True}
+
+
+@router.get("/queue-metrics")
+async def queue_metrics(request: Request, response: Response, hours: int = 24):
+    require_admin(request)
+    if hours not in (24, 168):
+        raise HTTPException(422, "仅支持近 24 小时或 7 天")
+    response.headers["Cache-Control"] = "no-store"
+    state = request.app.state.gate
+    try:
+        result = await state.queue_metrics.report(hours)
+    except MetricsUnavailable:
+        raise HTTPException(503, "观测记录暂不可用，生图服务不受影响",
+                            headers={"Cache-Control": "no-store"}) from None
+    current = state.image_queue.snapshot()
+    current["queued"] = sum(t.operation != "tags" and t.dispatched_at is None
+                            for t in state.image_queue._pending.values())
+    current["active"] = sum(getattr(t.image_slots, "active", 0) for t in state.nai.pool)
+    result["current"] = current
+    return result
 
 
 @router.get("/reconciliation")

@@ -69,6 +69,7 @@ class DeploymentConfig:
     site_url: str = ""
     workbench_url: str = ""
     redirect_uri: str = ""
+    discord_invite_url: str = ""
 
     def __post_init__(self):
         site = self.site_url.rstrip("/") + "/" if self.site_url else ""
@@ -82,7 +83,8 @@ class DeploymentConfig:
                    membership_guild=os.getenv("REGISTRATION_MEMBERSHIP_GUILD", ""),
                    membership_role=os.getenv("REGISTRATION_MEMBERSHIP_ROLE", ""),
                    site_url=os.getenv("SITE_URL", ""), workbench_url=os.getenv("WORKBENCH_URL", ""),
-                   redirect_uri=os.getenv("DISCORD_REDIRECT_URI", ""))
+                   redirect_uri=os.getenv("DISCORD_REDIRECT_URI", ""),
+                   discord_invite_url=os.getenv("DISCORD_INVITE_URL", ""))
 
     @property
     def allowed_origins(self):
@@ -97,3 +99,13 @@ class DeploymentConfig:
     def registration_ready(self):
         return bool(self.auth_ready and all(re.fullmatch(r"[1-9][0-9]{16,19}", value)
                     for value in (self.command_guild, self.membership_guild, self.membership_role)))
+
+    @property
+    def guild_verification_ready(self):
+        # No deployment-owned invitation or membership IDs ship in public code.
+        # Restrict invitation paths too: this URL is revealed only after OAuth.
+        return bool(safe_https_url(self.redirect_uri)
+                    and all(re.fullmatch(r"[1-9][0-9]{16,19}", value)
+                            for value in (self.membership_guild, self.membership_role))
+                    and re.fullmatch(r"https://(?:discord\.gg/|discord\.com/invite/)[A-Za-z0-9_-]+",
+                                     self.discord_invite_url))

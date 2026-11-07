@@ -13,7 +13,7 @@ async def claim(st):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('paid', [False, True])
+@pytest.mark.parametrize('paid', [False])
 @pytest.mark.parametrize('safe', [False, True])
 async def test_quote_and_execution_clamp_all_ordinary_keys(effort_env, paid, safe):
     st = effort_env.state
@@ -70,7 +70,7 @@ async def test_pending_vibes_use_claim_not_numeric_anlas_permission(effort_env):
 @pytest.mark.parametrize('operation', ['upscale', 'augment-image'])
 async def test_ordinary_paid_tool_quote_matches_runtime_denial(effort_env, operation):
     st = effort_env.state
-    await st.db.update_key(1, {'allow_anlas': True})
+    await st.db.update_key(1, {'allow_anlas': False})
     body = {'image': picture(), 'model': 'nai-diffusion-5-curated', 'req_type': 'bg-removal'}
     assert (await quote(body, operation)).status_code == 402
     assert (await post('/ai/'+operation, body)).status_code == 402

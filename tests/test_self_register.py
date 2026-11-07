@@ -197,7 +197,10 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "sent")
         self.assertEqual((await self.db._db.execute_fetchall("SELECT count(*) FROM api_keys"))[0][0], 1)
         row = (await self.db._db.execute_fetchall("SELECT daily_v5,daily_images,allow_anlas,allow_img2img,exclude_global_v5,image_model_scope FROM api_keys"))[0]
-        self.assertEqual(tuple(row), (30, 100, 0, 0, 0, "all"))
+        defaults = self.service.settings
+        self.assertEqual(tuple(row), (defaults.default_daily_v5, defaults.default_daily_images,
+            int(defaults.default_allow_anlas), int(defaults.default_allow_img2img),
+            int(defaults.default_exclude_global_v5), defaults.default_image_model_scope))
         self.assertEqual((await self.db._db.execute_fetchall("SELECT discord_id FROM discord_registrations"))[0][0], "777")
         self.assertIn(("POST", "/api/channels/dm-1/messages"), self.calls)
         self.assertIn("https://gate.example.com/", self.dm_body)
@@ -205,7 +208,8 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("仿 NAI 官方的工作台", self.dm_body)
         self.assertIn("/charge", self.dm_body)
         self.assertIn("/find", self.dm_body)
-        self.assertIn("V5 High 30 张", self.dm_body)
+        self.assertIn("模型权限", self.dm_body)
+        self.assertIn(str(defaults.default_daily_images) + " 张", self.dm_body)
         self.assertIn("每天可使用一次", self.dm_body)
         self.assertIn("nai-", self.dm_body)
         with self.assertRaises(RegistrationError):
@@ -227,7 +231,7 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(restored["key_id"], registration["key_id"])
         self.assertEqual(restored["token"], original_key)
         self.assertEqual(restored["active_token"], original_key)
-        self.assertEqual(restored["daily_v5"], 30)
+        self.assertEqual(restored["daily_v5"], self.service.settings.default_daily_v5)
         self.assertIn(original_key, self.dm_body)
 
     async def test_rotation_delete_find_never_restores_revoked_token(self):

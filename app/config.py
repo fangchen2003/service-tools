@@ -64,7 +64,7 @@ class Settings:
     login_window_seconds: int = _int("LOGIN_WINDOW_SECONDS", 300)
     key_inactivity_delete_days: int = _int("KEY_INACTIVITY_DELETE_DAYS", 3)
 
-    # ---- 普通用户始终强制免费档，safe_clamp 仅保留旧配置兼容 ----
+    # ---- 未开通 Anlas 的 Key 使用免费档，safe_clamp 保留旧配置兼容 ----
     safe_clamp: bool = _bool("SAFE_CLAMP", True)
     max_pixels: int = _int("MAX_PIXELS", 1024 * 1024)
     max_steps: int = min(28, max(1, _int("MAX_STEPS", 28)))

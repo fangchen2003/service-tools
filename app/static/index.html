@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>NAI Gate 管理后台</title>
 <link rel="stylesheet" href="/admin/assets/common.css?v=20261028-art-title">
-<link rel="stylesheet" href="/admin/assets/gate.css?v=20261028-art-title">
+<link rel="stylesheet" href="/admin/assets/gate.css?v=20261106-queue-metrics-registration">
 <link rel="stylesheet" href="/admin/assets/palettes.css?v=20261028-palette-harmony">
 <link rel="stylesheet" href="/admin/assets/palette-picker.css?v=20261027-sidebar-shell">
 <link rel="stylesheet" href="/admin/assets/mobile-tables.css?v=20261027-single-metric-center">
@@ -13,7 +13,7 @@
 <script src="/admin/assets/theme.js?v=20261027-parity" defer></script>
 <script src="/admin/assets/sidebar-tools.js?v=20261027-sidebar-collapse" defer></script>
 <script src="/admin/assets/palette-picker.js?v=20261027-rose-pine" defer></script>
-<script src="/admin/assets/gate.js?v=20261028-local-freeonly-pr7" defer></script>
+<script src="/admin/assets/gate.js?v=20261107-queue-metrics-model-scope-registration-key-status" defer></script>
 </head>
 <body class="gate-page">
 <div id="login">
@@ -56,9 +56,20 @@
       <section id="tab-ov" class="gate-view">
         <div class="gate-stats" id="ovCards"></div>
         <div class="gate-overview-grid">
-          <section class="panel gate-chart-section"><div class="gate-section-heading"><h2>近 7 天生成量</h2><span class="gate-date-note" id="chartDate"></span></div><div class="gate-chart" id="chart" role="img" aria-label="近七天生成量"></div></section>
+          <section class="panel gate-chart-section"><div class="gate-section-heading"><h2>近 7 天生成量</h2><span class="gate-date-note" id="chartDate"></span></div><div class="gate-chart" id="chart" role="group" aria-label="近七天生成量"></div></section>
           <section class="panel gate-budget-card"><div class="gate-section-heading"><h2>全站今日 V5 额度</h2><i data-icon="brush"></i></div><div id="v5Budget"></div></section>
         </div>
+        <section class="panel gate-queue-metrics" id="queueMetrics" data-state="collecting" aria-labelledby="queueMetricsTitle">
+          <div class="gate-section-heading"><h2 id="queueMetricsTitle">排队与扩容观测</h2><select id="queueMetricsWindow" class="gate-filter-select" aria-label="排队观测时间窗口" onchange="changeQueueMetricsWindow(this.value)"><option value="24">近 24 小时</option><option value="168">近 7 天</option></select></div>
+          <p id="queueMetricsStatus" class="gate-queue-note" role="status" aria-live="polite">正在读取排队观测…</p>
+          <dl id="queueMetricsSummary" class="gate-queue-summary"></dl>
+          <div id="queueMetricsAssessment" class="gate-queue-assessment" data-level="insufficient"><strong>收集中 · 数据不足</strong><p>至少观测 6 小时、派发 50 个任务且覆盖所选窗口 50% 后，才提供扩容参考。</p></div>
+          <p id="queueMetricsCurrent" class="gate-queue-note"></p>
+          <p id="queueMetricsMeta" class="gate-queue-note"></p>
+          <p id="queueMetricsHealth" class="gate-queue-note"></p>
+          <details class="gate-history gate-queue-hours"><summary>查看逐小时观测（按入队小时分组 · 北京时间）<i data-icon="chevron"></i></summary><div class="gate-table-scroll" tabindex="0" role="region" aria-label="逐小时排队观测表"><table><thead><tr><th>入队小时起点</th><th>入队</th><th>派发</th><th>P50 等待</th><th>P95 等待</th><th>最长等待</th><th>超时 / 分母（率）</th><th>队列峰值</th><th>通道占用率</th><th>活跃 Key</th><th>覆盖率</th></tr></thead><tbody id="queueMetricsHourly"><tr><td colspan="11" class="empty-state">正在收集逐小时数据</td></tr></tbody></table></div></details>
+          <details class="gate-history"><summary>统计口径与扩容参考说明<i data-icon="chevron"></i></summary><div class="details-note">等待从入队至实际向上游派发，包含用户 / 上游间隔、上传与票据领取，不含生成耗时。记录图片生成、图片工具与 Vibe 任务，不含标签请求。队列深度指等待上游派发的任务数，不代表用户数；通道占用率为采样到的上游槽位占用，不是 GPU 利用率。超时率 = 排队超时 /（派发 + 排队超时），不含主动取消或过期；完成仅表示槽位释放，不保证生成成功。活跃 Key 为窗口内去重值，不能累加小时值。覆盖率反映窗口内实际观测时长。数据从部署后开始记录，不回填历史，保留 30 天、每 5 秒采样；采样不足时继续收集。扩容判断仅为建议，不承诺可新增多少用户，也不会自动开放注册或修改配额。</div></details>
+        </section>
         <section class="panel gate-upstream"><div class="gate-section-heading"><h2>上游 NovelAI 令牌池</h2><button class="btn gate-row-button" onclick="settingsPage('upstream');tab('set')">管理账号</button></div><div id="pool" class="gate-table-scroll"></div><div id="allowanceDetails" class="muted"></div></section>
         <section class="panel gate-reconciliation">
           <div class="gate-section-heading"><h2>Anlas 消耗核对</h2><button class="btn" id="reconRun" onclick="runReconciliation()" disabled><i data-icon="refresh"></i>查询并核对</button></div>
@@ -69,7 +80,7 @@
         <details class="panel usage-details"><summary>更多统计</summary><div id="usageDetails"></div></details>
       </section>
       <section id="tab-keys" class="gate-view" hidden>
-        <section class="panel"><div class="gate-key-toolbar"><label class="gate-search"><i data-icon="search"></i><input id="keySearch" type="search" placeholder="搜索名称或备注" aria-label="搜索 Key" oninput="renderKeys()"></label><select id="keyStatusFilter" class="gate-filter-select" aria-label="筛选 Key 状态" onchange="renderKeys()"><option value="all">全部状态</option><option value="on">已启用</option><option value="off">已停用</option></select><button class="btn btn-primary" onclick="openCreate()"><i data-icon="plus"></i>新建 Key</button></div><div class="gate-table-scroll"><table id="keysTable" class="gate-keys-table gate-mobile-table"><thead><tr><th>名称 / Key</th><th>状态</th><th>今日生成</th><th>今日用量</th><th>每日配额</th><th>最近使用</th><th class="gate-align-right">操作</th></tr></thead><tbody></tbody></table></div><div class="gate-table-foot"><span id="keyCount"></span></div></section>
+        <section class="panel"><div class="gate-key-toolbar"><label class="gate-search"><i data-icon="search"></i><input id="keySearch" type="search" placeholder="搜索名称或备注" aria-label="搜索 Key" oninput="renderKeys()"></label><select id="keyStatusFilter" class="gate-filter-select" aria-label="筛选 Key 状态" onchange="renderKeys()"><option value="all">全部状态</option><option value="on">已启用</option><option value="off">已停用</option><option value="expired">已过期</option></select><button class="btn btn-primary" onclick="openCreate()"><i data-icon="plus"></i>新建 Key</button></div><div class="gate-table-scroll"><table id="keysTable" class="gate-keys-table gate-mobile-table"><thead><tr><th>名称 / Key</th><th>状态</th><th>今日生成</th><th>今日用量</th><th>每日配额</th><th>最近使用</th><th class="gate-align-right">操作</th></tr></thead><tbody></tbody></table></div><div class="gate-table-foot"><span id="keyCount"></span></div></section>
       </section>
       <section id="tab-logs" class="gate-view" hidden>
         <section class="panel"><div class="gate-section-heading"><h2>最近用量</h2><select id="logFilter" class="gate-filter-select" aria-label="按 Key 筛选日志" onchange="logPage=1;loadLogs()"><option value="">全部 Key</option></select></div><div class="gate-table-scroll"><table class="logs gate-log-table gate-mobile-table"><thead><tr><th>时间</th><th>Key</th><th>模型</th><th>状态</th><th>图片</th><th>Anlas</th><th>备注</th></tr></thead><tbody id="logBody"></tbody></table></div><div id="logPager" class="gate-log-foot"></div></section>
@@ -84,13 +95,14 @@
         <button data-setting-page="defaults" onclick="settingsPage('defaults')">Key 默认</button>
         <button data-setting-page="cleanup" onclick="settingsPage('cleanup')">自动清理</button>
         <button data-setting-page="advanced" onclick="settingsPage('advanced')">高级</button>
+        <button data-setting-page="registration" onclick="settingsPage('registration')">注册</button>
         <button data-setting-page="announcement" onclick="settingsPage('announcement')">公告</button>
         <button data-setting-page="effective" onclick="settingsPage('effective')">生效配置</button>
       </nav>
       <div class="settings-content">
         <section class="panel settings-page settings-fields" id="settings-budget">
           <h2>免费图片额度</h2>
-          <p class="settings-note">普通用户仅支持免费生成，V4.5 及以下最多 28 步，V5 High 最多 28 步、Medium 固定 14 步；High 和旧模型还受生成设置中的步数上限约束。超尺寸、多张、SMEA 自动调整为免费规格；付费参考、img2img 和局部重绘拒绝。V5 额度耗尽不回退付费。Vibe 编码须通过 /vibe 每日领取 3 次，北京时间零点归零且需重新领取；Anlas 仅保留用量审计。</p>
+          <p class="settings-note">未开通 Anlas 的 Key 仅支持免费生成：V4.5 及以下和 V5 High 最多 28 步、Medium 固定 14 步；超尺寸、多张、SMEA 自动调整为免费规格，V5 额度耗尽不回退付费。开启 Key 的「允许消耗 Anlas」后，可使用付费规格并在官方 V5 免费额度耗尽时消耗上游点数；图生图及图片工具另需权限。Anlas 不设日/月预算，仅记录审计。Vibe 编码仍须通过 /vibe 每日领取 3 次，北京时间零点归零且需重新领取。</p>
           <div class="setting-row"><label for="s_v5">全站每日 V5 额度<small>0 = 不限</small></label><div class="setting-control"><input id="s_v5" type="number" min="0" max="100000" step="1" required><span>单位</span></div></div>
           <div class="setting-row"><label for="s_auto_medium">V5 Full 自动节省<small>仅免费 Key 自动切换 Medium</small></label><div class="setting-check"><input id="s_auto_medium" type="checkbox"></div></div>
           <div class="setting-row"><label for="s_medium_threshold">Medium 切换阈值</label><div class="setting-control"><input id="s_medium_threshold" type="number" min="0" max="100" step="any" required><span>%</span></div></div>
@@ -126,6 +138,19 @@
           <h2>并发与文本限制</h2><div id="config-advanced"></div>
           <div class="settings-actions"><button class="btn btn-primary" type="button" data-save-config="advanced" onclick="saveConfigurationGroup('advanced')">保存设置</button></div>
         </section>
+        <section class="panel settings-page settings-fields" id="settings-registration" data-state="unavailable" hidden>
+          <div class="gate-section-heading"><h2>注册</h2><button class="btn" type="button" id="registrationRefresh" onclick="loadRegistration()">刷新</button></div>
+          <p class="settings-note" id="registrationStatus" role="status" aria-live="polite">尚未读取注册设置，请刷新后再保存。</p>
+          <div class="setting-row"><span>注册状态</span><strong id="registrationState">—</strong></div>
+          <div class="setting-row"><span>今日成功注册</span><strong id="registrationToday">—</strong></div>
+          <div class="setting-row"><span>总注册</span><strong id="registrationTotal">—</strong></div>
+          <p class="settings-note" id="registrationMeta"></p>
+          <div class="setting-row"><label for="registrationEnabled">开放注册</label><div class="setting-check"><input id="registrationEnabled" type="checkbox" disabled></div></div>
+          <div class="setting-row"><label for="registrationDailyLimit">每日成功注册上限<small>0 = 不限；按统计时区每日重置</small></label><div class="setting-control"><input id="registrationDailyLimit" type="number" min="0" max="100000" step="1" required disabled><span>人</span></div></div>
+          <div class="settings-actions"><button class="btn btn-primary" type="button" id="registrationSave" onclick="saveRegistration()" disabled>保存设置</button></div>
+          <h3 class="settings-subheading">近 30 天成功注册</h3>
+          <div class="settings-table gate-table-scroll" tabindex="0" role="region" aria-label="近 30 天成功注册统计"><table><thead><tr><th>日期</th><th>成功注册</th></tr></thead><tbody id="registrationHistory"><tr><td colspan="2">尚未读取</td></tr></tbody></table></div>
+        </section>
         <section class="panel settings-page" id="settings-announcement" hidden>
           <h2>站点公告</h2><textarea id="announce" aria-label="公告内容" rows="7" placeholder="填写站点公告"></textarea>
           <div class="settings-actions"><button class="btn btn-primary" type="button" onclick="saveAnnounce()">保存设置</button></div>
@@ -154,8 +179,9 @@
       <div><label for="f_rpm">每分钟请求数</label><input id="f_rpm" type="number" min="1" max="600" step="1" required></div>
       <div><label for="f_expires" id="expiryLabel">有效天数 · 0 为长期</label><input id="f_expires" type="number" min="0" max="3650" step="1"></div>
     </div>
-    <p class="settings-note">普通 Key 仅支持免费生成；Vibe 编码使用 /vibe 领取的每日 3 次独立额度。</p>
-    <label class="check"><input id="f_allow_img2img" type="checkbox"><span>允许免费图片处理工具<small>不开放付费 img2img、局部重绘、超分或去背景</small></span></label>
+    <p class="settings-note">付费权限默认关闭。开启后可消耗上游 Anlas，且没有点数日/月预算；Vibe 编码仍使用 /vibe 每日领取的 3 次独立额度。</p>
+    <label class="check"><input id="f_allow_anlas" type="checkbox"><span>允许消耗 Anlas<small>保留大尺寸、高步数、多张及付费参考；V5 免费额度耗尽可扣点</small></span></label>
+    <label class="check"><input id="f_allow_img2img" type="checkbox"><span>允许图片处理与图生图<small>付费 img2img、局部重绘、超分及去背景还需开启 Anlas 权限</small></span></label>
     <label class="check"><input id="f_exclude_global_v5" type="checkbox"><span>独立 V5 额度</span></label>
     <div id="keyUsageDetail" class="settings-note" hidden></div>
     <div id="keyOperations" class="key-operations" hidden></div>

@@ -78,15 +78,17 @@ async def test_medium_quote_matches_the_real_route_ledger(effort_env, streaming,
     await st.db.bump_counters(2, st.day(), v5=8, images=8)
     body = {**image_body(steps=50, sampler='k_dpmpp_2m', cfg_rescale=.8), 'model': 'nai-diffusion-5-full'}
     value = (await quote(body)).json()
-    assert value['effective_model'] == MEDIUM_MODEL
-    assert value['effective_parameters']['steps'] == 14
-    assert value['cost_limit'] == {'anlas': 0, 'v5': .6}
+    assert value['effective_model'] == ('nai-diffusion-5-full' if paid else MEDIUM_MODEL)
+    assert value['effective_parameters']['steps'] == (50 if paid else 14)
+    assert (value['cost_limit']['anlas'] > 0) is paid
+    assert value['cost_limit']['v5'] == (0 if paid else .6)
     response = await post('/ai/generate-image'+('-stream' if streaming else ''), {**body, 'cost_limit': value['cost_limit']})
     assert response.status_code == 200, response.text
     assert effort_env.calls[0]['model'] == value['effective_model']
     assert 'cost_limit' not in effort_env.calls[0]
     counter = await st.db.get_counter(1, st.day())
-    assert counter['v5'] == .6 and counter['anlas'] == 0
+    assert counter['v5'] == value['cost_limit']['v5']
+    assert counter['anlas'] == value['cost_limit']['anlas']
 
 
 @pytest.mark.asyncio

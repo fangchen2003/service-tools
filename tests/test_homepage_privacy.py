@@ -48,10 +48,15 @@ const vm = require('vm');
     }}},
     fetch: async (url) => {
       requests.push(url);
+      if (url === '/api/public/registration') return {ok: true, async json() { return {
+        today_count: 3, daily_limit: 12, remaining: 9, enabled: true,
+        configured: true, can_register: true, status: 'open'
+      }; }};
       if (url !== '/api/public/stats') throw new Error('unexpected request');
       return {ok: true, async json() { return {
         v5_images_today: 12, shared_v5_used: 3, shared_v5_limit: 10,
         medium_cost: 1, personal_v5_limit: 5, personal_legacy_limit: 8,
+        personal_image_model_scope: 'all',
         refreshed_at: now, reset_at: now + 3600, day: 'fixture', timezone: 'UTC'
       }; }};
     },
@@ -95,7 +100,7 @@ def test_api_display_copy_and_failure_use_current_origin(origin, reject_clipboar
     assert actual["toast"] == (
         f"无法自动复制，请手动复制 {origin}" if reject_clipboard else "API 地址已复制"
     )
-    assert actual["requests"] == ["/api/public/stats"]
+    assert actual["requests"] == ["/api/public/stats", "/api/public/registration"]
     assert actual["images"] == "12" and actual["state"] == "ok"
 
 

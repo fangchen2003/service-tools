@@ -27,6 +27,19 @@ def test_landing_contains_real_workbench_live_stats_and_usage_notes():
     assert 'prefers-reduced-motion' in html
 
 
+def test_landing_combines_generic_origin_registration_and_explicit_paid_policy():
+    html = (ROOT / 'app/static/home.html').read_text()
+    assert not any(marker in html for marker in ('<<<<<<<', '=======', '>>>>>>>'))
+    assert 'id="api-origin"' in html and 'window.location.origin' in html
+    assert 'id="registration-notice"' in html
+    assert 'href="/self-register/verify"' in html
+    assert '/api/public/registration' in html
+    assert 'personal_image_model_scope' in html
+    assert 'allow_anlas' in html
+    assert '未开通 Anlas' in html and '已开通 Anlas' in html
+    assert '仅开放免费规格，不会自动转付费' not in html
+
+
 
 def test_homepage_artwork_has_cache_version_and_updated_dimensions():
     import hashlib

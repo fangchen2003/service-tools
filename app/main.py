@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import admin, public_stats, registration_routes, workbench_auth
+from . import admin, public_stats, registration_routes, registration_admin, workbench_auth, guild_verification
 from .registration import configured_service
 from .body import read_bounded_body, read_json_body
 from .config import load_settings
@@ -150,14 +150,31 @@ async def lifespan(app: FastAPI):
         print("[warn] 尚未配置上游账号，所有生成请求将返回 503")
     app.state.gate = STATE
     registration_http = httpx.AsyncClient()
-    app.state.registrar = configured_service(STATE.db, registration_http)
+    app.state.registrar = configured_service(STATE.db, registration_http, settings=STATE.settings)
     app.state.workbench_auth = workbench_auth.configured_service(STATE.db, registration_http)
     if app.state.workbench_auth is not None:
         await app.state.workbench_auth.initialize()
+    app.state.guild_verification = guild_verification.configured_service(STATE.db, registration_http)
+    if app.state.guild_verification is not None:
+        await app.state.guild_verification.initialize()
     cleanup_task = asyncio.create_task(inactive_key_cleanup_loop())
+    try:
+        await STATE.queue_metrics.start()
+    except Exception:
+        logging.getLogger(__name__).warning("queue telemetry unavailable; generation remains enabled")
+    metrics_task = asyncio.create_task(STATE.queue_metrics.run(STATE.queue_metrics_sample))
     try:
         yield
     finally:
+        metrics_task.cancel()
+        try:
+            await metrics_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await STATE.queue_metrics.close()
+        except Exception:
+            logging.getLogger(__name__).warning("queue telemetry final flush unavailable")
         cleanup_task.cancel()
         try:
             await cleanup_task
@@ -174,7 +191,9 @@ if SETTINGS.cors_origins:
                        allow_methods=["*"], allow_headers=["*"], allow_credentials=False)
 app.add_middleware(workbench_auth.SecurityHeadersMiddleware)
 app.include_router(admin.router)
+app.include_router(registration_admin.router)
 app.include_router(registration_routes.router)
+app.include_router(guild_verification.router)
 app.mount("/admin/assets", StaticFiles(directory=Path(__file__).parent / "static" / "assets"),
           name="admin-assets")
 app.include_router(workbench_auth.router)
@@ -342,8 +361,8 @@ async def quota_image_check(key, est: dict, *, legacy_free_images: int = 0,
             total = await STATE.db.day_v5_total(STATE.day())
             if units(total) + sum(units(r.v5) for r in global_day if not r.exclude_global_v5) + units(est["v5"]) > units(g):
                 raise err(402, f"全站今日 V5 额度已用完（{int(g)} 单位/天），明天再来")
-    if est["anlas"] > 0:
-        raise err(402, "普通用户仅支持免费功能；该请求会消耗 Anlas，无法安全转换为免费请求")
+    if est["anlas"] > 0 and not key["allow_anlas"]:
+        raise err(402, "该 Key 未开通 Anlas 权限；仅支持免费功能")
 
 
 class ImageReservation:
@@ -456,7 +475,7 @@ async def upstream_call(url: str, payload: dict, accept: str = "*/*", *,
                         v5_free: bool = False, image_count: int = 0,
                         v5_usage: float = 1,
                         image_lane: bool = False, resolve_v5_cost=None,
-                        max_response_bytes: int | None = None) -> httpx.Response:
+                        max_response_bytes: int | None = None, on_dispatch=None) -> httpx.Response:
     try:
         return await STATE.nai.request(
             "POST", url, payload, accept=accept, on_rate_limited=on_rate_limited,
@@ -466,6 +485,7 @@ async def upstream_call(url: str, payload: dict, accept: str = "*/*", *,
             **({"queue_timeout": STATE.settings.queue_timeout,
                 "before_dispatch": check_image_cooldown} if image_lane else {}),
             **({"max_response_bytes": max_response_bytes} if max_response_bytes else {}),
+            **({"on_dispatch": on_dispatch} if on_dispatch is not None else {}),
             **({"resolve_v5_cost": resolve_v5_cost} if resolve_v5_cost is not None else {}),
         )
     except UpstreamError as e:
@@ -516,6 +536,9 @@ async def image_tool(request: Request, operation: str):
     admission = image_admission(request, key, operation)
     try:
         return await _image_tool(request, operation, key, admission)
+    except BaseException as exc:
+        admission.failed(exc)
+        raise
     finally:
         admission.close()
 
@@ -549,6 +572,7 @@ async def _image_tool(request, operation, key, admission):
                     f"{STATE.nai.image_host}/ai/{operation}", payload,
                     on_rate_limited=limited, requires_anlas=cost > 0,
                     image_lane=True, max_response_bytes=MAX_RESPONSE_BYTES,
+                    on_dispatch=admission.mark_dispatched,
                 )
                 billing_uncertain = resp.status_code in (200, 201) or resp.status_code >= 500
                 if resp.status_code not in (200, 201):
@@ -586,6 +610,9 @@ async def encode_vibe(request: Request):
     admission = image_admission(request, key, "encode-vibe")
     try:
         return await _encode_vibe(request, key, admission)
+    except BaseException as exc:
+        admission.failed(exc)
+        raise
     finally:
         admission.close()
 
@@ -619,6 +646,7 @@ async def _encode_vibe(request, key, admission):
                 f"{STATE.nai.image_host}/ai/encode-vibe", payload,
                 accept="application/octet-stream", on_rate_limited=record_encoding_429,
                 requires_anlas=True, image_lane=True, max_response_bytes=MAX_RESPONSE_BYTES,
+                on_dispatch=admission.mark_dispatched,
             )
         except (GateError, httpx.HTTPError, TimeoutError) as exc:
             if reservation is not None:
@@ -664,7 +692,7 @@ async def _encode_vibe(request, key, admission):
 
 
 def image_step_limit(key, model_tier):
-    if key["is_admin"]:
+    if key["is_admin"] or key["allow_anlas"]:
         return None
     return min(28, max(1, STATE.settings.max_steps))
 
@@ -682,18 +710,21 @@ def prepare_image_pricing(model: str, parameters: dict, key, *, log_rejections: 
             record(key, "image", model, "rejected", detail="模型权限：仅允许 V4.5 及更低")
         raise err(403, "该 Key 仅允许 V4.5 及更低图片模型")
 
-    # Free-key step limits are independent of SAFE_CLAMP; paid keys keep their steps.
+    # Paid access bypasses rewriting, never basic numeric validation.
     step_notes = []
     if not key["is_admin"]:
-        value = p0.get("steps", 23)
-        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-            raise err(400, "steps 必须是正整数")
-        try:
-            steps = int(value)
-            if steps < 1 or float(value) != steps:
-                raise ValueError
-        except (TypeError, ValueError, OverflowError):
-            raise err(400, "steps 必须是正整数") from None
+        for name, default in (("width", 832), ("height", 1216), ("steps", 23), ("n_samples", 1)):
+            value = p0.get(name, default)
+            if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+                raise err(400, f"{name} 必须是正整数")
+            try:
+                number = int(value)
+                if number < 1 or float(value) != number:
+                    raise ValueError
+            except (TypeError, ValueError, OverflowError):
+                raise err(400, f"{name} 必须是正整数") from None
+            p0[name] = number
+        steps = p0["steps"]
         limit = image_step_limit(key, model_tier)
         p0["steps"] = min(steps, limit) if limit is not None else steps
         if limit is not None and steps > limit:
@@ -708,8 +739,8 @@ def prepare_image_pricing(model: str, parameters: dict, key, *, log_rejections: 
                 record(key, "image", model, "rejected", detail="img2img 未开通 Anlas 权限")
             raise err(402, "该 Key 未开通 Anlas 权限，无法使用图生图 / 局部重绘")
 
-    # SAFE_CLAMP and legacy allow_anlas cannot opt ordinary keys into paid paths.
-    if not key["is_admin"]:
+    # Explicit per-key paid permission bypasses free-only parameter rewriting.
+    if not key["is_admin"] and not key["allow_anlas"]:
         try:
             p0, notes, problem = clamp_image_pricing(
                 model, p0,
@@ -742,8 +773,16 @@ def prepare_image_pricing(model: str, parameters: dict, key, *, log_rejections: 
 async def prepare_image_generation(body: dict, key, *, log_rejections: bool = False):
     """Validate real image/reference data before applying the shared pricing policy."""
     body = copy.deepcopy(body)
-    if not key["is_admin"] and body.get("action", "generate") != "generate":
-        raise err(400, "普通用户仅支持免费文生图 action=generate；无法安全转换其他生成操作")
+    if not key["is_admin"]:
+        action = body.get("action", "generate")
+        if not key["allow_anlas"] and action != "generate":
+            raise err(400, "未开通 Anlas 的 Key 仅支持免费文生图 action=generate")
+        if not isinstance(action, str) or action not in ("generate", "img2img", "infill"):
+            raise err(400, "action 仅支持 generate、img2img 或 infill")
+        source = body.get("parameters") or {}
+        if isinstance(source, dict) and action != "generate":
+            if not source.get("image") or (action == "infill" and not source.get("mask")):
+                raise err(400, "img2img / infill 需要完整的原图或蒙版")
     if body.get("image") or body.get("mask"):
         raise err(400, "生图请求的 image 和 mask 请放在 parameters 中")
     problem = validate_image_references(body)
@@ -783,8 +822,8 @@ async def prepare_image_generation(body: dict, key, *, log_rejections: bool = Fa
 
 
 async def resolve_v5_price(body: dict, key, *, exhausted: bool = False, reservation=None):
-    if exhausted and not key["is_admin"]:
-        raise err(402, "V5 免费额度已耗尽；普通用户不会回退到 Anlas 付费生成，请等待额度恢复")
+    if exhausted and not (key["is_admin"] or key["allow_anlas"]):
+        raise err(402, "V5 免费额度已耗尽；该 Key 未开通 Anlas 权限，请等待额度恢复")
     p = body["parameters"]
     problem = validate_image_references(body)
     if problem:
@@ -809,7 +848,7 @@ async def resolve_v5_pricing(model: str, p: dict, key, *, pure_generation: bool,
                             exhausted: bool = False, reservation=None):
     config = await effort_settings(STATE.db)
     auto = False
-    if (config["v5_auto_medium"] and not key["is_admin"]
+    if (config["v5_auto_medium"] and not key["is_admin"] and not key["allow_anlas"]
             and model == "nai-diffusion-5-full" and pure_generation):
         cap = units(await STATE.db.get_setting("global_daily_v5", STATE.settings.global_daily_v5) or 0)
         used = units(await STATE.db.day_v5_total(STATE.day()))
@@ -953,6 +992,9 @@ async def _generate_image(request: Request, *, streaming: bool):
             response.on_close = admission.close
             deferred = True
         return response
+    except BaseException as exc:
+        admission.failed(exc)
+        raise
     finally:
         if not deferred:
             admission.close()
@@ -1022,6 +1064,7 @@ async def _generate_image_admitted(request, key, admission, *, streaming: bool):
                 image_count=image_count,
                 # Retain the status to distinguish rejected requests from uncertain charges.
                 image_lane=True, max_response_bytes=MAX_RESPONSE_BYTES,
+                on_dispatch=admission.mark_dispatched,
                 resolve_v5_cost=resolve_v5_cost if est["v5"] else None,
             )
         except GateError as exc:
@@ -1051,6 +1094,7 @@ async def _generate_image_admitted(request, key, admission, *, streaming: bool):
         def on_dispatch():
             nonlocal dispatched
             dispatched = True
+            admission.mark_dispatched()
 
         async def perform_stream(response):
             tracker = ImageEventTracker(image_count, wire_format)
@@ -1104,6 +1148,7 @@ async def _generate_image_admitted(request, key, admission, *, streaming: bool):
                         finally:
                             handle.completed_images = tracker.completed_images
             except (UpstreamError, ImageStreamProtocolError, httpx.HTTPError, TimeoutError) as exc:
+                admission.failed(exc)
                 billing_uncertain |= (isinstance(exc, UpstreamError) and exc.billing_uncertain
                                       or isinstance(exc, TimeoutError) and dispatched)
                 status = exc.status if isinstance(exc, UpstreamError) else 502
@@ -1151,9 +1196,14 @@ async def _generate_image_admitted(request, key, admission, *, streaming: bool):
                         nonlocal reservation
                         reservation = reserved
                         await complete_image_operation(perform_stream(response), can_cancel=lambda: not dispatched)
+            except asyncio.CancelledError as exc:
+                admission.failed(exc)
+                raise
             except GateError as exc:
+                admission.failed(exc)
                 await response.error(exc.status, exc.message)
             except QueueError as exc:
+                admission.failed(exc)
                 await response.error(exc.status, exc.message, code=exc.code)
 
         return ImageStreamResponse(run_stream, wire_format)
@@ -1170,7 +1220,6 @@ async def _generate_image_admitted(request, key, admission, *, streaming: bool):
 
 async def suggest_tags(request: Request):
     key = await authenticate(request)
-    check_image_cooldown()
     admitted = False
     try:
         # Match disconnect-probe cancellation so the request deadline stays effective.
@@ -1218,7 +1267,6 @@ async def _run_tag_request(request, key, body):
     async with acquire_concurrency(key):
         if await check_disconnected(request.is_disconnected):
             raise err(499, "补全查询已取消")
-        check_image_cooldown()
         query = urlencode({
             "prompt": str(body.get("prompt", "") or ""),
             "model": str(body.get("model", "") or ""),
@@ -1382,10 +1430,11 @@ async def v1_me(request: Request):
         "is_admin": bool(key["is_admin"]),
         "generated_images_total": generated_images.get(key["id"], 0),
         "image_policy": {
-            "free_only": not bool(key["is_admin"]),
+            "free_only": not bool(key["is_admin"] or key["allow_anlas"]),
+            "allow_anlas": bool(key["is_admin"] or key["allow_anlas"]),
             "anlas_quota_enabled": False,
-            "max_steps": None if key["is_admin"] else min(28, STATE.settings.max_steps),
-            "v5_max_steps": None if key["is_admin"] else min(28, STATE.settings.max_steps),
+            "max_steps": image_step_limit(key, "legacy"),
+            "v5_max_steps": image_step_limit(key, "v5"),
             "max_steps_by_tier": {
                 tier: image_step_limit(key, tier) for tier in ("legacy", "v5")
             },

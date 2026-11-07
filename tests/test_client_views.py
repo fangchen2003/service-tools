@@ -16,7 +16,7 @@ class DB:
         self.v5 = {1: 2, 2: 9}
         self.global_v5 = 147
         self.key = dict(id=1, name="fixture", enabled=True, expires_at=0,
-                        monthly_anlas=100, daily_v5=10, allow_anlas=True,
+                        monthly_anlas=100, daily_v5=10, allow_anlas=False,
                         image_model_scope="all", is_admin=False, exclude_global_v5=False)
 
     async def get_vibe_remaining(self, key_id, day=None):

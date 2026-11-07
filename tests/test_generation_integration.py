@@ -44,7 +44,7 @@ def encoding_body():
 class FakeDB:
     def __init__(self):
         base = dict(name="fixture", enabled=True, expires_at=0, is_admin=False,
-                    exclude_global_v5=False, allow_anlas=True, daily_images=100,
+                    exclude_global_v5=False, allow_anlas=False, daily_images=100,
                     daily_anlas=100,
                     monthly_anlas=1000, daily_v5=50, image_model_scope="all",
                     allow_img2img=True, rpm=3)
@@ -139,6 +139,8 @@ class FakeNai:
         self.error = None
 
     async def request(self, method, url, body=None, **kwargs):
+        if kwargs.get("on_dispatch") is not None:
+            kwargs["on_dispatch"]()
         self.calls.append((method, url, copy.deepcopy(body), kwargs))
         self.entered.set()
         if self.release:
@@ -325,7 +327,7 @@ async def test_disconnect_during_unknown_result_records_pending_once(state):
 async def test_img2img_batch_cannot_bypass_ordinary_daily_limit(state):
     state.db.keys['fixture-1']['daily_images'] = 1
     batch = image_body(width=512, height=512, steps=20, image='fixture', strength=1, n_samples=3)
-    assert (await post('/ai/generate-image', batch)).status_code == 400
+    assert (await post('/ai/generate-image', batch)).status_code == 402
     assert not state.nai.calls and not state.db.charges
 
 @pytest.mark.asyncio
@@ -335,7 +337,7 @@ async def test_reference_batch_is_refused_despite_numeric_budget(state):
                       image='fixture', strength=1, n_samples=2)
     for budget in (8, 9, 100000):
         key['daily_anlas'] = budget
-        assert (await post('/ai/generate-image', body)).status_code == 400
+        assert (await post('/ai/generate-image', body)).status_code == 402
     assert not state.nai.calls and not state.db.charges
 
 @pytest.mark.asyncio
@@ -352,8 +354,8 @@ async def test_free_img2img_requires_both_key_permissions(state):
     assert 'Anlas 权限' in denied.json()['error']['message']
     assert not state.nai.calls and not state.db.charges
     key['allow_anlas'] = True
-    assert (await post('/ai/generate-image', body)).status_code == 400
-    assert not state.nai.calls and not state.db.charges
+    assert (await post('/ai/generate-image', body)).status_code == 200
+    assert len(state.nai.calls) == len(state.db.charges) == 1
 
 
 @pytest.mark.asyncio
@@ -382,7 +384,7 @@ async def test_img2img_admin_bypass_preserved(state, admin):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("allow_anlas,admin,clamp,expected", [
     (False, False, True, 512),
-    (True, False, True, 512),
+    (True, False, True, 1024),
     (False, True, True, 1024),
     (False, False, False, 512),
 ])
@@ -420,7 +422,7 @@ async def test_invalid_free_clamp_parameters_rejected_before_dispatch(state, str
     state.db.keys["fixture-1"]["allow_anlas"] = False
     response = await post("/ai/generate-image" + ("-stream" if streaming else ""), image_body(**{field: value}))
     assert response.status_code == 400
-    assert response.json()["error"]["message"] == ("steps 必须是正整数" if field == "steps" else "图片参数无效")
+    assert response.json()["error"]["message"] == f"{field} 必须是正整数"
     assert not state.nai.calls and not state.db.charges
     assert state.global_active == 0 and not state.image_budget_lock.locked()
 
@@ -439,6 +441,7 @@ async def test_precise_generation_settles_and_uses_paid_token_policy(state, stat
     forwarded = state.nai.calls[0][3].copy()
     assert forwarded.pop("queue_timeout") == state.settings.queue_timeout
     assert callable(forwarded.pop("before_dispatch"))
+    assert callable(forwarded.pop("on_dispatch"))
     assert forwarded | {"on_rate_limited": None} == {
         "accept": "*/*", "on_rate_limited": None, "requires_anlas": True,
         "v5_free": False, "image_count": 1, "image_lane": True,
