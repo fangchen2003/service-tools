@@ -24,9 +24,11 @@ curl http://127.0.0.1:3003/healthz
 
 ## 站长怎么用
 
-1. 在“密钥管理”创建虚拟 Key，选择“仅 V4.5 及更低”或“所有当前支持模型（含 V5）”，设置免费图、V5 用量和请求频率。普通用户生图始终仅允许免费规格，没有 Anlas 付费权限或数值预算可开放。
+> **付费权限升级提醒**：历史版本可能保存过 `allow_anlas=True`，但当时未实际启用该权限；更新后这些已有 Key 将真正获得付费访问权限，并可能消耗上游 Anlas。管理员必须在更新前逐一审计已有 Key 的 `allow_anlas` 设置，确认付费授权符合预期。升级不会批量改写已有 Key 的权限标记；不要依赖新 Key 默认关闭来保护历史 Key。
+
+1. 在“密钥管理”创建虚拟 Key，选择“仅 V4.5 及更低”或“所有当前支持模型（含 V5）”，设置免费图、V5 用量和请求频率。默认关闭「允许消耗 Anlas」；可逐 Key 开启付费规格，但不设 Anlas 日/月数值预算，开启后会实际消耗上游点数。
 2. 把站点根地址和生成的 `nai-...` Key 发给用户。
-3. 在“总览”查看全站和上游用量；可单独停用/启用上游 Key，修改其免费 V5 日限额及图片并发（每把 1～4，默认 1）。在“设置”可调整排队超时、图片任务间隔和上游 429 冷却。用量日志支持按 Key 筛选。
+3. 在“总览”查看全站和上游用量、近七天出图趋势及只读排队观测；可单独停用/启用上游 Key，修改其免费 V5 日限额及图片并发（每把 1～4，默认 1）。在“设置”可调整排队超时、图片任务间隔和上游 429 冷却。用量日志支持按 Key 筛选。
 4. 在“总览 → Anlas 消耗核对”查询官方余额，与本站记录的消耗比较；首次查询保存当前余额。
 
 首次配置多把上游 Token，可用英文逗号写入 `NAI_TOKENS`。`NAI_TOKEN_ALLOW_ANLAS=1,0` 按顺序指定哪些账号允许消耗 Anlas；`NAI_TOKEN_V5_DAILY_LIMITS=0,150` 设置初始免费 V5 日限额，`0` 表示不限。
@@ -35,11 +37,25 @@ curl http://127.0.0.1:3003/healthz
 
 首次使用后台管理账号后，完整账号列表保存在数据目录的 `upstream_tokens.json`，重启时优先于 `NAI_TOKENS`；删除全部账号后也不会重新启用环境变量中的旧 Token。原始 Token 不写入数据库，也不会通过管理接口回显。该文件包含凭据，使用受限文件权限；应与 `.env` 一样妥善保管，备份数据目录时一并保护。
 
-“设置”按预算、生成、上游账号、Key 默认、自动清理、高级、公告、生效配置分组。后台保存的服务配置优先于环境变量并持久保留；数值限制、功能开关、并发和文本限制对后续请求生效，并发降低不会中断已在执行的任务。Key 默认模板仅影响之后由管理员创建的 Key，不修改已有 Key 或 Discord 自助注册配额。自动清理可先查看候选名单，保存不会立即执行清理；开启后按既有启动及每小时检查执行，`0` 天关闭。“生效配置”显示实际值及来源。后台登录相关设置仍按原有配置管理。
+“设置”按预算、生成、上游账号、Key 默认、注册控制、自动清理、高级、公告、生效配置分组。后台保存的服务配置优先于环境变量并持久保留；数值限制、功能开关、并发和文本限制对后续请求生效，并发降低不会中断已在执行的任务。**Key 默认模板同时用于之后由管理员创建、Discord 新注册和回收后恢复的 Key**，包括模型范围、每日额度、RPM、付费/图片处理权限、独立 V5 额度和有效期，不会批量修改已有 Key。仍存在的有效 Key 通过 `/find` 重发时保留其现有策略，而不是重套默认值。自动清理可先查看候选名单，保存不会立即执行清理；开启后按既有启动及每小时检查执行，`0` 天关闭。“生效配置”显示实际值及来源。后台登录相关设置仍按原有配置管理。
+
+### 总览统计与排队观测
+
+- Key 总数统计尚未到期的 Key（含被管理员停用的）；启用数只统计其中已启用的 Key。到期时间等于当前时间即算过期。密钥列表将“已过期”与“已启用/已停用”区分，可按状态筛选，并分别列出未过期/已过期数量；仍保留过期记录，过期不会因统计被删除。启用开关与过期状态是不同维度，开启已过期 Key 的开关不会使其恢复有效。
+- 近七天柱状图可通过悬停或键盘聚焦查看每天 V4.5、V5 实际成功图片张数与 Anlas 审计用量。模型分类从本地成功生成日志聚合，含流式、独立额度及后来被删除的 Key；不把图片工具计作该模型出图。Medium 按实际图片张数显示，不按 0.60 配额折算，Anlas 审计也不等于官方余额核对。
+- “排队与扩容观测”支持近 24 小时 / 7 天，展示等待 P50/P95/最大值、超时率、队列深度、通道占用、容量不可用时间、采样覆盖和记录器健康。建议只供管理员决策，**不会自动开放注册、扩容或改变额度**。新部署从零积累，缺测不当作空闲。详细口径、阈值、保留时间和只读接口见 [QUEUE_METRICS.md](QUEUE_METRICS.md)。
+
+### Discord 注册控制
+
+“设置 → 注册控制”独立显示服务配置状态、开放/暂停、当日成功注册人数、累计人数，以及近 30 个站点自然日历史（界面隐藏成功数为零的日期）。`registration_enabled` 默认开启、`registration_daily_limit` 默认 `0`（不设人数上限），后台可设为 `0`～`100000`；未完成必要部署配置仍不可注册。保存需管理员会话和注册专用 CSRF，保存后重新读取核对；读取失败不显示虚构人数，保存未核实不报成功。
+
+暂停或满额会阻止新的注册领取；进入授权页面不占位，回调最终发 Key 时会再次检查。成功发私信的新注册才占名额，授权失败、资格不符、私信失败回滚、已有 Key 重发及 `/find` 恢复不增加新注册人数；注册档案独立于 Key 的闲置清理，删除 Key 不归还旧名额、不抹去注册历史。日期按 `TZ`（默认 `Asia/Shanghai`）的自然日划分，不是滚动 24 小时。
+
+管理接口 `GET /admin/api/registration` 只读返回控制状态、统计、历史及会话 CSRF；`PUT` 仅接受 JSON `{"enabled":true,"daily_limit":0}` 和 `X-NAI-Admin-CSRF`。公开首页通过独立的 `GET /api/public/registration` 仅展示今日人数、上限/剩余、配置/开放状态，不含累计历史、成员身份、Key 或管理令牌。状态为 `open`、`full`、`paused` 或 `unavailable`，只是提示，不是名额预留。
 
 ## 用户怎么接入
 
-所有生成请求使用 `Authorization: Bearer nai-...`。支持自定义 NovelAI API 地址的客户端填写站点根地址，例如 `https://你的域名`；OpenAI 兼容文本客户端填写 `https://你的域名/v1`。
+所有生成请求使用 `Authorization: Bearer nai-你的Key`。NovelAI API 地址的客户端填写站点根地址，例如 `https://gate.example.com`；OpenAI 兼容文本客户端填写 `https://gate.example.com/v1`。
 
 常用接口：
 
@@ -67,7 +83,7 @@ curl 'https://你的域名/ai/generate-image' \
 
 ## 默认限制
 
-下面是新 Key 的默认值，站长可在面板调整；已有 Key 以各自保存的设置为准。
+下面是未修改配置时新 Key 的默认值，管理员创建、Discord 新注册及回收后恢复共用当前后台默认模板；站长可在面板调整，已有 Key 以各自保存的设置为准。首页从 `/api/public/stats` 实时读取当前默认每日额度与模型范围：仅旧模型时隐藏 V5 默认额度，不应把首页模板当作自己的实际权限；个人额度查询用 `/v1/me`。
 
 | 项目 | 默认值 |
 | --- | ---: |
@@ -77,17 +93,17 @@ curl 'https://你的域名/ai/generate-image' \
 | 文本输出 | 每 Key 每天 150,000 tokens |
 | 请求频率 | 每 Key 每分钟 10 次 |
 
-普通用户生图强制免费档，不受历史 `allow_anlas` 标记或 `SAFE_CLAMP=0` 影响：V4.5 及以下最多 28 步，V5 High 最多 28 步、Medium 固定 14 步，多张强制为单张，SMEA 关闭，超免费尺寸自动调整。img2img、局部重绘、ControlNet、精确参考及超过 4 个已编码 Vibe 不能安全转换，直接拒绝；V5 官方额度耗尽时拒绝，不回退 Anlas 付费。管理员和内部服务 Key 保留豁免，但仍受上游 Token 的付费权限与安全保护约束。V5 High 每张占 1 单位；Medium 默认占 0.60 单位，累计图片数仍按实际张数统计。
+未开通 `allow_anlas` 的 Key 使用免费档，不受 `SAFE_CLAMP=0` 影响：V4.5 及以下最多 28 步，V5 High 最多 28 步、Medium 固定 14 步，多张强制为单张，SMEA 关闭，超免费尺寸自动调整。img2img、局部重绘、ControlNet、精确参考及超过 4 个已编码 Vibe 不能安全转换，直接拒绝；V5 官方额度耗尽时拒绝，不回退 Anlas 付费。已开通 `allow_anlas` 的 Key 不再强制免费规格，保留用户尺寸、步数、张数与 SMEA，允许付费参考和 V5 免费额度耗尽后按 Anlas 计费；图生图/图片工具另需图片处理权限。管理员和内部服务 Key 保留豁免，所有付费请求仍受上游 Token 的付费权限与安全保护约束。V5 High 每张占 1 单位；Medium 默认占 0.60 单位，累计图片数仍按实际张数统计。
 
-普通用户的日/月/全站 Anlas 数值预算已停用；旧数据库字段保留兼容，Anlas 用量仍用于审计，不能解释为付费余额。Vibe 编码是单独的每日 3 次授权：成功编码实际消耗上游 2 Anlas，失败不扣本地次数，使用已编码 Vibe 不重复计编码次数。`/vibe` 上传参考图后获取可导入工作台的文件；V4/V4.5 每次生图最多使用 4 个已编码参考，V3 使用原图，V5 不支持 Vibe。免费 Director 工具在图片处理权限开放时可使用；普通用户的付费超分和去背景等工具拒绝。
+普通用户的日/月/全站 Anlas 数值预算已停用；旧数据库字段保留兼容，Anlas 用量仍用于审计，不能解释为付费余额。Vibe 编码是单独的每日 3 次授权：成功编码实际消耗上游 2 Anlas，失败不扣本地次数，使用已编码 Vibe 不重复计编码次数。`/vibe` 上传参考图后获取可导入工作台的文件；未开通 Anlas 的 Key 在 V4/V4.5 每次生图最多使用 4 个已编码参考，V3 使用原图，V5 不支持 Vibe。免费 Director 工具在图片处理权限开放时可使用；付费超分和去背景等工具另需 Anlas 权限。
 
-“设置”中可调整 V5 自动节省开关、剩余额度阈值（默认 20%）和 Medium 倍率（默认 0.60）。普通 Key 的 V5 Full 纯文生图在全站今日剩余额度不高于阈值时自动切到 `nai-diffusion-5-full-medium`；进行中的额度预留也参与判断。Curated 与管理员 Key 不自动切换。Medium 固定 14 步、Euler Ancestral、Heavy 负面预设，自定义负面词和 CFG Rescale 不生效，日志记录最终模型、参数调整和扣除额度。用户、全站、每把上游的 V5 日额度采用相同折算；它是本站预算估算，不是官方精确计费。历史 V5 使用按每次 1 单位迁移，图片张数不变；上游实际额度、Anlas 权限和 429 保护继续生效。
+“设置”中可调整 V5 自动节省开关、剩余额度阈值（默认 20%）和 Medium 倍率（默认 0.60）。未开通 Anlas 的 Key 的 V5 Full 纯文生图在全站今日剩余额度不高于阈值时自动切到 `nai-diffusion-5-full-medium`；进行中的额度预留也参与判断。Curated、已开通 Anlas 的 Key 与管理员 Key 不自动切换。Medium 固定 14 步、Euler Ancestral、Heavy 负面预设，自定义负面词和 CFG Rescale 不生效，日志记录最终模型、参数调整和扣除额度。用户、全站、每把上游的 V5 日额度采用相同折算；它是本站预算估算，不是官方精确计费。历史 V5 使用按每次 1 单位迁移，图片张数不变；上游实际额度、Anlas 权限和 429 保护继续生效。
 
 TAG 补全不受用户或上游图片任务的 15 秒间隔限制，也不占用下一次生图的时间窗；仍受并发、排队超时和真实上游 429 冷却保护。
 
 图片任务在同一用户 Key 与同一上游 Token 上默认各至少间隔 15 秒，等待时会自动排队；每个排队阶段默认最多等待 90 秒。每把上游 Token 的图片并发默认 1，可在面板单独调整；提高并发会增加上游限流风险。上游图片请求触发 429 后，全站图片生成默认至少冷却 60 秒；若上游要求更长时间，则以更长者为准。以上时间可在面板调整并持久保存。免费旧模型图、V5 用量及 Anlas 审计分开统计；失败生成不计成功图片数。完整规则见[用户限制说明.md](用户限制说明.md)。
 
-`/v1/me` 的 `image_policy.max_steps_by_tier` 分别返回 `legacy` 和 `v5` 的步数上限；兼容字段 `max_steps` 返回两类中的最大上限。本站普通 Key 无论历史 Anlas 标记如何均最多 28 步，只有管理员 Key 返回 `null`；Medium 固定 14 步。
+`/v1/me` 的 `image_policy.max_steps_by_tier` 分别返回 `legacy` 和 `v5` 的步数上限；兼容字段 `max_steps` 返回两类中的最大上限。未开通 Anlas 的 Key 最多 28 步；已开通 Anlas 或管理员 Key 返回 `null`，不受免费步数上限约束；Medium 固定 14 步。
 
 ### 只读图片报价
 
@@ -101,7 +117,7 @@ TAG 补全不受用户或上游图片任务的 15 秒间隔限制，也不占用
 
 `upscale` 只接收源图 `width`、`height`，模型固定为 `nai-diffusion-5-curated`。`augment-image` 接收源图 `width`、`height` 和 `req_type`。`encode-vibe` 的 `parameters` 为 `{}`，模型限 V4/V4.5。工具仍遵循至少 64 像素、最多 3,145,728 像素的源尺寸限制。
 
-响应包含 `anlas`、`v5`、`generation_anlas`、`encoding_anlas`、`effective_model`、`effective_parameters`、`notes` 及 `cost_limit`。报价与生成共用本站强制免费策略、步数/尺寸调整、Medium 路由、参考附加费和工具计费代码。历史 `allow_anlas` 或关闭 `SAFE_CLAMP` 不会开放付费生成；普通 Key 仍为 Legacy 28 / High 28 / Medium 14 步，V5 耗尽不回退付费。V4/V4.5 的 `pending_vibe_encoding_count` 是客户端按原图、模型和信息提取值去重后的待编码数量，不能超过 `vibe_count`；服务端不接收原图或 `pending_vibe_indices`，生成附加费仍按参考条目数计算。普通 Key 最多使用 4 个已编码 Vibe，不能使用精准参考。报价检查已领取的 `/vibe` 机会并返回 `vibe_required`、`vibe_remaining`，但不预扣；真实编码原子消费一次机会，每个上海自然日可领取一次、共 3 次编码机会。编码 Anlas 金额仅表示实际成本审计，不是普通生图付费余额。Vibe 与精准参考不能混用。
+响应包含 `anlas`、`v5`、`generation_anlas`、`encoding_anlas`、`effective_model`、`effective_parameters`、`notes` 及 `cost_limit`。报价与生成共用逐 Key 的 `allow_anlas` 权限、步数/尺寸调整、Medium 路由、参考附加费和工具计费代码。未开通 Anlas 的 Key 仍为 Legacy 28 / High 28 / Medium 14 步，V5 耗尽不回退付费；已开通的 Key 保留付费规格，并在官方确认 V5 免费额度耗尽时允许扣 Anlas（仍受客户端 `cost_limit` 限制）。V4/V4.5 的 `pending_vibe_encoding_count` 是客户端按原图、模型和信息提取值去重后的待编码数量，不能超过 `vibe_count`；服务端不接收原图或 `pending_vibe_indices`，生成附加费仍按参考条目数计算。未开通 Anlas 的 Key 最多使用 4 个已编码 Vibe，不能使用精准参考。报价检查已领取的 `/vibe` 机会并返回 `vibe_required`、`vibe_remaining`，但不预扣；真实编码原子消费一次机会，每个上海自然日可领取一次、共 3 次编码机会。编码 Anlas 金额仅表示实际成本审计，不是普通生图付费余额。Vibe 与精准参考不能混用。
 
 `GET /v1/image/quote` 只验证 Key 并返回用户名。两种报价请求都不更新 Key 使用时间、不创建计数或日志、不预留额度、不排队生图，也不请求官方账号。报价没有单独的并发槽位限制。
 
@@ -125,7 +141,7 @@ Medium 的 Anlas 基础公式在取整前对步数项应用官网的 `1 / 1.0652
 
 ### Max Enhance
 
-本站普通 Key 不开放图生图或 Max Enhance；以下计价能力只供管理员/内部服务使用，报价与执行均保持相同限制。
+未开通 Anlas 的 Key 不开放图生图或 Max Enhance；已开通 Anlas 且具备 Key/站点图片处理权限时可用，报价与执行保持相同限制。
 
 V5 Full、Curated 与 Full Medium 的单张图生图可使用 `parameters.upscaled_enhance=true`。请求的宽高必须保留原图实际尺寸；不能与 mask、嵌套 img2img 或另一种放大叠加。Gate 校验源图，并按照最高 2 倍、3,145,728 像素和官网对齐规则分别计算计费尺寸与预期输出尺寸；报价分别返回 `billing_size`、`output_size`。免费资格也按增强后的计费尺寸判断。例如 832×1216、28 步、强度 0.5：计费尺寸 1440×2144，预期输出 1467×2144，预计 45 Anlas。此处为参数报价，真实生成结果仍由上游返回。
 
@@ -140,9 +156,12 @@ V5 Full、Curated 与 Full Medium 的单张图生图可使用 `parameters.upscal
 仓库不内置某个站点的域名、Discord 服务器/身份组 ID 或服务器插件绝对路径。部署信息只写入不受 Git 跟踪的 `.env`，示例地址使用保留域名 `gate.example.com`，不可直接用于生产。
 
 - Discord 注册需要 `SITE_URL`、`DISCORD_REDIRECT_URI`、`DISCORD_CLIENT_ID`、`DISCORD_CLIENT_SECRET`、`DISCORD_BOT_TOKEN`、`REGISTRATION_BRIDGE_SECRET`，以及 `REGISTRATION_COMMAND_GUILD`、`REGISTRATION_MEMBERSHIP_GUILD`、`REGISTRATION_MEMBERSHIP_ROLE`。缺少必要配置时注册关闭，不会放宽资格检查。
+- 可选的首页“Discord 身份验证”入口 `/self-register/verify` 使用 `DeploymentConfig` 中的成员 guild/role 与 `DISCORD_INVITE_URL`。邀请 URL 必须显式配置为受支持的 HTTPS Discord 邀请链接；源码与首页不内置实际邀请，未配置时该可选服务不可用，不影响单独配置的普通注册。OAuth 检查指定 guild 的角色，符合条件后才显示配置的加入服务器链接；它不直接创建 Key、不预留名额，也不自动添加角色。加入命令服务器后仍需 `/register`。
+- 身份验证复用 `DISCORD_REDIRECT_URI` 指定的同一个回调，以 `gv.` 前缀隔离 OAuth state，与普通注册/工作台登录分别处理。验证 Cookie 使用 `__Host-nai-gate-guild-verify`（Secure、HttpOnly、SameSite=Lax、Path=/、无 Domain）；反向代理必须保留 HTTPS 与 Cookie 属性，不要另造回调域名或降低安全属性。
 - 工作台登录使用同一站点/回调配置，并通过私有的 `WORKBENCH_AUTH_BRIDGE_SECRET` 对接。`WORKBENCH_URL` 默认由 `SITE_URL` 派生，也可显式配置。回调必须与 Discord Developer Portal 完全一致，不从客户端 Host 或转发头推导。
 - bot 集成进程单独读取 `REGISTRATION_COMMAND_GUILD`、`REGISTRATION_BRIDGE_SECRET` 和 `REGISTRATION_GATE_URL`；网关与 bot 是不同进程时，需分别设置环境变量。网关地址必须是受信任的私有服务，Bearer 密钥会发送到该地址。
 - 首页 API 地址显示与复制取当前浏览器页面的 origin，不会指向项目作者的站点。站点公告可继续由后台管理，不会因更新源码自动覆盖 `data/announcement.html`。
+- 打包首页保留 NAI Gate 通用品牌和 `/assets/gate-atelier-v1.webp`。V5 统计与注册提示独立刷新（每 30 秒、切回页面及手动刷新），请求禁止缓存、不携带会话；注册提示超过 60 秒会撤销“可注册”，失败或数据不一致不把旧值当作当前可用名额。自定义持久公告不会自动获得新版动态逻辑，需要站长自行合并，勿误删自己的公告。
 - **升级提醒**：从依赖硬编码默认值的旧版本升级前，必须先把自己的域名和 Discord ID 迁入私有环境配置。本次通用化没有数据库/Key 迁移。工作台 Cookie 改用通用名称；部署新版网关前，独立工作台/SSR 服务中读取会话 Cookie 的逻辑也必须配套使用 `__Host-nai-gate-wb-session`，并检查 OAuth Cookie `__Host-nai-gate-wb-oauth`、logout 和反向代理转发。仅让用户重新登录不足以修复旧工作台仍读取旧名称的问题。配套升级后，验证登录 → 工作台服务端解析 → 注销链路；保持 Cookie 的 `__Host-`、Secure、HttpOnly、SameSite=Lax、Path=/ 及无 Domain 属性，不要降级安全属性。
 - 工作台 OAuth/session 配置与私有 resolve 桥接分别拒绝未授权请求：缺少 `WORKBENCH_AUTH_BRIDGE_SECRET` 时可能仍可完成 OAuth，但工作台无法解析会话，`/workbench-auth/resolve` 会返回 401。实际部署应同时配置网关与工作台侧匹配的桥接密钥，再开放登录入口。
 
@@ -158,7 +177,10 @@ V5 Full、Curated 与 Full Medium 的单张图生图可使用 `parameters.upscal
 - `KEY_INACTIVITY_DELETE_DAYS` 默认 `3`，长期未使用的普通 Key 会被永久删除；设为 `0` 可关闭，后台保存的自动清理设置优先生效。它与 Key 到期时间不同。
 - `ADMIN_COOKIE_SECURE` 默认开启。仅在可信的本地 HTTP 调试环境才考虑设为 `0`。
 - 本地状态保存在 `data/nai_gate.db`；备份运行中的 SQLite 数据库时请使用 SQLite 的在线备份功能。历史日志可能包含用量与请求元数据，应限制访问。
+- 队列观测另存 `data/queue_metrics.sqlite`，保留近 30 天；备份/恢复时与主库分开处理，不能用它恢复任务或补造历史等待。具体隐私边界与故障行为见 [QUEUE_METRICS.md](QUEUE_METRICS.md)。
 
 用量日志记录 Key、模型、状态和消耗，不保存生成的图片或提示词。历史版本遗留的文件不会因升级自动删除。
 
 本地测试：安装 `requirements.txt`、`pytest` 和 `pytest-asyncio`，然后执行 `python -m pytest -q`。测试使用假上游，不消耗真实 NovelAI 额度。
+
+注册界面离线检查：在已安装 Playwright 与 Chromium 的环境运行 `NODE_PATH=/path/to/node_modules node --test integration/check_registration_ui.cjs`；可用 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` 指定浏览器。所有页面/API 请求均被夹具拦截，不接入真实 Discord、不发送生图、不访问生产服务。上线前应在自己的隔离测试部署验证 OAuth 回调及代理/Cookie 配置，不要将真实日志、拓扑或内网桥接地址写进公共文档。

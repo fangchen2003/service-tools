@@ -12,9 +12,9 @@ async def subscription_payload(state, key, *, now: float | None = None) -> dict:
     key = dict(key)
     day = state.day(now)
     admin = bool(key.get("is_admin"))
-    # Ordinary image generation has no paid balance. Vibe encoding has its own
-    # daily entitlement and must not masquerade as arbitrary Anlas credit.
-    paid = admin
+    # Paid permission is explicit per Key; numeric Anlas quotas remain disabled.
+    # Vibe encoding retains its independent daily entitlement.
+    paid = bool(admin or key.get("allow_anlas"))
     monthly_limit = 0
     anlas_left = 0
     vibe_remaining = None if admin else await state.db.get_vibe_remaining(key["id"])
@@ -52,7 +52,7 @@ async def subscription_payload(state, key, *, now: float | None = None) -> dict:
         "naiGate": {
             "imageModelScope": "all" if admin else key["image_model_scope"],
             "anlasEnabled": paid,
-            "freeOnly": not admin,
+            "freeOnly": not paid,
             "anlasQuotaEnabled": False,
             "vibeRemainingToday": vibe_remaining,
             "vibeDailyLimit": None if admin else 3,

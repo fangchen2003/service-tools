@@ -61,7 +61,7 @@ LEGACY_IMAGE_MODEL_EXACT = {
     "safe-diffusion", "nai-diffusion", "nai-diffusion-furry",
 }
 
-# 免费 Key 按预设钳制尺寸，计费按像素面积判断。
+# Normal 预设仅作为超面积请求的安全回退，不是免费尺寸的判定边界。
 V5_NORMAL_PRESETS = ((832, 1216), (1216, 832), (1024, 1024))
 
 # Official public client capabilities, checked 2026-09-21. V3 receives source
@@ -493,16 +493,13 @@ def clamp_image_pricing(model: str, values: dict, *, max_pixels: int, max_steps:
         p["steps"] = max_steps
         notes.append(f"steps 已钳制到 {max_steps}")
 
-    # 老模型保留免费面积内的自定义尺寸；V5 继续使用预设边界。
+    # 所有模型统一按像素面积判定；免费范围内的自定义长宽比保持不变。
     w = int(p.get("width", 0) or 0)
     h = int(p.get("height", 0) or 0)
     if w > 0 and h > 0:
-        if is_v5_model(model):
-            eligible = any(w <= pw and h <= ph for pw, ph in V5_NORMAL_PRESETS)
-        else:
-            eligible = w * h <= 1024 * 1024
+        eligible = w * h <= 1024 * 1024
         pw, ph = (w, h) if eligible else snap_v5_preset(w, h)
-        # 先保留原有预设限制，再缩到站点面积上限内，避免预设调整反而超限。
+        # 超官方面积上限时沿用安全预设，再满足可能更严格的站点面积上限。
         pw, ph = fit_size(pw, ph, max_pixels)
         if (w, h) != (pw, ph):
             p["width"], p["height"] = pw, ph

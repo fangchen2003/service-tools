@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from pathlib import Path
 import time
 from contextlib import asynccontextmanager
@@ -148,6 +149,14 @@ class NaiClient:
         self._managed_path: Optional[Path] = None
         self._managed_tokens = False
         self.allowance = AllowanceCache(db)
+        self.on_image_slots_changed: Optional[Callable[[], None]] = None
+
+    def _notify_image_slots(self):
+        if self.on_image_slots_changed is not None:
+            try:
+                self.on_image_slots_changed()
+            except Exception:
+                logging.getLogger(__name__).warning("queue telemetry slot observer unavailable")
 
     async def start(self) -> None:
         self._client = httpx.AsyncClient(
@@ -483,6 +492,7 @@ class NaiClient:
         max_response_bytes: int | None = None,
         queue_timeout: float = 90,
         before_dispatch: Optional[Callable[[], None]] = None,
+        on_dispatch: Optional[Callable[[], None]] = None,
     ) -> httpx.Response:
         """图片请求不自动重试；普通请求只对明确的 429 换 token 一次。"""
         if self._client is None:
@@ -504,6 +514,7 @@ class NaiClient:
                         async with asyncio.timeout(queue_timeout):
                             await ts.image_slots.acquire()
                             slot_acquired = True
+                            self._notify_image_slots()
                             # Tags share capacity/429 protection, not image pacing.
                             if wait_for_image_slot:
                                 await self.wait_for_token_image_slot(ts)
@@ -523,6 +534,8 @@ class NaiClient:
                         continue
                     if before_dispatch is not None:
                         before_dispatch()
+                    if on_dispatch is not None:
+                        on_dispatch()
                     send_started = True
                     if max_response_bytes is None:
                         resp = await self._client.request(
@@ -585,6 +598,7 @@ class NaiClient:
                 finally:
                     if slot_acquired:
                         ts.image_slots.release()
+                        self._notify_image_slots()
         raise UpstreamError(429, "上游限流(429)，请降低频率后重试")
 
     async def _resolve_v5_cost(self, ts, callback):
@@ -660,6 +674,7 @@ class NaiClient:
                 async with asyncio.timeout(queue_timeout):
                     await ts.image_slots.acquire()
                     slot_acquired = True
+                    self._notify_image_slots()
                     await self.wait_for_token_image_slot(ts)
             except TimeoutError:
                 raise UpstreamError(429, "上游图片任务排队超时，请稍后再试") from None
@@ -715,6 +730,7 @@ class NaiClient:
             finally:
                 if slot_acquired:
                     ts.image_slots.release()
+                    self._notify_image_slots()
 
     async def stream(
         self, url: str, json_body: Any,

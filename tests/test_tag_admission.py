@@ -118,7 +118,10 @@ async def test_unpaced_tags_still_respect_real_upstream_429_and_do_not_retry(sta
         assert len(calls) == 1
         assert state.image_cooldown_remaining() > 0
         assert (await post(PATH, {})).status_code == 429
-        assert len(calls) == 1
+        assert len(calls) == 2  # A new request may use the other, unblocked token.
+        assert all(not token.usable for token in client.pool)
+        assert (await post(PATH, {})).status_code == 503
+        assert len(calls) == 2  # Never resend to either rate-limited token.
         assert not state._tag_active and state._tag_waiting == 0
         assert all(token.image_slots.active == 0 for token in client.pool)
     finally:

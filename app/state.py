@@ -14,6 +14,7 @@ from .config import Settings
 from .configuration import CONFIGURATION_FIELDS, initial_sources, validate_configuration
 from .concurrency import AdjustableLimiter
 from .image_queue import ImageQueue
+from .queue_metrics import QueueMetrics
 from .database import Database
 from .nai import NaiClient
 from .reconciliation import ManualReconciliation
@@ -68,13 +69,37 @@ class GateState:
         self._runtime_limits_lock = asyncio.Lock()
         self._configuration_lock = asyncio.Lock()
         self._configuration_sources = initial_sources()
+        self.queue_metrics = QueueMetrics(settings.data_dir / "queue_metrics.sqlite", settings.tz)
+        self.nai.on_image_slots_changed = self.queue_metrics_slot_change
         self.image_queue = ImageQueue(self.image_queue_capacity,
                                       lambda: self.settings.key_concurrency, self.image_key_busy,
-                                      paid_capacity=self.image_queue_paid_capacity)
+                                      paid_capacity=self.image_queue_paid_capacity,
+                                      tag_capacity=self.tag_queue_capacity,
+                                      observe=self.queue_metrics.observe)
+
+    def queue_metrics_slot_change(self):
+        self.queue_metrics.observe_slots(
+            sum(getattr(t.image_slots, "active", 0) for t in self.nai.pool), self.image_queue_capacity())
+
+    def queue_metrics_sample(self) -> dict:
+        self.image_queue.snapshot()  # Expire abandoned ticket leases too.
+        sample: dict[str, int | float] = {
+            "queued": sum(t.operation != "tags" and t.dispatched_at is None
+                          for t in self.image_queue._pending.values()),
+            "active": sum(getattr(t.image_slots, "active", 0) for t in self.nai.pool),
+            "capacity": self.image_queue_capacity(),
+            "cooldown": self.image_cooldown_remaining(),
+        }
+        sample.update(self.queue_metrics.take_slot_sample(sample["active"], sample["capacity"]))
+        return sample
 
     def image_queue_capacity(self) -> int:
         if self.image_cooldown_remaining():
             return 0
+        return self.tag_queue_capacity()
+
+    def tag_queue_capacity(self) -> int:
+        # Tags ignore local image cooldown, but not actual upstream token blocks.
         return sum(token.image_slots.limit for token in self.nai.pool if token.usable)
 
     def image_key_busy(self, key_id: int) -> bool:
@@ -94,9 +119,10 @@ class GateState:
                     "v5": min(28, self.settings.max_steps),
                     "legacy": self.settings.max_steps,
                 },
-                "free_only": True,
+                "free_only": False,
+                "paid_access": "per_key",
                 "anlas_quota_enabled": False,
-                "paid_max_steps": min(28, self.settings.max_steps),
+                "paid_max_steps": None,
                 "admin_max_steps": None,
                 "max_pixels": self.settings.max_pixels,
                 "safe_clamp": self.settings.safe_clamp,

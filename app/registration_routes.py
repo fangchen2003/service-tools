@@ -83,6 +83,9 @@ async def intent(request: Request, body: Intent):
 
 @router.get("/callback")
 async def callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    if state.startswith("gv."):
+        from .guild_verification import callback as verification_callback
+        return await verification_callback(request, code, state, error)
     if state.startswith("wb."):
         from .workbench_auth import callback as workbench_callback
         return await workbench_callback(request, code, state, error)

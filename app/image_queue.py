@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import heapq
+import logging
 import math
 import time
 import uuid
@@ -57,17 +58,34 @@ class Ticket:
     state: str
     expires_at: float
     requires_anlas: bool = False
+    created_at: float = 0.0
+    admitted_at: float | None = None
+    dispatched_at: float | None = None
+    ended_at: float | None = None
+    admission_wait_seconds: float | None = None
+    wait_seconds: float | None = None
+    run_seconds: float | None = None
+    total_seconds: float | None = None
+    outcome: str | None = None
+    enqueued_depth: int = 0
+    _created_mono: float = 0.0
+    _dispatched_mono: float | None = None
+    end_reason: str | None = None
 
 
 class ImageQueue:
     def __init__(self, capacity: Callable[[], int], key_limit: Callable[[], int],
                  key_busy: Callable[[int], bool], *, paid_capacity: Callable[[], int] | None = None,
-                 clock=time.monotonic):
+                 tag_capacity: Callable[[], int] | None = None,
+                 clock=time.monotonic, wall_clock=time.time, observe=None):
         self._capacity = capacity
         self._key_limit = key_limit
         self._key_busy = key_busy
         self._paid_capacity = paid_capacity or capacity
+        self._tag_capacity = tag_capacity or capacity
         self._clock = clock
+        self._wall_clock = wall_clock
+        self._observe = observe
         self._tickets: dict[str, Ticket] = {}
         self._requests: dict[tuple[int, str], str] = {}
         self._pending: dict[str, Ticket] = {}
@@ -81,7 +99,35 @@ class ImageQueue:
         changed, self._changed = self._changed, asyncio.Event()
         changed.set()
 
+    def _emit(self, ticket: Ticket):
+        if self._observe is None or ticket.operation == "tags":
+            return
+        try:
+            self._observe({name: getattr(ticket, name) for name in (
+                "ticket_id", "key_id", "operation", "created_at", "admitted_at",
+                "dispatched_at", "ended_at", "admission_wait_seconds", "wait_seconds",
+                "run_seconds", "total_seconds", "outcome", "enqueued_depth")})
+        except Exception:
+            # Observability must never change admission or image accounting.
+            logging.getLogger(__name__).warning("queue metrics observer unavailable")
+
+    def dispatched(self, ticket: Ticket):
+        if ticket.state != "active" or ticket.dispatched_at is not None:
+            return
+        now = self._clock()
+        ticket._dispatched_mono = now
+        ticket.wait_seconds = max(0.0, now - ticket._created_mono)
+        ticket.dispatched_at = ticket.created_at + ticket.wait_seconds
+        self._emit(ticket)
+
     def _end(self, ticket: Ticket, state: str):
+        now = self._clock()
+        ticket.total_seconds = max(0.0, now - ticket._created_mono)
+        ticket.ended_at = ticket.created_at + ticket.total_seconds
+        ticket.run_seconds = (max(0.0, now - ticket._dispatched_mono)
+                              if ticket._dispatched_mono is not None else None)
+        ticket.outcome = ticket.end_reason or ("not_dispatched" if state == "finished"
+                                              and ticket.dispatched_at is None else state)
         ticket.state = state
         ticket.expires_at = self._clock() + TERMINAL_SECONDS
         self._pending.pop(ticket.ticket_id)
@@ -90,6 +136,7 @@ class ImageQueue:
         if not self._pending_by_key[ticket.key_id]:
             del self._pending_by_key[ticket.key_id]
         self._terminal.append(ticket)
+        self._emit(ticket)
 
     def _update(self):
         now = self._clock()
@@ -156,10 +203,15 @@ class ImageQueue:
             raise QueueError(429, "queue_full", "本 Key 已有 50 个未完成排队任务，请先完成或取消")
         ticket = Ticket(str(uuid.uuid4()), key_id, request_id, operation, bool(is_admin), "queued",
                         self._clock() + WAIT_LEASE_SECONDS, requires_anlas)
+        ticket._created_mono = self._clock()
+        ticket.created_at = self._wall_clock()
         self._tickets[ticket.ticket_id] = ticket
         self._requests[(key_id, request_id)] = ticket.ticket_id
         self._pending[ticket.ticket_id] = ticket
         self._pending_by_key[key_id] += 1
+        ticket.enqueued_depth = sum(t.operation != "tags" and t.dispatched_at is None
+                                    for t in self._pending.values())
+        self._emit(ticket)
         heapq.heappush(self._leases, (ticket.expires_at, ticket.ticket_id))
         self._update()
         self._notify()
@@ -222,6 +274,9 @@ class ImageQueue:
             raise QueueError(409, "queue_ticket_used", "排队票据已使用，请勿重复提交")
         ticket.state = "active"
         ticket.expires_at = 0
+        ticket.admission_wait_seconds = max(0.0, self._clock() - ticket._created_mono)
+        ticket.admitted_at = ticket.created_at + ticket.admission_wait_seconds
+        self._emit(ticket)
         self._notify()
         return ticket
 
@@ -254,7 +309,11 @@ class ImageQueue:
                     await asyncio.wait_for(changed.wait(), min(1, remaining))
                 except TimeoutError:
                     pass
-        except BaseException:
+        except BaseException as exc:
+            if isinstance(exc, QueueError):
+                ticket.end_reason = "timed_out" if exc.code == "queue_timeout" else "disconnected"
+            elif isinstance(exc, asyncio.CancelledError):
+                ticket.end_reason = "cancelled"
             if ticket.state in {"queued", "ready"}:
                 self.cancel(ticket.ticket_id, ticket.key_id)
             raise
@@ -262,12 +321,18 @@ class ImageQueue:
     def try_tag(self, key_id: int, *, is_admin=False) -> Ticket:
         self._update()
         occupied = self._occupied
-        if (len(self._pending) > len(occupied)
-                or len(occupied) >= max(0, self._capacity())
+        if ((len(self._pending) > len(occupied) and self._capacity() > 0)
+                or len(occupied) >= max(0, self._tag_capacity())
                 or (not is_admin and (self._key_busy(key_id) or
                     sum(ticket.key_id == key_id for ticket in occupied.values()) >= max(1, self._key_limit())))):
             raise QueueError(503, "queue_unavailable", "图片队列正在使用名额，标签补全暂不可用")
         ticket = self.create(key_id, str(uuid.uuid4()), "tags", is_admin=is_admin, internal=True)
+        if ticket.state == "queued":
+            # Checked synchronously above: idle tag slots remain usable while
+            # image admission is paused. Never promote the waiting images.
+            ticket.state = "ready"
+            occupied[ticket.ticket_id] = ticket
+            self._notify()
         return self.claim(ticket.ticket_id, key_id, ticket.request_id, "tags")
 
     def snapshot(self) -> dict:
@@ -295,6 +360,22 @@ class ImageAdmission:
             self.ticket = self.queue.create(self.key["id"], str(uuid.uuid4()), self.operation,
                                             is_admin=self.key["is_admin"], requires_anlas=requires_anlas)
             await self.queue.wait_claim(self.ticket, self.timeout, disconnected=disconnected)
+
+    def mark_dispatched(self):
+        if self.ticket is not None:
+            self.queue.dispatched(self.ticket)
+
+    def failed(self, exc):
+        if self.ticket is None or self.ticket.dispatched_at is not None:
+            return
+        if getattr(exc, "status", None) == 499:
+            self.ticket.end_reason = "disconnected"
+        elif (getattr(exc, "code", None) == "queue_timeout" or
+              (getattr(exc, "status", None) == 429 and
+               ("排队超时" in str(exc) or "排队人数过多" in str(exc)))):
+            self.ticket.end_reason = "timed_out"
+        elif isinstance(exc, asyncio.CancelledError):
+            self.ticket.end_reason = "cancelled"
 
     def close(self):
         if self._closed:

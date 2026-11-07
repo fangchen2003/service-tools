@@ -10,11 +10,12 @@ let configurationCsrf = '', configurationSnapshot = null, upstreamAccounts = [],
 let budgetSnapshot = null, runtimeSnapshot = null, announcementSnapshot = null, upstreamSource = null;
 let keySaveBusy = false, confirmationResolve = null;
 let viewVersion = 0, overviewRequestVersion = 0;
+let queueMetricsWindow = 24, queueMetricsSnapshot = null, queueMetricsRequest = null, queueMetricsVersion = 0, queueMetricsTimer = null;
 const configurationFields = [
-  {name:'allow_img2img',group:'generation',label:'免费图片处理工具',type:'bool',note:'单个 Key 也需开启；不开放普通 Key 的付费 img2img 或局部重绘'},
-  {name:'safe_clamp',group:'generation',label:'免费图片参数自动调整（兼容设置）',type:'bool',note:'普通 Key 始终强制调整为免费规格，不受此旧开关影响'},
+  {name:'allow_img2img',group:'generation',label:'图片处理与图生图',type:'bool',note:'单个 Key 也需开启；付费操作还需该 Key 开启允许消耗 Anlas'},
+  {name:'safe_clamp',group:'generation',label:'免费图片参数自动调整（兼容设置）',type:'bool',note:'未开通 Anlas 的 Key 自动调整为免费规格；已开通的 Key 保留付费参数'},
   {name:'max_pixels',group:'generation',label:'免费图片最大像素',min:4096,max:16777216,unit:'像素'},
-  {name:'max_steps',group:'generation',label:'普通 Key 免费图片步数上限',min:1,max:28,unit:'步',note:'V5 High 和旧模型均取此值与 28 的较小值；Medium 固定 14 步。旧 Anlas 权限不能绕过上限；管理员 Key 不受此上限约束。'},
+  {name:'max_steps',group:'generation',label:'普通 Key 免费图片步数上限',min:1,max:28,unit:'步',note:'V5 High 和旧模型均取此值与 28 的较小值；Medium 固定 14 步。已开通 Anlas 的 Key 与管理员不受免费上限约束。'},
   {name:'default_image_model_scope',group:'defaults',label:'图片模型范围',type:'scope'},
   {name:'default_daily_images',group:'defaults',label:'每日免费图片',min:0,max:1000000,unit:'张'},
   {name:'default_daily_v5',group:'defaults',label:'每日 V5 额度',min:0,max:100000,unit:'单位'},
@@ -23,7 +24,8 @@ const configurationFields = [
   {name:'default_rpm',group:'defaults',label:'每分钟请求数',min:1,max:600,unit:'次'},
   {name:'default_expires_days',group:'defaults',label:'有效天数',min:0,max:3650,unit:'天',note:'0 = 长期有效'},
   {name:'default_exclude_global_v5',group:'defaults',label:'独立 V5 额度',type:'bool',note:'不占用全站每日 V5 额度'},
-  {name:'default_allow_img2img',group:'defaults',label:'允许免费图片处理工具',type:'bool',note:'不开放普通 Key 的付费图片功能；Vibe 编码使用每日领取额度'},
+  {name:'default_allow_anlas',group:'defaults',label:'允许消耗 Anlas',type:'bool',note:'默认关闭；开启后新建 Key 可消耗上游点数，不设 Anlas 日/月预算'},
+  {name:'default_allow_img2img',group:'defaults',label:'允许图片处理与图生图',type:'bool',note:'付费操作还需开启 Anlas 权限；Vibe 编码仍使用每日领取额度'},
   {name:'key_inactivity_delete_days',group:'cleanup',label:'闲置 Key 自动清理',min:0,max:3650,unit:'天'},
   {name:'global_concurrency',group:'advanced',label:'全站非图片请求并发',min:1,max:32,unit:'个'},
   {name:'key_concurrency',group:'advanced',label:'每个 Key 请求并发',min:1,max:32,unit:'个'},
@@ -227,6 +229,8 @@ function showLogin(){
   clearInterval(allowanceTimer); allowanceTimer = null;
   clearInterval(reconTimer); reconTimer = null;
   $('#login').hidden=false; $('#app').hidden=true; closeModal();
+  syncQueueMetricsPolling();
+  resetQueueMetrics();
 }
 async function boot(){
   try{ await api('/admin/api/me'); }catch(e){ return false; }
@@ -251,6 +255,7 @@ async function tab(name){
     if(selected) button.setAttribute('aria-current','page'); else button.removeAttribute('aria-current');
   });
   ['ov','keys','logs','set'].forEach(t=>{$('#tab-'+t).hidden=name==='ov'||t!==name;});
+  syncQueueMetricsPolling();
   $('#pageTitle').textContent=pageTitles[name];
   history.replaceState(null,'','#'+pageRoutes[name]);
   document.querySelector('.gate-main').scrollTo({top:0,behavior:'instant'});
@@ -283,9 +288,153 @@ async function loadUpstreamConnection(){
   try{renderUpstreamConnection((await api('/admin/api/upstream-tokens')).accounts);}
   catch(_error){$('#upstreamConnectionText').textContent='状态暂不可用';$('#upstreamConnection').classList.add('is-unavailable');}
 }
+function renderGenerationChart(week){
+  const maximum=Math.max(10,Math.ceil(Math.max(...week.map(w=>w.images),0)/10)*10);
+  const summary=w=>`${w.day}：V4.5 ${w.v45_images} 张，V5 ${w.v5_images} 张，Anlas 使用量 ${reconNumber(w.anlas)}`;
+  $('#chartDate').textContent=week.length?week[0].day.slice(5).replace('-','.')+' — '+week[week.length-1].day.slice(5).replace('-','.') : '';
+  $('#chart').setAttribute('aria-label','近七天生成量，聚焦日期查看版本及 Anlas 明细');
+  $('#chart').innerHTML=`<div class="gate-chart-guides" aria-hidden="true"><span>${maximum}</span><span>${maximum/2}</span><span>0</span></div><div class="gate-chart-bars">${week.map((w,index)=>{
+    const other=Math.max(0,w.images-w.v45_images-w.v5_images);
+    return `<div class="${index===week.length-1?'is-today':''}" tabindex="0" role="group" aria-label="${esc(summary(w))}">
+      <span class="gate-bar-value" aria-hidden="true">${w.images}</span><span class="gate-bar" style="--bar-height:${w.images/maximum*100}%" aria-hidden="true"></span><small>${index===week.length-1?'今天':esc(w.day.slice(-2))+' 日'}</small>
+      <span class="gate-chart-tooltip" aria-hidden="true"><strong>${esc(w.day)}</strong><span>V4.5 <b>${w.v45_images} 张</b></span><span>V5 <b>${w.v5_images} 张</b></span>${other?`<span>其他图片 <b>${other} 张</b></span>`:''}<span class="gate-chart-anlas">Anlas 使用量 <b>${reconNumber(w.anlas)}</b></span><em>审计估算</em></span>
+    </div>`;
+  }).join('')}</div>`;
+}
+/* Queue observations are local telemetry, never an automatic capacity change. */
+const queueMetricNumber = n => typeof n==='number' && Number.isFinite(n) ? n.toLocaleString('zh-CN',{maximumFractionDigits:1}) : '—';
+const queueMetricDuration = n => typeof n==='number' && Number.isFinite(n) ? `${queueMetricNumber(n)} 秒` : '—';
+const queueMetricPercent = n => typeof n==='number' && Number.isFinite(n) ? `${(n*100).toFixed(1)}%` : '—';
+const queueMetricTime = (n,timeZone) => typeof n==='number' && Number.isFinite(n) ? new Date(n*1000).toLocaleString('zh-CN',{timeZone,hour12:false}) : '—';
+function queueMetricsTimeZone(value){
+  if(typeof value==='string' && value){
+    try{return new Intl.DateTimeFormat('zh-CN',{timeZone:value}).resolvedOptions().timeZone;}
+    catch(_error){}
+  }
+  return 'Asia/Shanghai';
+}
+function queueMetricsSnapshotStale(d){
+  const now=Date.now()/1000;
+  const stale=timestamp=>typeof timestamp!=='number' || !Number.isFinite(timestamp) || now-timestamp>60;
+  return stale(d.generated_at) || (d.summary.samples>0 && stale(d.health.last_sample_at));
+}
+function renderQueueMetricsSummary(s={}){
+  $('#queueMetricsSummary').innerHTML=[
+    ['等待 P50',queueMetricDuration(s.wait_p50_seconds)],['等待 P95',queueMetricDuration(s.wait_p95_seconds)],
+    ['最长等待',queueMetricDuration(s.wait_max_seconds)],['排队超时率',queueMetricPercent(s.timeout_rate)],
+    ['等待队列峰值',queueMetricNumber(s.queue_max)],['采样通道占用率',queueMetricPercent(s.busy_ratio)],
+    ['活跃 Key',queueMetricNumber(s.active_keys)],['已派发任务',queueMetricNumber(s.dispatched)],
+  ].map(([label,value])=>`<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('');
+}
+function renderQueueMetrics(d){
+  const s=d.summary, health=d.health;
+  const timeZone=queueMetricsTimeZone(d.time_zone);
+  const collecting=s.samples===0 || s.observed_seconds<21600 || s.dispatched<50 || s.coverage_ratio<0.5 || d.assessment.level==='insufficient';
+  const sampleStale=queueMetricsSnapshotStale(d);
+  const degraded=sampleStale || !!health.last_error || health.dropped_events>0 || health.pending_events>0;
+  const level=degraded?'caution':collecting?'insufficient':d.assessment.level;
+  $('#queueMetrics').dataset.state=sampleStale?'stale':degraded?'warning':collecting?'collecting':'ready';
+  $('#queueMetricsStatus').textContent=sampleStale?'最近采样缺失或已过期，以下为已记录数据，请稍后刷新。':degraded?'观测记录异常，请谨慎解读。':collecting?'正在收集数据，暂不足以判断扩容余量。':'已读取排队观测。';
+  renderQueueMetricsSummary(s);
+  $('#queueMetricsMeta').textContent=`窗口：近 ${d.window_hours===168?'7 天':'24 小时'} · 所选窗口覆盖率 ${queueMetricPercent(s.coverage_ratio)} · 已观测 ${queueMetricDuration(s.observed_seconds)} · ${queueMetricNumber(s.samples)} 次采样 · 无可用通道时长占比 ${queueMetricPercent(s.unavailable_ratio)} · 开始记录 ${queueMetricTime(d.started_at,timeZone)} · 更新 ${queueMetricTime(d.generated_at,timeZone)}（${timeZone}）`;
+  const c=d.current;
+  $('#queueMetricsCurrent').textContent=`当前等待上游派发 ${queueMetricNumber(c.queued)} · 就绪 ${queueMetricNumber(c.ready)} · 通道占用 ${queueMetricNumber(c.active)} / ${queueMetricNumber(c.capacity)} · 总任务 ${queueMetricNumber(c.total)}`;
+  $('#queueMetricsHealth').textContent=`未派发任务 ${queueMetricNumber(s.pending)} · 最老未派发等待 ${queueMetricDuration(s.oldest_pending_seconds)} · 取消/断线 ${queueMetricNumber(s.cancelled)} · 票据过期 ${queueMetricNumber(s.expired)} · 重启中断 ${queueMetricNumber(s.interrupted)} · 待写事件 ${queueMetricNumber(health.pending_events)} · 丢失事件 ${queueMetricNumber(health.dropped_events)} · 最近采样 ${queueMetricTime(health.last_sample_at,timeZone)}${health.last_error?' · 记录错误：'+health.last_error:''}`;
+  const assessment=$('#queueMetricsAssessment');
+  assessment.dataset.level=level;
+  assessment.innerHTML=`<strong>${esc(degraded?'观测异常，暂不判断余量':collecting?'收集中 · 数据不足':d.assessment.label)}</strong><p>${esc(degraded?'存在采样过期、记录延迟或事件丢失，扩容建议暂不可靠。':d.assessment.reason)}</p>`;
+  $('#queueMetricsHourly').innerHTML=(d.hourly||[]).map(h=>`<tr><td>${esc(queueMetricTime(h.hour_start,timeZone))}</td><td>${queueMetricNumber(h.enqueued)}</td><td>${queueMetricNumber(h.dispatched)}</td><td>${esc(queueMetricDuration(h.wait_p50_seconds))}</td><td>${esc(queueMetricDuration(h.wait_p95_seconds))}</td><td>${esc(queueMetricDuration(h.wait_max_seconds))}</td><td>${queueMetricNumber(h.timed_out)} / ${queueMetricNumber(h.timeout_denominator)} (${queueMetricPercent(h.timeout_rate)})</td><td>${queueMetricNumber(h.queue_max)}</td><td>${queueMetricPercent(h.busy_ratio)}</td><td>${queueMetricNumber(h.active_keys)}</td><td>${queueMetricPercent(h.coverage_ratio)}</td></tr>`).join('') || '<tr><td colspan="11" class="empty-state">正在收集逐小时数据</td></tr>';
+}
+function resetQueueMetrics(){
+  queueMetricsSnapshot=null;
+  renderQueueMetricsSummary();
+  for(const id of ['queueMetricsCurrent','queueMetricsMeta','queueMetricsHealth']) $('#'+id).textContent='';
+  $('#queueMetricsHourly').innerHTML='<tr><td colspan="11" class="empty-state">正在收集逐小时数据</td></tr>';
+  $('#queueMetrics').dataset.state='collecting';
+  $('#queueMetricsStatus').textContent='正在读取排队观测…';
+  $('#queueMetricsAssessment').dataset.level='insufficient';
+  $('#queueMetricsAssessment').innerHTML='<strong>收集中 · 数据不足</strong><p>至少观测 6 小时、派发 50 个任务且覆盖所选窗口 50% 后，才提供扩容参考。</p>';
+}
+function expireQueueMetricsSnapshot(){
+  const d=queueMetricsSnapshot;
+  if(!d) return;
+  if(queueMetricsSnapshotStale(d)){
+    $('#queueMetrics').dataset.state='stale';
+    $('#queueMetricsStatus').textContent='观测已过期，以下为上次记录；暂不判断扩容余量。';
+    $('#queueMetricsAssessment').dataset.level='insufficient';
+    $('#queueMetricsAssessment').innerHTML='<strong>观测已过期，暂不判断余量</strong><p>等待刷新成功后，再判断是否接纳新用户。</p>';
+  }
+}
+function cancelQueueMetricsRequest(){
+  const request=queueMetricsRequest;
+  queueMetricsRequest=null;
+  if(request){clearTimeout(request.timeout);request.cancel?.();}
+}
+function loadQueueMetrics(){
+  expireQueueMetricsSnapshot();
+  if(currentTab!=='ov' || document.hidden || $('#app').hidden) return Promise.resolve();
+  if(queueMetricsRequest?.hours===queueMetricsWindow) return queueMetricsRequest.promise;
+  const request={hours:queueMetricsWindow,version:++queueMetricsVersion,controller:new AbortController()};
+  queueMetricsRequest=request;
+  if(!queueMetricsSnapshot) resetQueueMetrics();
+  request.promise=(async()=>{
+    try{
+      const deadline=new Promise((resolve,reject)=>{
+        request.cancel=()=>{request.controller.abort();reject(new Error('观测请求已取消或超时'));};
+        request.timeout=setTimeout(request.cancel,10000);
+      });
+      // Bound both HTTP fetch and response-body decoding, even if abort alone
+      // cannot settle a stalled body or a test transport.
+      const d=await Promise.race([api('/admin/api/queue-metrics?hours='+request.hours,
+        {cache:'no-store',signal:request.controller.signal}),deadline]);
+      if(request.version!==queueMetricsVersion) return;
+      if(d.window_hours!==request.hours || !d.summary || !d.health || !d.current || !Array.isArray(d.hourly) ||
+         !['insufficient','roomy','caution','tight'].includes(d.assessment?.level) ||
+         !['samples','observed_seconds','dispatched','coverage_ratio'].every(k=>typeof d.summary[k]==='number' && Number.isFinite(d.summary[k]))) throw new Error('观测响应格式无效');
+      renderQueueMetrics(d);
+      queueMetricsSnapshot=d;
+    }catch(e){
+      if(request.version!==queueMetricsVersion) return;
+      $('#queueMetrics').dataset.state=queueMetricsSnapshot?'stale':'unavailable';
+      $('#queueMetricsStatus').textContent=queueMetricsSnapshot?'刷新失败，以下为上次记录（已过期）：'+e.message:'排队观测暂不可用：'+e.message;
+      $('#queueMetricsAssessment').dataset.level='insufficient';
+      $('#queueMetricsAssessment').innerHTML='<strong>观测不可用，暂不判断扩容余量</strong><p>请稍后刷新；不能据此判断仍有容量。</p>';
+    }finally{
+      clearTimeout(request.timeout);
+      if(queueMetricsRequest===request) queueMetricsRequest=null;
+    }
+  })();
+  return request.promise;
+}
+function changeQueueMetricsWindow(value){
+  const hours=Number(value);
+  if(![24,168].includes(hours)) return Promise.resolve();
+  if(hours!==queueMetricsWindow){
+    queueMetricsWindow=hours;
+    ++queueMetricsVersion;
+    cancelQueueMetricsRequest();
+    resetQueueMetrics();
+  }
+  return loadQueueMetrics();
+}
+function syncQueueMetricsPolling(){
+  expireQueueMetricsSnapshot();
+  if(currentTab!=='ov' || document.hidden || $('#app').hidden || $('#tab-ov').hidden){
+    clearInterval(queueMetricsTimer);
+    queueMetricsTimer=null;
+    ++queueMetricsVersion;
+    cancelQueueMetricsRequest();
+    return;
+  }
+  if(queueMetricsTimer===null) queueMetricsTimer=setInterval(()=>{
+    expireQueueMetricsSnapshot();
+    if(currentTab==='ov' && !document.hidden && !$('#app').hidden && !$('#tab-ov').hidden) loadQueueMetrics();
+  },30000);
+}
 async function loadOverview(version=viewVersion){
   const requestVersion=++overviewRequestVersion;
   loadReconciliation();
+  loadQueueMetrics(); // Independent: metrics failure or delay must not block existing cards.
   try{
     const [d,settings] = await Promise.all([api('/admin/api/overview'),api('/admin/api/settings')]);
     if(version!==viewVersion || requestVersion!==overviewRequestVersion) return;
@@ -295,10 +444,7 @@ async function loadOverview(version=viewVersion){
       ['今日 V5 用量',t.v5||0,'单位','brush'],['启用中的 Key',d.keys_active,'/ '+d.keys_total,'key']
     ].map(([title,value,unit,icon])=>`<article class="gate-stat"><div class="gate-stat-title">${title}<i data-icon="${icon}"></i></div><strong>${value}<span>${unit}</span></strong></article>`).join('');
     $('#keyNavCount').textContent=d.keys_total;
-    const maximum=Math.max(10,Math.ceil(Math.max(...d.week.map(w=>w.images),0)/10)*10);
-    $('#chartDate').textContent=d.week.length?d.week[0].day.slice(5).replace('-','.')+' — '+d.week[d.week.length-1].day.slice(5).replace('-','.') : '';
-    $('#chart').setAttribute('aria-label',d.week.map(w=>`${w.day}：${w.images} 张`).join('；'));
-    $('#chart').innerHTML=`<div class="gate-chart-guides"><span>${maximum}</span><span>${maximum/2}</span><span>0</span></div><div class="gate-chart-bars">${d.week.map((w,index)=>`<div class="${index===d.week.length-1?'is-today':''}" title="${esc(w.day)}：${w.images} 张"><span class="gate-bar-value">${w.images}</span><span class="gate-bar" style="--bar-height:${w.images/maximum*100}%"></span><small>${index===d.week.length-1?'今天':w.day.slice(-2)+' 日'}</small></div>`).join('')}</div>`;
+    renderGenerationChart(d.week);
     const limited=d.v5_limit>0, remaining=Math.max(0,d.v5_limit-(t.v5||0)), percent=limited?Math.min(100,remaining/d.v5_limit*100):0;
     $('#v5Budget').innerHTML=`<div class="gate-budget-number">${limited?Number(remaining.toFixed(2)):'不限'}<span>${limited?' / '+d.v5_limit:''}</span></div>${limited?`<div class="gate-meter"><span style="width:${percent}%"></span></div>`:''}<p class="gate-budget-caption"><span>${limited?'今日剩余':'今日已用'}</span><strong>${limited?percent.toFixed(1)+'%':(t.v5||0)+' 单位'}</strong></p><div class="gate-budget-foot"><span class="gate-status-dot"></span><p>${settings.v5_auto_medium?'自动节省已开启':'自动节省已关闭'}${settings.v5_auto_medium?`<small>≤ ${settings.v5_medium_threshold}% 时切换 Medium</small>`:''}</p></div>`;
     renderUpstreamConnection(d.pool);
@@ -310,7 +456,10 @@ async function loadOverview(version=viewVersion){
   }catch(e){
     if(version===viewVersion && requestVersion===overviewRequestVersion) toast(e.message);
   }finally{
-    if(version===viewVersion && requestVersion===overviewRequestVersion && currentTab==='ov') $('#tab-ov').hidden=false;
+    if(version===viewVersion && requestVersion===overviewRequestVersion && currentTab==='ov'){
+      $('#tab-ov').hidden=false;
+      syncQueueMetricsPolling();
+    }
   }
 }
 async function saveOverviewAccount(id,button){
@@ -346,19 +495,25 @@ async function loadKeys(){
     if(d.keys.some(k=>String(k.id)===selected)) $('#logFilter').value=selected;
   }catch(e){toast(e.message);}
 }
+function keyStatus(key,now){
+  if(key.expires_at!=null && key.expires_at<=now) return {state:'expired',label:'已过期',style:'warn'};
+  return key.enabled?{state:'on',label:'已启用',style:'on'}:{state:'off',label:'已停用',style:'off'};
+}
 function renderKeys(){
+  const now=Date.now()/1000;
   const query=$('#keySearch').value.trim().toLowerCase(), status=$('#keyStatusFilter').value;
-  const rows=keysCache.filter(k=>k.name.toLowerCase().includes(query)&&(status==='all'||k.enabled===(status==='on')));
-  $('#keysTable tbody').innerHTML=rows.map(k=>`<tr>
+  const rows=keysCache.filter(k=>k.name.toLowerCase().includes(query)&&(status==='all'||keyStatus(k,now).state===status));
+  $('#keysTable tbody').innerHTML=rows.map(k=>{const state=keyStatus(k,now);return `<tr>
     <td><div class="gate-name-cell"><div><strong title="${esc(k.name)}">${esc(k.name)}</strong><small><button class="gate-copy" onclick="copyKey(${k.id})" aria-label="复制 ${esc(k.name)} 的 Key">${esc(mask(k.token))}</button></small></div></div></td>
-    <td><span class="tag ${k.enabled?'on':'off'}"><b></b>${k.enabled?'已启用':'已停用'}</span><small>${k.is_admin?'管理员':'仅免费'}</small></td>
+    <td><span class="tag ${state.style}"><b></b>${state.label}</span><small>${k.is_admin?'管理员':k.allow_anlas?'允许 Anlas':'仅免费'}</small></td>
     <td data-label="今日生成">${k.used.images} 张</td><td data-label="今日用量"><div class="gate-key-metric"><span>${k.used.anlas} Anlas</span><small>${k.image_model_scope==='all'?(k.used.v5||0)+' V5':''}</small></div></td>
     <td data-label="每日配额"><div class="gate-key-metric"><span>${k.is_admin?'不限额':k.image_model_scope==='all'&&!k.daily_images&&!k.daily_v5?'图片、V5 不限':k.daily_images?k.daily_images+' 张':'图片不限'}</span><small>${!k.is_admin&&k.image_model_scope==='all'&&(k.daily_images||k.daily_v5)?(k.daily_v5?k.daily_v5+' V5':'V5 不限'):''}</small>${!k.is_admin?'<small>Vibe 编码 3 次/日 · /vibe 领取</small>':''}</div></td>
     <td data-label="最近使用">${relativeTime(k.last_used_at)}</td>
     <td><div class="row-actions"><button class="btn gate-row-button" onclick="openEdit(${k.id})">编辑</button><button class="btn gate-row-button is-positive" title="重置今日 V5 / Anlas" aria-label="重置 ${esc(k.name)} 今日 V5 / Anlas" onclick="resetDailyImageQuota(${k.id},this)">重置</button><button class="btn gate-row-button ${k.enabled?'is-danger':'is-muted'}" onclick="toggleKey(${k.id},${k.enabled?0:1})">${k.enabled?'停用':'启用'}</button></div></td>
-  </tr>`).join('')||'<tr><td colspan="7" class="empty-state">没有符合条件的 Key</td></tr>';
-  $('#keyCount').textContent=query||status!=='all'?`显示 ${rows.length} / ${keysCache.length} 个 Key`:`共 ${keysCache.length} 个 Key`;
-  $('#keyNavCount').textContent=keysCache.length;
+  </tr>`;}).join('')||'<tr><td colspan="7" class="empty-state">没有符合条件的 Key</td></tr>';
+  const expired=keysCache.filter(k=>keyStatus(k,now).state==='expired').length, current=keysCache.length-expired;
+  $('#keyCount').textContent=(query||status!=='all'?`显示 ${rows.length} 条 · `:'共 ')+`${current} 个未过期 Key · ${expired} 个已过期`;
+  $('#keyNavCount').textContent=current;
 }
 function mask(token){return token.slice(0,8)+'••••'+token.slice(-4);}
 function copyKey(id){
@@ -382,8 +537,10 @@ async function openCreate(){
     for(const [field,name] of Object.entries(fields)) $('#f_'+field).value=defaults[name];
     $('#f_expires').placeholder=''; $('#f_expires').required=true;
 
+    $('#f_allow_anlas').checked=defaults.default_allow_anlas;
     $('#f_allow_img2img').checked=defaults.default_allow_img2img;
     $('#f_exclude_global_v5').checked=defaults.default_exclude_global_v5;
+    syncKeyV5Fields();
     $('#modalErr').textContent=''; $('#modal').showModal();
   }catch(e){toast(e.message);}
 }
@@ -408,8 +565,10 @@ function openEdit(id){
   $('#f_expires').value = '';
   $('#f_expires').placeholder = '留空不修改'; $('#f_expires').required=false;
 
+  $('#f_allow_anlas').checked = k.allow_anlas;
   $('#f_allow_img2img').checked = k.allow_img2img;
   $('#f_exclude_global_v5').checked = k.exclude_global_v5;
+  syncKeyV5Fields();
   $('#modalErr').textContent=''; $('#modal').showModal();
 }
 function closeModal(){ $('#modal').close(); }
@@ -426,9 +585,14 @@ async function saveModal(){
     daily_text_tokens: +$('#f_daily_text').value,
     rpm: +$('#f_rpm').value,
 
+    allow_anlas: $('#f_allow_anlas').checked,
     allow_img2img: $('#f_allow_img2img').checked,
     exclude_global_v5: $('#f_exclude_global_v5').checked,
   };
+  if($('#f_image_model_scope').value!=='all'){
+    delete body.daily_v5;
+    delete body.exclude_global_v5;
+  }
   try{
     if(editingId){
       if($('#f_expires').value.trim() !== '') body.expires_days = +$('#f_expires').value;
@@ -532,6 +696,20 @@ async function loadLogs(){
 function changeLogPage(delta){ logPage=Math.max(1,logPage+delta); loadLogs(); }
 
 /* ---------- settings ---------- */
+function syncV5Fields(scopeSelector,fields){
+  const enabled=$(scopeSelector).value==='all';
+  for(const selector of fields){
+    const input=$(selector);
+    (input.closest('.setting-row, label')||input.parentElement).hidden=!enabled;
+    input.disabled=!enabled;
+  }
+}
+function syncDefaultV5Fields(){
+  syncV5Fields('#c_default_image_model_scope',['#c_default_daily_v5','#c_default_exclude_global_v5']);
+}
+function syncKeyV5Fields(){
+  syncV5Fields('#f_image_model_scope',['#f_daily_v5','#f_exclude_global_v5']);
+}
 function settingsPage(name){
   if(!$('#settings-'+name)) return;
   const changed=currentSettingsPage!==name; currentSettingsPage=name;
@@ -545,6 +723,7 @@ function settingsPage(name){
   if(changed&&currentTab==='set'&&!matchMedia('(prefers-reduced-motion: reduce)').matches){
     $('#settings-'+name).animate([{opacity:0,transform:'translateY(4px)'},{opacity:1,transform:'translateY(0)'}],{duration:220,easing:'cubic-bezier(.22,1,.36,1)'});
   }
+  if(name==='registration' && currentTab==='set') loadRegistration();
 }
 function renderConfigurationControls(){
   for(const group of ['generation','defaults','advanced']){
@@ -558,6 +737,7 @@ function renderConfigurationControls(){
       return `<div class="setting-row"><label for="${id}">${esc(field.label)}${field.note?`<small>${esc(field.note)}</small>`:''}</label>${control}</div>`;
     }).join('');
   }
+  $('#c_default_image_model_scope').addEventListener('change',syncDefaultV5Fields);
 }
 async function fetchConfiguration(){
   const data=await api('/admin/api/configuration');
@@ -578,6 +758,7 @@ function applyConfiguration(data,group='all'){
     }else if(field.type==='bool') input.checked=value;
     else input.value=value;
   }
+  syncDefaultV5Fields();
   renderConfigurationSummary();
 }
 function configurationValue(field,value){
@@ -612,6 +793,7 @@ function readConfigurationGroup(group){
   for(const field of configurationFields.filter(item=>item.group===group)){
     const input=$('#c_'+field.name);
     if(group==='cleanup' && !$('#cleanupEnabled').checked){body[field.name]=0;continue;}
+    if(input.disabled) continue;
     if(!input.checkValidity()){input.reportValidity();return null;}
     body[field.name]=field.type==='bool'?input.checked:field.type==='scope'?input.value:Number(input.value);
   }
@@ -668,7 +850,88 @@ async function previewCleanup(){
     return preview;
   }catch(e){$('#cleanupPreview').textContent=e.message;return null;}
 }
+let registrationSnapshot = null, registrationRequest = null, registrationSaving = false;
+async function loadRegistration({replaceControls=false}={}){
+  if(registrationSaving && !replaceControls) return null;
+  if(registrationRequest) return registrationRequest;
+  $('#settings-registration').dataset.state='loading';
+  $('#registrationSave').disabled=true;
+  $('#registrationRefresh').disabled=true;
+  $('#registrationStatus').textContent='正在读取注册设置…';
+  registrationRequest=(async()=>{
+    try{
+      const data=await api('/admin/api/registration',{cache:'no-store'});
+      const count=value=>Number.isSafeInteger(value)&&value>=0;
+      const day=value=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value);
+      if(typeof data.enabled!=='boolean' || typeof data.configured!=='boolean' ||
+         !count(data.daily_limit) || data.daily_limit>100000 || !count(data.today_count) || !count(data.total_count) ||
+         !day(data.day) || typeof data.timezone!=='string' || !data.timezone.trim() ||
+         typeof data.csrf_token!=='string' || !data.csrf_token.trim() ||
+         !Array.isArray(data.history) || data.history.length>30 || !data.history.every(row=>row&&day(row.day)&&count(row.count))){
+        throw new Error('注册设置响应格式无效');
+      }
+      const dirty=!replaceControls && registrationSnapshot &&
+        ($('#registrationEnabled').checked!==registrationSnapshot.enabled || $('#registrationDailyLimit').value!==String(registrationSnapshot.daily_limit));
+      if(!dirty){
+        $('#registrationEnabled').checked=data.enabled;
+        $('#registrationDailyLimit').value=data.daily_limit;
+      }
+      $('#registrationState').textContent=(data.configured?'已配置':'未配置')+' · '+(data.enabled&&data.configured?'开放':'暂停');
+      $('#registrationToday').textContent=String(data.today_count);
+      $('#registrationTotal').textContent=String(data.total_count);
+      $('#registrationMeta').textContent=`${data.day} · ${data.timezone}`;
+      $('#registrationHistory').innerHTML=data.history.filter(row=>row.count>0).map(row=>`<tr><td>${esc(row.day)}</td><td>${esc(row.count)}</td></tr>`).join('')||'<tr><td colspan="2">暂无成功注册记录</td></tr>';
+      registrationSnapshot=data;
+      $('#settings-registration').dataset.state='ready';
+      $('#registrationStatus').textContent=dirty?'统计已刷新；保留未保存的注册设置。':'已读取注册设置。';
+      $('#registrationEnabled').disabled=false;
+      $('#registrationDailyLimit').disabled=false;
+      $('#registrationSave').disabled=false;
+      return data;
+    }catch(e){
+      $('#settings-registration').dataset.state=registrationSnapshot?'stale':'unavailable';
+      $('#registrationStatus').textContent=(registrationSnapshot?'刷新失败；当前为上次记录，请刷新后再保存：':'注册设置暂不可用，请重试：')+e.message;
+      return null;
+    }finally{
+      registrationRequest=null;
+      $('#registrationRefresh').disabled=false;
+    }
+  })();
+  return registrationRequest;
+}
+async function saveRegistration(){
+  if(registrationSaving || registrationRequest || !registrationSnapshot || $('#registrationSave').disabled) return;
+  const input=$('#registrationDailyLimit'), dailyLimit=Number(input.value);
+  if(!input.checkValidity() || !Number.isInteger(dailyLimit) || dailyLimit<0 || dailyLimit>100000){input.reportValidity();return;}
+  const body={enabled:$('#registrationEnabled').checked,daily_limit:dailyLimit};
+  registrationSaving=true;
+  $('#registrationSave').disabled=true;
+  $('#registrationRefresh').disabled=true;
+  $('#registrationEnabled').disabled=true;
+  input.disabled=true;
+  $('#registrationStatus').textContent='正在保存注册设置…';
+  try{
+    await api('/admin/api/registration',{method:'PUT',headers:{'Content-Type':'application/json','X-NAI-Admin-CSRF':registrationSnapshot.csrf_token},body:JSON.stringify(body)});
+    const data=await loadRegistration({replaceControls:true});
+    if(!data){
+      $('#registrationStatus').textContent='保存结果尚未确认；'+$('#registrationStatus').textContent;
+      return;
+    }
+    if(data.enabled!==body.enabled || data.daily_limit!==body.daily_limit) throw new Error('保存后读取的设置与提交不一致，请刷新核对。');
+    $('#registrationStatus').textContent='注册设置已保存，并已重新读取核对。';
+  }catch(e){
+    $('#settings-registration').dataset.state='stale';
+    $('#registrationStatus').textContent='保存未确认，请刷新核对后再试：'+e.message;
+    $('#registrationSave').disabled=true;
+  }finally{
+    registrationSaving=false;
+    $('#registrationRefresh').disabled=false;
+    $('#registrationEnabled').disabled=false;
+    input.disabled=false;
+  }
+}
 async function loadSettings(){
+  if(currentSettingsPage==='registration') return loadRegistration();
   try{
     const [a, s, r, c, accounts] = await Promise.all([
       api('/admin/api/announcement'), api('/admin/api/settings'),
@@ -844,8 +1107,13 @@ $('#closeKeyToken').addEventListener('click',closeKeyToken);
 $('#keyTokenDialog').addEventListener('cancel',clearKeyToken);
 $('#keyTokenDialog').addEventListener('close',()=>{if(!$('#keyTokenDialog').open)clearKeyToken();});
 $('#s_auto_medium').addEventListener('change',syncBudgetFields);
+$('#f_image_model_scope').addEventListener('change',syncKeyV5Fields);
 
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden && allowanceTimer) loadAllowance(); });
+document.addEventListener('visibilitychange', ()=>{
+  syncQueueMetricsPolling();
+  if(!document.hidden && currentTab==='ov' && !$('#app').hidden && !$('#tab-ov').hidden) loadQueueMetrics();
+});
 renderConfigurationControls();
 renderConfigurationSummary();
 paintIcons();

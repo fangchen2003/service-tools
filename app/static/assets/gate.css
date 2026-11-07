@@ -36,6 +36,34 @@
 .gate-bar{display:block;flex:0 0 var(--bar-height);width:min(100%,32px);border-radius:5px 5px 0 0;background:var(--chart-bar)}
 .gate-chart-bars .is-today .gate-bar{background:var(--accent)}.gate-chart-bars .is-today small{color:var(--accent-strong);font-weight:600}
 .gate-bar-value{opacity:0;color:var(--accent-strong);font-size:10px;transition:opacity .15s ease}.gate-chart-bars>div:hover .gate-bar-value,.gate-chart-bars .is-today .gate-bar-value{opacity:1}
+.gate-chart-bars>div:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.gate-chart-bars>div:hover,.gate-chart-bars>div:focus{z-index:1}
+.gate-chart-tooltip{display:none;position:absolute;bottom:35px;left:50%;transform:translateX(-50%);width:180px;padding:11px 13px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);box-shadow:0 4px 16px var(--shadow);font-size:12px;line-height:1.5;pointer-events:none}
+.gate-chart-bars>div:hover .gate-chart-tooltip,.gate-chart-bars>div:focus .gate-chart-tooltip{display:block}
+.gate-chart-bars>div:nth-child(-n+2) .gate-chart-tooltip{left:0;transform:none}
+.gate-chart-bars>div:nth-last-child(-n+2) .gate-chart-tooltip{left:auto;right:0;transform:none}
+.gate-chart-tooltip>strong{display:block;margin-bottom:6px;font-size:12px}
+.gate-chart-tooltip>span{display:flex;justify-content:space-between;gap:12px;color:var(--muted)}
+.gate-chart-tooltip b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.gate-chart-tooltip .gate-chart-anlas{margin-top:6px;padding-top:6px;border-top:1px solid var(--line-soft)}
+.gate-chart-tooltip em{display:block;text-align:right;color:var(--faint);font-size:10px;font-style:normal}
+.gate-queue-metrics{font-variant-numeric:tabular-nums}
+.gate-queue-note{margin:0 24px 14px;color:var(--muted);font-size:11px;line-height:1.7;overflow-wrap:anywhere}
+.gate-queue-note:empty{display:none}
+.gate-queue-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px 20px;margin:0;padding:4px 24px 22px}
+.gate-queue-summary dt{color:var(--muted);font-size:11px}
+.gate-queue-summary dd{margin:7px 0 0;color:var(--ink);font-size:22px;font-weight:600;overflow-wrap:anywhere}
+.gate-queue-assessment{margin:0 24px 16px;padding:13px 16px;border-left:2px solid var(--line);border-radius:4px;background:var(--canvas);color:var(--soft-ink);font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+.gate-queue-assessment p{margin:4px 0 0;color:var(--muted)}
+.gate-queue-assessment[data-level="roomy"]{border-color:var(--positive);background:var(--positive-soft)}
+.gate-queue-assessment:is([data-level="caution"],[data-level="tight"]){border-color:var(--danger)}
+.gate-queue-metrics:is([data-state="unavailable"],[data-state="stale"],[data-state="warning"]) #queueMetricsStatus{color:var(--danger)}
+.gate-queue-hours .gate-table-scroll{max-height:340px;overscroll-behavior:contain}
+.gate-queue-hours table{min-width:1120px}
+.gate-queue-hours th{position:sticky;top:0;z-index:1}
+.gate-queue-hours :is(th,td){padding:11px 16px;white-space:nowrap;font-size:11px}
+.gate-queue-metrics :is(select,summary,[tabindex]):focus-visible{outline:2px solid var(--accent);outline-offset:-3px}
+@media(max-width:640px){.gate-queue-summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 14px;padding-inline:18px}.gate-queue-summary dd{font-size:20px}.gate-queue-note,.gate-queue-assessment{margin-inline:18px}.gate-queue-metrics .gate-section-heading{gap:10px}.gate-queue-metrics .gate-filter-select{max-width:100%;height:36px}}
 .gate-budget-card>.gate-section-heading i{width:19px;height:19px;color:var(--accent)}
 .gate-budget-number{padding:12px 24px 18px;color:var(--accent-strong);font-size:38px;font-weight:600;letter-spacing:-.045em;font-variant-numeric:tabular-nums}
 .gate-budget-number span{color:var(--faint);font-size:17px;font-weight:400;letter-spacing:0}
@@ -67,6 +95,11 @@ table{width:100%;border-collapse:collapse;font-size:13px}th{height:40px;padding:
 .setting-check{display:flex;align-items:center;justify-content:flex-end;min-height:40px}.setting-check input{appearance:none;position:relative;display:block;width:29px;height:17px;margin:0;border:0;border-radius:99px;background:var(--switch-off);cursor:pointer;transition:background .15s ease}.setting-check input:before{content:"";position:absolute;left:2px;top:2px;width:13px;height:13px;border-radius:50%;background:var(--knob);transition:transform .15s ease}.setting-check input:checked{background:var(--switch-on)}.setting-check input:checked:before{transform:translateX(12px)}
 .settings-note{margin:0 0 16px;color:var(--muted);font-size:12px;line-height:1.6}.settings-note:empty{display:none}.settings-subheading{margin:10px 0 0;padding:15px 0 9px;color:var(--muted);font-size:12px;font-weight:600}.settings-actions{display:flex;align-items:center;justify-content:flex-end;gap:20px;margin:0 -22px;padding:14px 22px;border-top:1px solid var(--line-soft)}.settings-status{font-size:12px;line-height:1.7;color:var(--muted);margin:12px 0 0}.settings-status:empty{display:none}.settings-cleanup-preview{margin:4px 0 18px}
 .settings-page>.gate-section-heading{padding:0;margin-bottom:18px}.settings-page>.gate-section-heading h2{margin:0}.settings-account{margin:0 -22px;padding-bottom:12px;border-top:1px solid var(--line)}.gate-account-heading{display:flex;align-items:center;gap:12px;padding:18px 22px 12px}.gate-account-heading strong{color:var(--ink);font-size:14px;font-weight:600}.gate-account-heading small{display:block;color:var(--faint);font-family:ui-monospace,Consolas,monospace;font-size:11px}.gate-account-heading>.tag{margin-left:auto}.gate-setting-row{display:grid;grid-template-columns:minmax(0,1fr) 180px;align-items:center;gap:24px;min-height:65px;margin:0 22px;padding:12px 0;border-top:1px solid var(--line-soft)}.gate-setting-copy{min-width:0;color:var(--soft-ink);font-size:13px}.gate-setting-copy>label{color:var(--ink)}.gate-setting-copy small{display:block;margin-top:3px;color:var(--faint);font-size:11px}.gate-setting-control{min-width:0;display:flex;justify-content:flex-end;align-items:center}.gate-setting-control>.gate-input-unit,.gate-setting-control>select{width:100%}.gate-setting-control>select{height:40px;padding:0 10px;border:1px solid var(--line);border-radius:7px;background:var(--control-bg);color:var(--ink);font:inherit;font-size:12px}.gate-input-unit{display:flex;align-items:center;gap:8px;height:40px;padding:0 12px;background:var(--control-bg);border:1px solid var(--line);border-radius:7px}.gate-input-unit input{height:100%;width:100%;min-width:0;padding:0;border:0;outline:none;color:var(--ink);background:transparent;font:inherit;font-size:14px}.gate-input-unit>span{flex:none;white-space:nowrap;color:var(--faint);font-size:11px}.gate-account-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 22px 0}.settings-account>.settings-note{margin:12px 22px 0}.settings-table{overflow-x:auto;margin:0 -22px}.settings-table table{min-width:570px}.settings-table th,.settings-table td{padding:12px 22px}.settings-table td:nth-child(3),.settings-table td:nth-child(4){color:var(--muted);font-size:11px}
+/* Registration has only two columns; keep both visible on narrow screens. */
+#settings-registration .settings-table{margin:0}
+#settings-registration table{min-width:0}
+#settings-registration th,#settings-registration td{padding:12px}
+#settings-registration th:last-child,#settings-registration td:last-child{text-align:right}
 .settings-page textarea{width:100%;min-height:120px;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--white);color:var(--ink);font:inherit;font-size:13px;line-height:1.6;resize:vertical;margin-bottom:18px}
 .gate-dialog{width:min(470px,calc(100% - 32px));max-height:calc(100dvh - 48px);margin:auto;padding:26px;border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--ink);overflow:auto;box-shadow:0 16px 60px var(--shadow)}.gate-dialog::backdrop{background:var(--backdrop)}.gate-dialog header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px}.gate-dialog h2{margin:0;font-size:21px;font-weight:600}.gate-dialog h3{margin:0 0 20px;font-size:21px;font-weight:600}
 .gate-confirm-dialog{width:min(400px,calc(100% - 32px))}.gate-dialog-note{margin:0 0 20px;color:var(--muted);font-size:12px;line-height:1.7;white-space:pre-line}.gate-dialog-note:empty{display:none}#keyTokenStatus{margin-top:12px}#keyTokenValue{font-family:ui-monospace,Consolas,monospace}

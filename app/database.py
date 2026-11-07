@@ -397,9 +397,10 @@ class Database:
         await self._db.commit()
 
     # ---------- keys ----------
-    async def create_key(self, fields: dict[str, Any]) -> aiosqlite.Row:
+    async def _insert_key(self, connection, fields: dict[str, Any]) -> aiosqlite.Row:
+        """Insert/read on the caller's connection; the caller owns the transaction."""
         now = time.time()
-        cur = await self._db.execute(
+        cur = await connection.execute(
             """INSERT INTO api_keys
                (name, token, enabled, daily_images, daily_anlas, daily_v5, monthly_anlas,
                daily_text_tokens, rpm, allow_anlas, allow_img2img, exclude_global_v5, image_model_scope, is_admin, expires_at, created_at)
@@ -423,8 +424,31 @@ class Database:
                 now,
             ),
         )
+        return await (await connection.execute("SELECT * FROM api_keys WHERE id=?", (cur.lastrowid,))).fetchone()
+
+    async def create_key(self, fields: dict[str, Any]) -> aiosqlite.Row:
+        row = await self._insert_key(self._db, fields)
         await self._db.commit()
-        return await self.get_key(cur.lastrowid)
+        return row
+
+    async def rollback_discord_registration(self, discord_id: str, token: str) -> None:
+        """Compensate only this issuance, atomically removing its key and archive."""
+        async with self._open_connection() as conn:
+            try:
+                await conn.execute("BEGIN IMMEDIATE")
+                row = await (await conn.execute(
+                    "SELECT key_id FROM discord_registrations WHERE discord_id=? AND token=?",
+                    (discord_id, token),
+                )).fetchone()
+                if row is not None:
+                    await conn.execute(
+                        "DELETE FROM discord_registrations WHERE discord_id=? AND key_id=? AND token=?",
+                        (discord_id, row[0], token))
+                    await conn.execute("DELETE FROM api_keys WHERE id=? AND token=?", (row[0], token))
+                await conn.commit()
+            except BaseException:
+                await conn.rollback()
+                raise
 
     async def get_key(self, key_id: int) -> Optional[aiosqlite.Row]:
         cur = await self._db.execute("SELECT * FROM api_keys WHERE id=?", (key_id,))
@@ -731,7 +755,7 @@ class Database:
         )
         return await cur.fetchone()
 
-    async def restore_discord_key(self, discord_id: str, token: str) -> tuple[str, int, int]:
+    async def restore_discord_key(self, discord_id: str, token: str, *, defaults=None) -> tuple[str, int, int]:
         """Return (status, current key id, previous key id), restoring if deleted."""
         async with aiosqlite.connect(self.path, timeout=10) as conn:
             try:
@@ -752,13 +776,21 @@ class Database:
                     )
                     await conn.commit()
                     return ("active", old_key_id, old_key_id)
+                if defaults is None:
+                    from .config import Settings
+                    from .key_defaults import new_key_defaults
+                    defaults = new_key_defaults(Settings())
                 cur = await conn.execute(
                     """INSERT INTO api_keys
                        (name,token,enabled,daily_images,daily_anlas,daily_v5,monthly_anlas,
                         daily_text_tokens,rpm,allow_anlas,allow_img2img,exclude_global_v5,
                         image_model_scope,is_admin,expires_at,created_at)
-                       VALUES (?,?,1,100,0,30,0,0,5,0,0,0,'all',0,NULL,?)""",
-                    ("Discord:" + discord_id, token, time.time()),
+                       VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?,0,?,?)""",
+                    ("Discord:" + discord_id, token,
+                     defaults['daily_images'], defaults['daily_anlas'], defaults['daily_v5'],
+                     defaults['monthly_anlas'], defaults['daily_text_tokens'], defaults['rpm'],
+                     defaults['allow_anlas'], defaults['allow_img2img'], defaults['exclude_global_v5'],
+                     defaults['image_model_scope'], defaults['expires_at'], time.time()),
                 )
                 new_key_id = int(cur.lastrowid)
                 await conn.execute(
@@ -965,10 +997,14 @@ class Database:
                WHERE c.day=? AND COALESCE(k.exclude_global_v5, d.exclude_global_v5, 1)=0""",
             (today,),
         )
-        keys_total = await one("SELECT COUNT(*) FROM api_keys")
+        now = time.time()
+        keys_total = await one(
+            "SELECT COUNT(*) FROM api_keys WHERE expires_at IS NULL OR expires_at>?",
+            (now,),
+        )
         keys_active = await one(
             "SELECT COUNT(*) FROM api_keys WHERE enabled=1 AND (expires_at IS NULL OR expires_at>?)",
-            (time.time(),),
+            (now,),
         )
         # 日志按时间戳保存；统计边界必须与配额使用同一时区。
         day_start = datetime.fromisoformat(today).replace(tzinfo=ZoneInfo(self.tz))
@@ -990,12 +1026,45 @@ class Database:
             tuple(week_days),
         )
         by_day = {r["day"]: dict(r) for r in await cur.fetchall()}
+        # Model counts are actual successful images, not weighted V5 quota
+        # units. Timestamp ranges follow local calendar days, including DST.
+        model_counts = {}
+        if week_days:
+            boundaries = []
+            for day in week_days:
+                start = datetime.fromisoformat(day).replace(tzinfo=ZoneInfo(self.tz))
+                boundaries.extend((day, start.timestamp(),
+                                   (start + timedelta(days=1)).timestamp()))
+            values = ",".join("(?,?,?)" for _ in week_days)
+            cur = await self._db.execute(
+                f"""WITH days(day, start, end) AS (VALUES {values})
+                    SELECT days.day,
+                      COALESCE(SUM(CASE WHEN
+                        lower(trim(model)) = 'nai-diffusion-4-5' OR
+                        lower(trim(model)) GLOB 'nai-diffusion-4-5-*'
+                        THEN images ELSE 0 END),0) AS v45_images,
+                      COALESCE(SUM(CASE WHEN
+                        lower(trim(model)) IN ('nai-diffusion-5', 'nai-v5') OR
+                        lower(trim(model)) GLOB 'nai-diffusion-5-*' OR
+                        lower(trim(model)) GLOB 'nai-v5-*'
+                        THEN images ELSE 0 END),0) AS v5_images
+                    FROM days LEFT JOIN usage_log
+                      ON ts>=days.start AND ts<days.end
+                      AND status='ok' AND images>0
+                      AND kind IN ('image', 'image_stream')
+                    GROUP BY days.day""",
+                tuple(boundaries),
+            )
+            model_counts = {r["day"]: dict(r) for r in await cur.fetchall()}
         week = []
         for d in week_days:
             r = by_day.get(d, {})
+            models = model_counts.get(d, {})
             week.append({
                 "day": d,
                 "images": int(r.get("images") or 0),
+                "v45_images": int(models.get("v45_images") or 0),
+                "v5_images": int(models.get("v5_images") or 0),
                 "anlas": float(r.get("anlas") or 0),
                 "text_tokens": int(r.get("text_tokens") or 0),
                 "requests": int(r.get("requests") or 0),

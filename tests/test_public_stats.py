@@ -165,7 +165,7 @@ class PublicStatsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(response.json()), {
             "day", "timezone", "v5_images_today", "v5_images_scope", "shared_v5_used",
             "shared_v5_limit", "shared_v5_remaining", "shared_v5_unit", "medium_cost",
-            "personal_v5_limit", "personal_legacy_limit", "refreshed_at", "reset_at",
+            "personal_v5_limit", "personal_legacy_limit", "personal_image_model_scope", "refreshed_at", "reset_at",
         })
         for value in ("private-user", "private-key", "private-prompt", "private-setting",
                       "private-token", "authorization", "key_id", "key_name", "nai_tokens"):
@@ -198,7 +198,8 @@ class PublicStatsTests(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=httpx.MockTransport(discord)) as http:
             service = RegistrationService(self.state.db, http, client_id="local-client",
                 client_secret="private-client", bot_token="private-bot",
-                bridge_secret="private-bridge", deployment=deployment)
+                bridge_secret="private-bridge", deployment=deployment,
+                settings=self.state.settings)
             from urllib.parse import parse_qs, urlparse
             link = await service.begin("777", deployment.command_guild)
             state = parse_qs(urlparse(link).query)["state"][0]
@@ -208,6 +209,20 @@ class PublicStatsTests(unittest.IsolatedAsyncioTestCase):
         data = (await self.client.get("/api/public/stats")).json()
         self.assertEqual(data["personal_v5_limit"], row["daily_v5"])
         self.assertEqual(data["personal_legacy_limit"], row["daily_images"])
+
+    async def test_public_personal_defaults_follow_live_policy_and_model_scope(self):
+        self.state.settings.default_daily_v5 = 9
+        self.state.settings.default_daily_images = 17
+        self.state.settings.default_image_model_scope = "legacy"
+        data = (await self.client.get("/api/public/stats")).json()
+        self.assertEqual(data["personal_v5_limit"], 9)
+        self.assertEqual(data["personal_legacy_limit"], 17)
+        self.assertEqual(data["personal_image_model_scope"], "legacy")
+        self.state.settings.default_daily_v5 = 4
+        self.state.settings.default_image_model_scope = "all"
+        data = (await self.client.get("/api/public/stats")).json()
+        self.assertEqual(data["personal_v5_limit"], 4)
+        self.assertEqual(data["personal_image_model_scope"], "all")
 
     async def test_unavailable_state_returns_sanitized_503_and_no_store(self):
         for missing in (False, True):
@@ -247,9 +262,10 @@ class PublicStatsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["shared_v5_limit"], 150)
         self.assertEqual(data["shared_v5_remaining"], 150)
         self.assertEqual(data["medium_cost"], 0.6)
-        # Discord registration is 30/100, not Settings' admin-key defaults.
-        self.assertEqual(data["personal_v5_limit"], 30)
-        self.assertEqual(data["personal_legacy_limit"], 100)
+        # Discord registration follows the same administrator-configured defaults.
+        self.assertEqual(data["personal_v5_limit"], 777)
+        self.assertEqual(data["personal_legacy_limit"], 888)
+        self.assertEqual(data["personal_image_model_scope"], self.state.settings.default_image_model_scope)
         self.assertIsInstance(data["refreshed_at"], (int, float))
         self.assertIsInstance(data["reset_at"], (int, float))
         refreshed = datetime.fromtimestamp(data["refreshed_at"], self.state.tz)

@@ -7,6 +7,7 @@ data/
 
 # Private deployment recovery material; never publish runtime credentials/data.
 .deploy-backups/
+backups/
 Dockerfile.*-migration
 Dockerfile.discord-login
 Dockerfile.hero

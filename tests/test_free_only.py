@@ -11,19 +11,26 @@ from test_generation_integration import image_body, post, state
 @pytest.mark.asyncio
 @pytest.mark.parametrize("safe_clamp", [False, True])
 @pytest.mark.parametrize("allow_anlas", [False, True])
-async def test_all_ordinary_generation_is_clamped_free(state, safe_clamp, allow_anlas):
+async def test_ordinary_generation_respects_per_key_paid_permission(state, safe_clamp, allow_anlas):
     state.settings.safe_clamp = safe_clamp
     state.db.keys["fixture-1"]["allow_anlas"] = allow_anlas
     body = image_body(width=2048, height=2048, steps=50, n_samples=4, sm=True, sm_dyn=True)
     response = await post("/ai/generate-image", body)
     assert response.status_code == 200
     sent = state.nai.calls[0][2]
-    assert estimate_image_cost(sent) == {"anlas": 0, "v5": 0}
-    assert sent["parameters"]["steps"] == 28
-    assert sent["parameters"]["n_samples"] == 1
-    assert state.nai.calls[0][3]["requires_anlas"] is False
-    assert state.db.charges[0][1]["anlas"] == 0
-    assert state.db.charges[0][1]["legacy_free_images"] == 1
+    if allow_anlas:
+        assert sent == body
+        assert estimate_image_cost(sent)["anlas"] > 0
+        assert state.nai.calls[0][3]["requires_anlas"] is True
+        assert state.db.charges[0][1]["anlas"] > 0
+        assert state.db.charges[0][1]["legacy_free_images"] == 0
+    else:
+        assert estimate_image_cost(sent) == {"anlas": 0, "v5": 0}
+        assert sent["parameters"]["steps"] == 28
+        assert sent["parameters"]["n_samples"] == 1
+        assert state.nai.calls[0][3]["requires_anlas"] is False
+        assert state.db.charges[0][1]["anlas"] == 0
+        assert state.db.charges[0][1]["legacy_free_images"] == 1
 
 
 @pytest.mark.asyncio
@@ -36,10 +43,13 @@ async def test_paid_features_refused_without_numeric_budget_lookup(state, allow_
         raise AssertionError("Obsolete numeric Anlas budget consulted")
 
     state.db.month_anlas = state.db.month_anlas_all = obsolete
-    with pytest.raises(main.GateError) as caught:
+    if allow_anlas:
         await main.quota_image_check(key, {"anlas": 1, "v5": 0})
-    assert caught.value.status == 402
-    assert "仅支持免费" in caught.value.message
+    else:
+        with pytest.raises(main.GateError) as caught:
+            await main.quota_image_check(key, {"anlas": 1, "v5": 0})
+        assert caught.value.status == 402
+        assert "仅支持免费" in caught.value.message
     # Admin/service operations are not subject to ordinary feature refusal.
     await main.quota_image_check(key | {"is_admin": True}, {"anlas": 10000, "v5": 0})
 
@@ -157,14 +167,14 @@ async def test_me_reports_free_only_and_vibe_entitlement_not_anlas_budgets(state
     assert data["today"]["anlas_today"] == 6  # Audit counters survive.
 
 
-def test_admin_ui_has_no_obsolete_anlas_permission_or_budget_editors():
+def test_admin_ui_has_paid_permission_but_no_obsolete_numeric_budgets():
     from pathlib import Path
     static = Path(__file__).resolve().parents[1] / "app/static"
     html = (static / "index.html").read_text()
     script = (static / "assets/gate.js").read_text()
-    for obsolete in ("f_daily_anlas", "f_monthly_anlas", "f_allow_anlas", "s_budget",
+    for obsolete in ("f_daily_anlas", "f_monthly_anlas", "s_budget",
                      "global_monthly_anlas:", "default_daily_anlas", "default_monthly_anlas",
-                     "default_allow_anlas", "Anlas 预算"):
+                     "Anlas 预算"):
         assert obsolete not in html + script
     assert "仅支持免费" in html
     assert "/vibe" in html and "3 次" in html and "零点" in html
@@ -175,6 +185,8 @@ def test_admin_ui_has_no_obsolete_anlas_permission_or_budget_editors():
     assert "与 23 取小" not in script
     assert "min:1,max:28,unit:'步'" in script  # Match local configuration API bounds.
     assert "High 和旧模型均取此值与 28 的较小值" in script
+    assert 'id="f_allow_anlas"' in html
+    assert "default_allow_anlas" in script
 
 
 def test_registration_message_explains_vibe_daily_encode_reset():
